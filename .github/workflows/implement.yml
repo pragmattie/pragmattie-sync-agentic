@@ -1,0 +1,316 @@
+# The implementer agent. Part of the human-written bootstrap (0.1): the agents cannot edit this
+# file (the PragMattie Builder app has no Workflows permission, so GitHub refuses such a push).
+#
+# What starts it, and only from someone with write access:
+#   - the `agent-ready` label on an issue: T0/T1 issues are built straight away; T2/T3 issues (and
+#     issues with no forecast, which count as T2) get a plan first
+#   - a `/approve-plan` comment on an issue whose plan is waiting
+#   - a "Request changes" review on an agent pull request: the agent revises its own branch
+#
+# The model is chosen by rule: a `model:opus` / `model:sonnet` label wins; then the PR's `tier:`
+# label (revisions); then the issue's `forecast:` label. T3 uses Opus 5.5, everything else Sonnet 5.
+# Turn limits scale with the tier. The agent only commits; this workflow pushes and opens the PR as
+# the app. Every run posts a record (model, turns, tokens, cost) on its issue, which v1 reads into
+# its audit trail, and runs stop for the day once the day's recorded cost reaches DAILY_CAP_USD.
+
+name: Implementer agent
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: implement-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  DAILY_CAP_USD: "10"
+  RUN_MARKER: pragmattie-run
+  STEPUP_ISSUE: "1"  # the "re-evaluate automatic Opus step-up" reminder
+
+jobs:
+  implement:
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'agent-ready') ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/approve-plan')) ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'changes_requested' &&
+       startsWith(github.event.pull_request.head.ref, 'agent/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Decide what to do
+        id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+          case "$perm" in
+            admin|maintain|write) ;;
+            *) echo "action=none" >> "$GITHUB_OUTPUT"; echo "$ACTOR has $perm access: ignored."; exit 0 ;;
+          esac
+
+          pr=""
+          if [ "$EVENT" = "pull_request_review" ]; then
+            branch=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
+            pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+            issue=$(echo "$branch" | sed -E 's#^agent/([0-9]+)-.*#\1#')
+            action=revise
+          else
+            issue=$(jq -r .issue.number "$GITHUB_EVENT_PATH")
+          fi
+          labels=",$(gh api "repos/$REPO/issues/$issue/labels" --jq '[.[].name] | join(",")'),"
+
+          tier=$(echo "$labels" | tr ',' '\n' | sed -n 's/^forecast://p' | head -1)
+          tier=${tier:-T2}
+          if [ "$EVENT" = "issues" ]; then
+            case "$tier" in T2|T3) action=plan ;; *) action=build ;; esac
+          elif [ "$EVENT" = "issue_comment" ]; then
+            if ! echo "$labels" | grep -q ',plan-proposed,'; then
+              echo "action=none" >> "$GITHUB_OUTPUT"; echo "No plan is waiting on #$issue."; exit 0
+            fi
+            action=build
+          fi
+          if [ -n "$pr" ]; then  # a revision follows the PR's actual tier
+            prtier=$(gh api "repos/$REPO/issues/$pr/labels" --jq '.[].name' | sed -n 's/^tier://p' | head -1)
+            tier=${prtier:-$tier}
+          fi
+
+          model=claude-sonnet-5
+          [ "$tier" = "T3" ] && model=claude-opus-5-5
+          echo "$labels" | grep -q ',model:opus,' && model=claude-opus-5-5
+          echo "$labels" | grep -q ',model:sonnet,' && model=claude-sonnet-5
+          case "$tier" in T0) turns=20 ;; T1) turns=40 ;; T2) turns=60 ;; *) turns=80 ;; esac
+          [ "$action" = "plan" ] && turns=15
+
+          if [ "$action" != "revise" ]; then
+            title=$(gh api "repos/$REPO/issues/$issue" --jq .title)
+            slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)
+            branch="agent/$issue-$slug"
+          fi
+          {
+            echo "action=$action"; echo "issue=$issue"; echo "pr=$pr"; echo "tier=$tier"
+            echo "model=$model"; echo "turns=$turns"; echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+          echo "$action #$issue at $tier with $model ($turns turns) on $branch"
+
+      - name: Check today's spend
+        id: cap
+        if: steps.route.outputs.action != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.route.outputs.issue }}
+        run: |
+          set -euo pipefail
+          since=$(date -u +%Y-%m-%dT00:00:00Z)
+          spent=$(gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
+            | { grep -o "<!-- $RUN_MARKER {[^}]*} -->" || true; } \
+            | sed -E 's/.*"cost_usd":([0-9.]+).*/\1/' \
+            | awk '{s += $1} END {printf "%.2f", s + 0}')
+          echo "Spent today: \$$spent of \$$DAILY_CAP_USD"
+          if awk "BEGIN {exit !($spent >= $DAILY_CAP_USD)}"; then
+            gh issue comment "$ISSUE" -R "$REPO" --body "The agents' daily budget is used up (\$$spent of \$$DAILY_CAP_USD today), so this run did not start. Remove and re-add \`agent-ready\` tomorrow to retry."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: App token
+        id: app
+        if: steps.cap.outputs.go == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check out
+        if: steps.cap.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app.outputs.token }}
+          ref: ${{ steps.route.outputs.action == 'revise' && steps.route.outputs.branch || github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false  # the agent can commit but not push; this workflow pushes
+
+      - name: Prepare the branch and the prompt
+        id: prompt
+        if: steps.cap.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTION: ${{ steps.route.outputs.action }}
+          ISSUE: ${{ steps.route.outputs.issue }}
+          PR: ${{ steps.route.outputs.pr }}
+          BRANCH: ${{ steps.route.outputs.branch }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          bot="${SLUG}[bot]"
+          bot_id=$(gh api "users/$bot" --jq .id)
+          git config user.name "$bot"
+          git config user.email "${bot_id}+${bot}@users.noreply.github.com"
+          [ "$ACTION" = "build" ] && git checkout -b "$BRANCH"
+
+          issue_text=$(gh issue view "$ISSUE" -R "$REPO" --json title,body --jq '"# \(.title)\n\n\(.body)"')
+          {
+            echo "text<<PROMPT_END"
+            case "$ACTION" in
+              plan)
+                echo "You are planning GitHub issue #$ISSUE. Do not change any files."
+                echo "Read CLAUDE.md and the code you need, then return a short implementation plan:"
+                echo "the files you will create or change, the tests you will add, and any risk or"
+                echo "question for the reviewer. Keep it under 300 words."
+                ;;
+              build)
+                echo "Implement GitHub issue #$ISSUE on the current branch ($BRANCH), following CLAUDE.md."
+                echo "Commit your work with Conventional Commits messages. Do not push."
+                echo "Run the relevant tests before you finish and report honestly whether they pass."
+                plan=$(gh api "repos/$REPO/issues/$ISSUE/comments" \
+                  --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Plan"))] | last | .body // ""')
+                if [ -n "$plan" ]; then echo; echo "The approved plan:"; echo "$plan"; fi
+                ;;
+              revise)
+                echo "Revise pull request #$PR (issue #$ISSUE) on the current branch ($BRANCH),"
+                echo "following CLAUDE.md. Address the review below, commit, and do not push."
+                echo "Run the relevant tests before you finish and report honestly whether they pass."
+                echo; echo "The review:"
+                gh api "repos/$REPO/pulls/$PR/reviews" --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last | .body // ""'
+                gh api "repos/$REPO/pulls/$PR/comments" --jq '.[] | "- \(.path):\(.line // .original_line) \(.body)"'
+                ;;
+            esac
+            echo; echo "The issue:"; echo "$issue_text"
+            echo "PROMPT_END"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$ACTION" = "plan" ]; then
+            echo 'schema={"type":"object","properties":{"plan":{"type":"string"}},"required":["plan"]}' >> "$GITHUB_OUTPUT"
+            echo 'tools=Read,Glob,Grep' >> "$GITHUB_OUTPUT"
+          else
+            echo 'schema={"type":"object","properties":{"summary":{"type":"string"},"tests_passed":{"type":"boolean"},"follow_ups":{"type":"array","items":{"type":"string"}}},"required":["summary","tests_passed","follow_ups"]}' >> "$GITHUB_OUTPUT"
+            echo 'tools=Bash,Read,Edit,Write,Glob,Grep' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Agent
+        id: agent
+        if: steps.cap.outputs.go == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app.outputs.token }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --model ${{ steps.route.outputs.model }}
+            --max-turns ${{ steps.route.outputs.turns }}
+            --allowedTools "${{ steps.prompt.outputs.tools }}"
+            --json-schema '${{ steps.prompt.outputs.schema }}'
+
+      - name: Post the plan
+        if: steps.route.outputs.action == 'plan' && steps.agent.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.route.outputs.issue }}
+          RESULT: ${{ steps.agent.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          plan=$(echo "$RESULT" | jq -r '.plan')
+          # shellcheck disable=SC2016  # literal $ and backticks in Markdown
+          printf '## Plan\n\n%s\n\nReply `/approve-plan` to build it, or comment with changes and re-add `agent-ready`.\n' "$plan" \
+            | gh issue comment "$ISSUE" -R "$REPO" --body-file -
+          gh issue edit "$ISSUE" -R "$REPO" --add-label plan-proposed
+
+      - name: Push and open the pull request
+        id: push
+        if: steps.route.outputs.action != 'plan' && steps.agent.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          ACTION: ${{ steps.route.outputs.action }}
+          ISSUE: ${{ steps.route.outputs.issue }}
+          BRANCH: ${{ steps.route.outputs.branch }}
+          TIER: ${{ steps.route.outputs.tier }}
+          RESULT: ${{ steps.agent.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git log "origin/${{ github.event.repository.default_branch }}..HEAD" --oneline)" ] && [ "$ACTION" = "build" ]; then
+            echo "pushed=false" >> "$GITHUB_OUTPUT"; echo "The agent made no commits."; exit 0
+          fi
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          if [ "$ACTION" = "build" ]; then
+            title=$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)
+            {
+              echo "Closes #$ISSUE"; echo
+              echo "$RESULT" | jq -r '.summary'; echo
+              echo "**Tests passing (agent's report):** $(echo "$RESULT" | jq -r '.tests_passed')"
+              follow=$(echo "$RESULT" | jq -r '.follow_ups[]? | "- \(.)"')
+              if [ -n "$follow" ]; then echo; echo "**Follow-ups suggested:**"; echo "$follow"; fi
+            } > pr-body.md
+            gh pr create -R "$REPO" --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
+              --title "$title" --body-file pr-body.md --label "forecast:$TIER"
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label plan-proposed --add-label plan-approved || true
+          fi
+
+      - name: Record the run
+        if: always() && steps.cap.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTION: ${{ steps.route.outputs.action }}
+          ISSUE: ${{ steps.route.outputs.issue }}
+          PR: ${{ steps.route.outputs.pr }}
+          TIER: ${{ steps.route.outputs.tier }}
+          MODEL: ${{ steps.route.outputs.model }}
+          OUTCOME: ${{ steps.agent.outcome }}
+          FILE: ${{ steps.agent.outputs.execution_file }}
+          RESULT: ${{ steps.agent.outputs.structured_output }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          r='{}'
+          if [ -n "${FILE:-}" ] && [ -f "$FILE" ]; then
+            r=$(jq -c 'if type == "array" then ([.[] | select(.type == "result")] | last // {}) else {} end' "$FILE" 2>/dev/null || echo '{}')
+          fi
+          res="${RESULT:-}"; [ -z "$res" ] && res='{}'
+          tests=$(echo "$res" | jq -r '.tests_passed // "n/a"' 2>/dev/null || echo "n/a")
+          record=$(jq -nc --argjson r "$r" \
+            --arg run "$RUN_ID" --arg action "$ACTION" --arg issue "$ISSUE" --arg pr "$PR" \
+            --arg tier "$TIER" --arg model "$MODEL" --arg outcome "$OUTCOME" --arg tests "$tests" '{
+              run: $run, action: $action, issue: ($issue | tonumber), pr: $pr, tier: $tier,
+              model: $model, outcome: $outcome, tests_passed: $tests,
+              turns: ($r.num_turns // 0),
+              input_tokens: ($r.usage.input_tokens // 0),
+              output_tokens: ($r.usage.output_tokens // 0),
+              cache_read_tokens: ($r.usage.cache_read_input_tokens // 0),
+              cache_write_tokens: ($r.usage.cache_creation_input_tokens // 0),
+              cost_usd: ($r.total_cost_usd // 0)}')
+          cost=$(echo "$record" | jq -r '.cost_usd'); turns=$(echo "$record" | jq -r '.turns')
+          # shellcheck disable=SC2016  # literal $ and backticks in Markdown
+          printf 'Agent run (%s, `%s`, %s): %s turns, $%s. [Run log](%s/%s/actions/runs/%s)\n\n<!-- %s %s -->\n' \
+            "$ACTION" "$MODEL" "$OUTCOME" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" "$RUN_MARKER" "$record" \
+            | gh issue comment "$ISSUE" -R "$REPO" --body-file -
+
+          if [ "$OUTCOME" != "success" ] || [ "$tests" = "false" ]; then
+            gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
+            if [ "$MODEL" = "claude-sonnet-5" ] && [ "$ACTION" != "plan" ]; then
+              # shellcheck disable=SC2016  # literal $ and backticks in Markdown
+              printf 'Sonnet run on #%s ended with %s (tests passing: %s), %s turns, $%s. [Run log](%s/%s/actions/runs/%s)\n' \
+                "$ISSUE" "$OUTCOME" "$tests" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" \
+                | gh issue comment "$STEPUP_ISSUE" -R "$REPO" --body-file - || true
+            fi
+          fi

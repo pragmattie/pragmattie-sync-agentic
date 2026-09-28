@@ -1,0 +1,48 @@
+name: Agent task
+description: A piece of work for the implementer agent, specified well enough to build without guessing.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The agent builds exactly what this issue says. Be specific, and put anything that is out of
+        scope under "Not in scope". Add `agent-ready` when the spec is final.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What this adds or changes, in one or two sentences, and for whom.
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Spec
+      description: What to build. Endpoints, fields, screens, behaviour and edge cases.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkable statements. Each becomes a test where it can.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Not in scope
+      description: Related work the agent must leave alone.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part
+      options:
+        - PragMattie Sync CRM
+        - Delivery Insights
+        - Delivery board
+        - Platform and tooling
+    validations:
+      required: true
