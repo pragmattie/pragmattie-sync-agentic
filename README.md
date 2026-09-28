@@ -36,3 +36,18 @@ Everything else is agent-built under the governance above.
 
 All rights reserved. The code is public to read; no licence to use, copy, modify or distribute it
 is granted.
+
+## Development
+
+| Folder | Contents |
+| --- | --- |
+| `apps/api/` | The CRM API |
+| `apps/crm-web/` | The CRM web app |
+| `apps/insights-web/` | The Delivery Insights web app |
+| `orchestrator/` | The orchestrator service |
+| `ci/proposed/` | Workflows an agent has written for a person to review and apply |
+| `docs/adr/` | Architecture decision records |
+
+Copy `.env.example` to `.env` and fill in local-only values before running anything. See each
+folder's README for what belongs there, and `CLAUDE.md` for the stack, conventions and rules
+every agent follows.
