@@ -265,8 +265,9 @@ jobs:
               follow=$(echo "$RESULT" | jq -r '.follow_ups[]? | "- \(.)"')
               if [ -n "$follow" ]; then echo; echo "**Follow-ups suggested:**"; echo "$follow"; fi
             } > pr-body.md
-            gh pr create -R "$REPO" --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
-              --title "$title" --body-file pr-body.md --label "forecast:$TIER"
+            url=$(gh pr create -R "$REPO" --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
+              --title "$title" --body-file pr-body.md --label "forecast:$TIER")
+            echo "pr=${url##*/}" >> "$GITHUB_OUTPUT"
             gh issue edit "$ISSUE" -R "$REPO" --remove-label plan-proposed --add-label plan-approved || true
           fi
 
@@ -277,7 +278,7 @@ jobs:
           REPO: ${{ github.repository }}
           ACTION: ${{ steps.route.outputs.action }}
           ISSUE: ${{ steps.route.outputs.issue }}
-          PR: ${{ steps.route.outputs.pr }}
+          PR: ${{ steps.push.outputs.pr || steps.route.outputs.pr }}
           TIER: ${{ steps.route.outputs.tier }}
           MODEL: ${{ steps.route.outputs.model }}
           OUTCOME: ${{ steps.agent.outcome }}
