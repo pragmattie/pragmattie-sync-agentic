@@ -313,8 +313,8 @@ jobs:
               output_tokens: ($r.usage.output_tokens // 0),
               cache_read_tokens: ($r.usage.cache_read_input_tokens // 0),
               cache_write_tokens: ($r.usage.cache_creation_input_tokens // 0),
-              cost_usd: ($r.total_cost_usd // 0)}')
-          cost=$(echo "$record" | jq -r '.cost_usd'); turns=$(echo "$record" | jq -r '.turns')
+              cost_usd: (($r.total_cost_usd // 0) * 10000 | round / 10000)}')
+          cost=$(printf '%.2f' "$(echo "$record" | jq -r '.cost_usd')"); turns=$(echo "$record" | jq -r '.turns')
           reason=""
           [ -n "$why" ] && reason=$(printf '\n\n**Why it stopped:** %s' "$why")
           # shellcheck disable=SC2016  # literal $ and backticks in Markdown
