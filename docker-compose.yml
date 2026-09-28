@@ -26,7 +26,7 @@ services:
           "localhost",
           "-u",
           "root",
-          "-p${MYSQL_ROOT_PASSWORD}",
+          "-p${MYSQL_ROOT_PASSWORD:-pragmattie_sync}",
         ]
       interval: 5s
       timeout: 5s
