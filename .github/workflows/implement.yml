@@ -134,14 +134,14 @@ jobs:
       - name: App token
         id: app
         if: steps.cap.outputs.go == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Check out
         if: steps.cap.outputs.go == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           token: ${{ steps.app.outputs.token }}
           ref: ${{ steps.route.outputs.action == 'revise' && steps.route.outputs.branch || github.event.repository.default_branch }}
@@ -165,6 +165,7 @@ jobs:
           bot_id=$(gh api "users/$bot" --jq .id)
           git config user.name "$bot"
           git config user.email "${bot_id}+${bot}@users.noreply.github.com"
+          { echo "bot_name=$bot"; echo "bot_id=$bot_id"; } >> "$GITHUB_OUTPUT"
           [ "$ACTION" = "build" ] && git checkout -b "$BRANCH"
 
           issue_text=$(gh issue view "$ISSUE" -R "$REPO" --json title,body --jq '"# \(.title)\n\n\(.body)"')
@@ -212,6 +213,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ steps.app.outputs.token }}
+          # Commits are the builder app's, not the action's default claude[bot].
+          bot_name: ${{ steps.prompt.outputs.bot_name }}
+          bot_id: ${{ steps.prompt.outputs.bot_id }}
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: >-
             --model ${{ steps.route.outputs.model }}
@@ -288,11 +292,21 @@ jobs:
           fi
           res="${RESULT:-}"; [ -z "$res" ] && res='{}'
           tests=$(echo "$res" | jq -r '.tests_passed // "n/a"' 2>/dev/null || echo "n/a")
+          # On a failure, the reason Claude Code gave (an API error, a turn limit...). Only this
+          # line is published, never the full output. Braces, quotes and "--" are replaced so the
+          # machine-readable record below stays parseable.
+          why=""
+          if [ "$OUTCOME" != "success" ]; then
+            why=$(echo "$r" | jq -r 'if .is_error then ((.result // .subtype // "") | tostring) else "" end' 2>/dev/null || true)
+            [ -z "$why" ] && [ "$r" = "{}" ] && why="the agent did not start: no result was recorded"
+            why=$(printf '%s' "$why" | tr '\n\r{}"' '  ()'"'" | sed 's/--/-/g' | cut -c1-240)
+          fi
           record=$(jq -nc --argjson r "$r" \
             --arg run "$RUN_ID" --arg action "$ACTION" --arg issue "$ISSUE" --arg pr "$PR" \
-            --arg tier "$TIER" --arg model "$MODEL" --arg outcome "$OUTCOME" --arg tests "$tests" '{
+            --arg tier "$TIER" --arg model "$MODEL" --arg outcome "$OUTCOME" --arg tests "$tests" \
+            --arg why "$why" '{
               run: $run, action: $action, issue: ($issue | tonumber), pr: $pr, tier: $tier,
-              model: $model, outcome: $outcome, tests_passed: $tests,
+              model: $model, outcome: $outcome, tests_passed: $tests, error: $why,
               turns: ($r.num_turns // 0),
               input_tokens: ($r.usage.input_tokens // 0),
               output_tokens: ($r.usage.output_tokens // 0),
@@ -300,11 +314,17 @@ jobs:
               cache_write_tokens: ($r.usage.cache_creation_input_tokens // 0),
               cost_usd: ($r.total_cost_usd // 0)}')
           cost=$(echo "$record" | jq -r '.cost_usd'); turns=$(echo "$record" | jq -r '.turns')
+          reason=""
+          [ -n "$why" ] && reason=$(printf '\n\n**Why it stopped:** %s' "$why")
           # shellcheck disable=SC2016  # literal $ and backticks in Markdown
-          printf 'Agent run (%s, `%s`, %s): %s turns, $%s. [Run log](%s/%s/actions/runs/%s)\n\n<!-- %s %s -->\n' \
-            "$ACTION" "$MODEL" "$OUTCOME" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" "$RUN_MARKER" "$record" \
+          printf 'Agent run (%s, `%s`, %s): %s turns, $%s. [Run log](%s/%s/actions/runs/%s)%s\n\n<!-- %s %s -->\n' \
+            "$ACTION" "$MODEL" "$OUTCOME" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" "$reason" "$RUN_MARKER" "$record" \
             | gh issue comment "$ISSUE" -R "$REPO" --body-file -
 
+          if [ "$OUTCOME" = "success" ] && [ "$tests" != "false" ]; then
+            # A later run that works clears an earlier failure's flag.
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label needs-human 2>/dev/null || true
+          fi
           if [ "$OUTCOME" != "success" ] || [ "$tests" = "false" ]; then
             gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
             if [ "$MODEL" = "claude-sonnet-5" ] && [ "$ACTION" != "plan" ]; then
