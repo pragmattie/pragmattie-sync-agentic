@@ -269,8 +269,9 @@ jobs:
         id: push
         # Also after a failed run (a turn limit, say): its commits are kept on a draft PR, and
         # `/revise continue` carries on from there instead of starting over.
+        # (!cancelled() is needed: without a status function, GitHub skips a step after a failure.)
         if: >-
-          steps.route.outputs.action != 'plan' &&
+          !cancelled() && steps.route.outputs.action != 'plan' &&
           (steps.agent.outcome == 'success' || steps.agent.outcome == 'failure')
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
