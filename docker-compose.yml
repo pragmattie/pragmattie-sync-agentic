@@ -1,5 +1,4 @@
 # Planned services (added by the issues that create them):
-#   orchestrator   - Orchestrator service - 8001
 #   crm-web        - CRM web app          - 5173
 #   insights-web   - Delivery Insights    - 5174
 
@@ -14,6 +13,20 @@ services:
     volumes:
       - ./apps/api:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+  orchestrator:
+    build: ./orchestrator
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
+      CORS_ORIGINS: http://localhost:5174,http://insights.pragmattie-sync.localhost
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./orchestrator:/orchestrator
+    command: uvicorn sdlc.main:app --host 0.0.0.0 --port 8001 --reload
     depends_on:
       db:
         condition: service_healthy
