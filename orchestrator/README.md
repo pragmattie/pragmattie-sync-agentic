@@ -5,6 +5,7 @@ A separate service (Python, FastAPI, SQLAlchemy 2, Alembic, Pydantic v2, httpx, 
 and forecasts that `apps/insights-web` displays.
 
 Its database tables are prefixed `sdlc_`, with their own Alembic history (`sdlc_alembic_version`),
-separate from the CRM's.
+separate from the CRM's. Migrations live in `migrations/` (Alembic, reading `DATABASE_URL`) and
+see only `sdlc_*` tables. See "Database migrations" in the root `README.md`.
 
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
