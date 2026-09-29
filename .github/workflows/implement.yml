@@ -11,7 +11,8 @@
 #
 # The model is chosen by rule: a `model:opus` / `model:sonnet` label wins; then the PR's `tier:`
 # label (revisions); then the issue's `forecast:` label. T3 uses Opus 5.5, everything else Sonnet 5.
-# Turn limits scale with the tier. The agent only commits; this workflow pushes and opens the PR as
+# Turn limits scale with the tier, or with the story points when that is more (10 a point, at most
+# 100); a run that stops early keeps its commits on a draft PR. The agent only commits; this workflow pushes and opens the PR as
 # the app. Every run posts a record (model, turns, tokens, cost) on its issue, which v1 reads into
 # its audit trail, and runs stop for the day once the day's recorded cost reaches DAILY_CAP_USD.
 
@@ -108,6 +109,10 @@ jobs:
           echo "$labels" | grep -q ',model:opus,' && model=claude-opus-5-5
           echo "$labels" | grep -q ',model:sonnet,' && model=claude-sonnet-5
           case "$tier" in T0) turns=20 ;; T1) turns=40 ;; T2) turns=60 ;; *) turns=80 ;; esac
+          # Tiers measure risk, not size: a big low-risk issue gets 10 turns a story point (at most 100).
+          points=$(echo "$labels" | tr ',' '\n' | sed -n 's/^points:\([0-9][0-9]*\)$/\1/p' | head -1)
+          if [ -n "$points" ] && [ $((points * 10)) -gt "$turns" ]; then turns=$((points * 10)); fi
+          [ "$turns" -gt 100 ] && turns=100
           [ "$action" = "plan" ] && turns=15
 
           if [ "$action" != "revise" ]; then
@@ -206,7 +211,8 @@ jobs:
                 echo "following CLAUDE.md. Address the review below, commit, and do not push."
                 echo "Run the relevant tests before you finish and report honestly whether they pass."
                 echo "If the branch conflicts with main, run git merge origin/main, resolve every conflict"
-                echo "so that both sides' changes are kept, and commit the merge."
+                echo "so that both sides' changes are kept, and commit the merge. If the pull request is an"
+                echo "unfinished draft (an earlier run stopped early), carry on until the issue is done."
                 if [ "$EVENT" = "issue_comment" ]; then
                   echo; echo "The request:"; printf '%s\n' "${NOTE#/revise}"
                 else
@@ -261,14 +267,20 @@ jobs:
 
       - name: Push and open the pull request
         id: push
-        if: steps.route.outputs.action != 'plan' && steps.agent.outcome == 'success'
+        # Also after a failed run (a turn limit, say): its commits are kept on a draft PR, and
+        # `/revise continue` carries on from there instead of starting over.
+        if: >-
+          steps.route.outputs.action != 'plan' &&
+          (steps.agent.outcome == 'success' || steps.agent.outcome == 'failure')
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           ACTION: ${{ steps.route.outputs.action }}
           ISSUE: ${{ steps.route.outputs.issue }}
+          PR: ${{ steps.route.outputs.pr }}
           BRANCH: ${{ steps.route.outputs.branch }}
           TIER: ${{ steps.route.outputs.tier }}
+          OUTCOME: ${{ steps.agent.outcome }}
           RESULT: ${{ steps.agent.outputs.structured_output }}
         run: |
           set -euo pipefail
@@ -277,7 +289,18 @@ jobs:
           fi
           git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/$BRANCH"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
-          if [ "$ACTION" = "build" ]; then
+          if [ "$ACTION" = "revise" ] && [ "$OUTCOME" = "success" ] \
+            && [ "$(gh pr view "$PR" -R "$REPO" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh pr ready "$PR" -R "$REPO"  # an unfinished draft is now finished
+          fi
+          if [ "$ACTION" = "build" ] && [ "$OUTCOME" != "success" ]; then
+            title=$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)
+            # shellcheck disable=SC2016  # literal backticks in Markdown
+            printf 'Closes #%s\n\n**Unfinished.** The agent stopped before it was done (the reason is in the run record on the issue). Its commits so far are here. Comment `/revise continue` to let it carry on; it marks this ready for review when it finishes.\n' "$ISSUE" > pr-body.md
+            url=$(gh pr create -R "$REPO" --draft --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
+              --title "$title" --body-file pr-body.md --label "forecast:$TIER")
+            echo "pr=${url##*/}" >> "$GITHUB_OUTPUT"
+          elif [ "$ACTION" = "build" ]; then
             title=$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)
             {
               echo "Closes #$ISSUE"; echo
