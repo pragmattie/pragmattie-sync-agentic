@@ -51,3 +51,7 @@ is granted.
 Copy `.env.example` to `.env` and fill in local-only values before running anything. See each
 folder's README for what belongs there, and `CLAUDE.md` for the stack, conventions and rules
 every agent follows.
+
+The whole stack starts with `docker compose up --build`. To bring up just the database, run
+`docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
+`docker compose ps` shows it as such.
