@@ -6,6 +6,8 @@
 #     issues with no forecast, which count as T2) get a plan first
 #   - a `/approve-plan` comment on an issue whose plan is waiting
 #   - a "Request changes" review on an agent pull request: the agent revises its own branch
+#   - a `/revise <what to change>` comment on an agent pull request: the same, and it works when the
+#     PR has a merge conflict, where GitHub runs no pull request workflows (so reviews start nothing)
 #
 # The model is chosen by rule: a `model:opus` / `model:sonnet` label wins; then the PR's `tier:`
 # label (revisions); then the issue's `forecast:` label. T3 uses Opus 5.5, everything else Sonnet 5.
@@ -43,6 +45,8 @@ jobs:
       (github.event_name == 'issues' && github.event.label.name == 'agent-ready') ||
       (github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
        startsWith(github.event.comment.body, '/approve-plan')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/revise')) ||
       (github.event_name == 'pull_request_review' &&
        github.event.review.state == 'changes_requested' &&
        startsWith(github.event.pull_request.head.ref, 'agent/'))
@@ -68,6 +72,15 @@ jobs:
           if [ "$EVENT" = "pull_request_review" ]; then
             branch=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
             pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+          elif [ "$(jq -r '.issue.pull_request != null' "$GITHUB_EVENT_PATH")" = "true" ]; then
+            pr=$(jq -r .issue.number "$GITHUB_EVENT_PATH")  # a /revise comment on a PR
+            branch=$(gh api "repos/$REPO/pulls/$pr" --jq .head.ref)
+            case "$branch" in
+              agent/*) ;;
+              *) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$pr is not an agent pull request."; exit 0 ;;
+            esac
+          fi
+          if [ -n "$pr" ]; then
             issue=$(echo "$branch" | sed -E 's#^agent/([0-9]+)-.*#\1#')
             action=revise
           else
@@ -79,7 +92,7 @@ jobs:
           tier=${tier:-T2}
           if [ "$EVENT" = "issues" ]; then
             case "$tier" in T2|T3) action=plan ;; *) action=build ;; esac
-          elif [ "$EVENT" = "issue_comment" ]; then
+          elif [ "$EVENT" = "issue_comment" ] && [ -z "$pr" ]; then
             if ! echo "$labels" | grep -q ',plan-proposed,'; then
               echo "action=none" >> "$GITHUB_OUTPUT"; echo "No plan is waiting on #$issue."; exit 0
             fi
@@ -159,6 +172,8 @@ jobs:
           PR: ${{ steps.route.outputs.pr }}
           BRANCH: ${{ steps.route.outputs.branch }}
           SLUG: ${{ steps.app.outputs.app-slug }}
+          EVENT: ${{ github.event_name }}
+          NOTE: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
           bot="${SLUG}[bot]"
@@ -190,9 +205,15 @@ jobs:
                 echo "Revise pull request #$PR (issue #$ISSUE) on the current branch ($BRANCH),"
                 echo "following CLAUDE.md. Address the review below, commit, and do not push."
                 echo "Run the relevant tests before you finish and report honestly whether they pass."
-                echo; echo "The review:"
-                gh api "repos/$REPO/pulls/$PR/reviews" --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last | .body // ""'
-                gh api "repos/$REPO/pulls/$PR/comments" --jq '.[] | "- \(.path):\(.line // .original_line) \(.body)"'
+                echo "If the branch conflicts with main, run git merge origin/main, resolve every conflict"
+                echo "so that both sides' changes are kept, and commit the merge."
+                if [ "$EVENT" = "issue_comment" ]; then
+                  echo; echo "The request:"; printf '%s\n' "${NOTE#/revise}"
+                else
+                  echo; echo "The review:"
+                  gh api "repos/$REPO/pulls/$PR/reviews" --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last | .body // ""'
+                  gh api "repos/$REPO/pulls/$PR/comments" --jq '.[] | "- \(.path):\(.line // .original_line) \(.body)"'
+                fi
                 ;;
             esac
             echo; echo "The issue:"; echo "$issue_text"
