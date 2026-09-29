@@ -55,3 +55,40 @@ every agent follows.
 The whole stack starts with `docker compose up --build`. To bring up just the database, run
 `docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
 `docker compose ps` shows it as such.
+
+## Database migrations
+
+The CRM API and the orchestrator share one MySQL database but keep separate Alembic histories,
+each reading `DATABASE_URL`:
+
+| Service | Folder | Sees | Version table |
+| --- | --- | --- | --- |
+| CRM API | `apps/api/` | every table except `sdlc_*` | `alembic_version` |
+| Orchestrator | `orchestrator/` | only `sdlc_*` tables | `sdlc_alembic_version` |
+
+Migrations are not run automatically. With the stack up, apply them with:
+
+```sh
+docker compose exec api alembic upgrade head
+docker compose exec orchestrator alembic upgrade head
+```
+
+The two histories are independent, so either can be upgraded or downgraded first.
+
+To create a migration, change the models, then autogenerate a revision in the owning service:
+
+```sh
+docker compose exec api alembic revision --autogenerate -m "add leads"
+```
+
+Rename the generated file to `NNNN_short_name.py` (the next number, e.g. `0002_add_leads.py`) and
+set its `revision` to the same id (`"0002_add_leads"`), keeping `down_revision` pointing at the
+previous one. Review the generated operations before committing; on MySQL, downgrades drop tables
+rather than individual indexes. Orchestrator tables must be named `sdlc_*`, or its history will not
+see them.
+
+Other useful commands, for either service:
+
+- `alembic check`: fails if the models and the database have drifted apart
+- `alembic current`: shows the applied revision
+- `alembic downgrade base`: reverts every migration in that service's history

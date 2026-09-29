@@ -3,8 +3,13 @@ from functools import lru_cache
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase
 
 from sdlc.config import get_settings
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 @lru_cache
