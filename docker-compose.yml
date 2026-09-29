@@ -1,8 +1,16 @@
 # Planned services (added by the issues that create them):
-#   crm-web        - CRM web app          - 5173
 #   insights-web   - Delivery Insights    - 5174
 
 services:
+  crm-web:
+    build: ./apps/crm-web
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/crm-web:/app
+      - crm-web-node-modules:/app/node_modules
+    command: npm run dev
+
   api:
     build: ./apps/api
     environment:
@@ -60,3 +68,4 @@ services:
 
 volumes:
   db-data:
+  crm-web-node-modules:

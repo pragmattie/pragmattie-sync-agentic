@@ -1,0 +1,42 @@
+import { createRouter, createWebHistory } from "vue-router";
+import HomeView from "../views/HomeView.vue";
+import PlaceholderView from "../views/PlaceholderView.vue";
+
+export const navItems = [
+  { title: "Home", to: "/", name: "home" },
+  { title: "Leads", to: "/leads", name: "leads" },
+  { title: "Accounts", to: "/accounts", name: "accounts" },
+  { title: "Pipeline", to: "/pipeline", name: "pipeline" },
+  { title: "Forecast", to: "/forecast", name: "forecast" },
+];
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: "/", name: "home", component: HomeView },
+    {
+      path: "/leads",
+      name: "leads",
+      component: PlaceholderView,
+      props: { title: "Leads" },
+    },
+    {
+      path: "/accounts",
+      name: "accounts",
+      component: PlaceholderView,
+      props: { title: "Accounts" },
+    },
+    {
+      path: "/pipeline",
+      name: "pipeline",
+      component: PlaceholderView,
+      props: { title: "Pipeline" },
+    },
+    {
+      path: "/forecast",
+      name: "forecast",
+      component: PlaceholderView,
+      props: { title: "Forecast" },
+    },
+  ],
+});
