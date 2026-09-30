@@ -6,11 +6,14 @@
 # a person still decides. Its verdicts are recorded (v1 reads the record in the comment into its
 # audit trail), so they can be compared with the person's decisions before any review is delegated.
 #
-# It can only read: the repository, `git diff`, `git log` and `git show`. Sonnet 5 by default, Opus
-# 5.5 when the pull request is T3. Its cost counts toward the implementer's daily cap.
+# It can only read: the repository, `git diff`, `git log` and `git show`. It always uses Opus 5.5:
+# Sonnet 5 reviews ran long, ran out of turns and once returned a placeholder "approve" (#106).
+# Its cost counts toward the implementer's daily cap. An answer with no real summary or fewer than
+# three criteria checked is recorded as "invalid", never as a verdict.
 #
 # A `/review` comment on an agent pull request, from someone with write access, asks for a fresh
-# review of its latest commit (after a failed review, say).
+# review of its latest commit (after a failed review, say). Posted on an issue instead, it gets a
+# reply pointing to the issue's pull request.
 
 name: Reviewer agent (shadow)
 
@@ -35,6 +38,29 @@ env:
   REVIEW_MARKER: pragmattie-review
 
 jobs:
+  # A /review posted on an issue rather than its pull request: point to the right page.
+  wrong-page:
+    if: >-
+      github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/review')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point to the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list -R "$REPO" --state open --json number,headRefName \
+            --jq "[.[] | select(.headRefName | startswith(\"agent/$ISSUE-\"))][0].number // empty")
+          if [ -n "$pr" ]; then
+            body="\`/review\` works on the pull request, not the issue: post it on #$pr."
+          else
+            body="\`/review\` works on an agent pull request, and issue #$ISSUE has no open one."
+          fi
+          gh issue comment "$ISSUE" -R "$REPO" --body "$body"
+
   review:
     if: >-
       (github.event_name == 'pull_request' &&
@@ -83,8 +109,8 @@ jobs:
 
           issue=$(echo "$BRANCH" | sed -E 's#^agent/([0-9]+)-.*#\1#')
           labels=",$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | join(",")'),"
-          model=claude-sonnet-5
-          case "$labels" in *,tier:T3,*|*,forecast:T3,*) model=claude-opus-5-5 ;; esac
+          model=claude-opus-5-5  # every review; see the note at the top
+          echo "Reviewing #$PR (labels $labels) with $model"
           {
             echo "go=true"; echo "issue=$issue"; echo "model=$model"
             echo "text<<PROMPT_END"
@@ -166,6 +192,13 @@ jobs:
           res="${RESULT:-}"; [ -z "$res" ] && res='{}'
           verdict=$(echo "$res" | jq -r '.verdict // "none"' 2>/dev/null || echo none)
           [ "$OUTCOME" != "success" ] && verdict=none
+          # A verdict needs a real review behind it: a summary of some substance and at least three
+          # rules or criteria checked. Anything less is recorded as invalid, never as an approval.
+          if [ "$verdict" != "none" ]; then
+            summary_len=$(echo "$res" | jq -r '.summary // "" | length' 2>/dev/null || echo 0)
+            checked=$(echo "$res" | jq '[.criteria[]?] | length' 2>/dev/null || echo 0)
+            if [ "$summary_len" -lt 80 ] || [ "$checked" -lt 3 ]; then verdict=invalid; fi
+          fi
           # A flat record (no nested braces), so the daily cap and v1 can read it with one pattern.
           record=$(jq -nc --argjson r "$r" --argjson res "$res" \
             --arg run "$RUN_ID" --arg pr "$PR" --arg issue "$ISSUE" --arg sha "$SHA" \
@@ -187,13 +220,17 @@ jobs:
             case "$verdict" in
               approve) echo "## AI review (shadow): would approve" ;;
               request_changes) echo "## AI review (shadow): would request changes" ;;
+              invalid) echo "## AI review (shadow): no usable verdict (the reviewer's answer was empty or a placeholder)" ;;
               *) echo "## AI review (shadow): no verdict (the reviewer did not finish)" ;;
             esac
             echo
             echo "_Advisory only: a person decides. Reviewed commit \`${SHA:0:8}\` against #$ISSUE._"
             echo
             echo "$res" | jq -r '.summary // empty'
-            if [ "$verdict" = "none" ]; then
+            if [ "$verdict" = "invalid" ]; then
+              # shellcheck disable=SC2016  # literal backticks in Markdown
+              printf '**Not counted as a verdict.** Comment `/review` to try again.\n'
+            elif [ "$verdict" = "none" ]; then
               why=$(echo "$r" | jq -r '(.subtype // .result // "no result was recorded") | tostring' 2>/dev/null | cut -c1-200)
               # shellcheck disable=SC2016  # literal backticks in Markdown
               printf '**Why it stopped:** %s. Comment `/review` to try again.\n' "${why:-no result was recorded}"
