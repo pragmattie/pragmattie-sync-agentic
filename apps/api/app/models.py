@@ -53,3 +53,22 @@ class Contact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     account: Mapped[Account] = relationship(back_populates="contacts")
+
+
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    first_name: Mapped[str] = mapped_column(String(80))
+    last_name: Mapped[str] = mapped_column(String(80))
+    email: Mapped[str] = mapped_column(String(200), index=True)
+    company: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str | None] = mapped_column(String(120))
+    source: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), index=True, default="new", server_default="new")
+    score: Mapped[int] = mapped_column(default=0, server_default="0")
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("reps.id"))
+    converted_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    owner: Mapped[Rep | None] = relationship()
