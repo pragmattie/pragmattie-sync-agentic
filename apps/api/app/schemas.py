@@ -1,8 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any, Generic, Literal, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
+
+from app.stages import Stage
 
 T = TypeVar("T")
 
@@ -19,6 +21,9 @@ Email = Annotated[EmailStr, StringConstraints(max_length=200)]
 Company = Annotated[str, Field(min_length=1, max_length=200)]
 JobTitle = Annotated[str, Field(max_length=120)]
 Score = Annotated[int, Field(ge=0, le=100)]
+DealName = Annotated[str, Field(min_length=1, max_length=200)]
+Amount = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
+Probability = Annotated[int, Field(ge=0, le=100)]
 
 LeadStatus = Literal["new", "working", "qualified", "disqualified", "converted"]
 EditableLeadStatus = Literal["new", "working", "qualified", "disqualified"]
@@ -111,9 +116,59 @@ class ContactOut(BaseModel):
     created_at: datetime
 
 
+class AccountRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
+class OpportunityCreate(BaseModel):
+    account_id: int
+    name: DealName
+    amount: Amount
+    stage: Stage = "prospecting"
+    probability: Probability | None = None
+    close_date: date
+    owner_id: int | None = None
+
+
+class OpportunityUpdate(BaseModel):
+    account_id: int | None = None
+    name: DealName | None = None
+    amount: Amount | None = None
+    stage: Stage | None = None
+    probability: Probability | None = None
+    close_date: date | None = None
+    owner_id: int | None = None
+
+    @model_validator(mode="after")
+    def required_fields_are_not_null(self) -> "OpportunityUpdate":
+        for field in ("account_id", "name", "amount", "stage", "probability", "close_date"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
+
+class OpportunityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    account_id: int
+    account: AccountRef
+    name: str
+    amount: Decimal
+    stage: Stage
+    probability: int
+    close_date: date
+    owner_id: int | None
+    owner: OwnerOut | None
+    created_at: datetime
+
+
 class AccountDetail(AccountOut):
     contacts: list[ContactOut]
-    opportunities: list[dict[str, Any]]
+    opportunities: list[OpportunityOut]
 
 
 class LeadCreate(BaseModel):
