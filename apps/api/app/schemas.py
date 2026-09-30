@@ -217,3 +217,20 @@ class LeadOut(BaseModel):
     owner: OwnerOut | None
     converted_account_id: int | None
     created_at: datetime
+
+
+class LeadConvertRequest(BaseModel):
+    industry: Industry = "Unknown"
+    employee_count: EmployeeCount = 50
+    annual_revenue: Revenue = Decimal("0")
+    region: Region = "North America"
+    opportunity_name: DealName | None = None
+    opportunity_amount: Amount | None = None
+    opportunity_close_date: date | None = None
+
+
+class LeadConvertResponse(BaseModel):
+    lead: LeadOut
+    account_id: int
+    contact_id: int
+    opportunity_id: int | None

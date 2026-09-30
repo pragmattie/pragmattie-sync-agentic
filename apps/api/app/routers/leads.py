@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,8 +7,18 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_session
 from app.lookups import get_or_404
-from app.models import Lead, Rep
-from app.schemas import LeadCreate, LeadOut, LeadSource, LeadStatus, LeadUpdate, Page
+from app.models import Account, Contact, Lead, Opportunity, Rep
+from app.schemas import (
+    LeadConvertRequest,
+    LeadConvertResponse,
+    LeadCreate,
+    LeadOut,
+    LeadSource,
+    LeadStatus,
+    LeadUpdate,
+    Page,
+)
+from app.stages import STAGE_PROBABILITY
 
 router = APIRouter(prefix="/api/v1")
 
@@ -100,3 +111,60 @@ def update_lead(
     session.commit()
     session.refresh(lead)
     return LeadOut.model_validate(lead)
+
+
+@router.post("/leads/{lead_id}/convert", response_model=LeadConvertResponse)
+def convert_lead(
+    lead_id: int, payload: LeadConvertRequest, session: Session = Depends(get_session)
+) -> LeadConvertResponse:
+    lead = get_or_404(session, Lead, lead_id)
+    if lead.status == "converted":
+        raise HTTPException(status_code=409, detail="Lead is already converted")
+    if lead.status == "disqualified":
+        raise HTTPException(status_code=409, detail="Disqualified leads cannot be converted")
+
+    account = Account(
+        name=lead.company,
+        industry=payload.industry,
+        employee_count=payload.employee_count,
+        annual_revenue=payload.annual_revenue,
+        region=payload.region,
+        owner_id=lead.owner_id,
+    )
+    contact = Contact(
+        first_name=lead.first_name,
+        last_name=lead.last_name,
+        email=lead.email,
+        title=lead.title,
+        account=account,
+    )
+    opportunity = None
+    if payload.opportunity_amount is not None:
+        opportunity = Opportunity(
+            name=payload.opportunity_name or f"{lead.company} - New business",
+            amount=payload.opportunity_amount,
+            stage="qualification",
+            probability=STAGE_PROBABILITY["qualification"],
+            close_date=payload.opportunity_close_date or date.today() + timedelta(days=60),
+            owner_id=lead.owner_id,
+            account=account,
+        )
+
+    session.add(account)
+    session.add(contact)
+    if opportunity is not None:
+        session.add(opportunity)
+    session.flush()
+
+    lead.status = "converted"
+    lead.converted_account_id = account.id
+
+    session.commit()
+    session.refresh(lead)
+
+    return LeadConvertResponse(
+        lead=LeadOut.model_validate(lead),
+        account_id=account.id,
+        contact_id=contact.id,
+        opportunity_id=opportunity.id if opportunity else None,
+    )
