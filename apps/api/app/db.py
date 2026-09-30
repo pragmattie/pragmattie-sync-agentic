@@ -1,9 +1,11 @@
+from collections.abc import Iterator
 from functools import lru_cache
 
+from fastapi import Depends
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session
 
 from app.config import get_settings
 
@@ -15,6 +17,11 @@ class Base(DeclarativeBase):
 @lru_cache
 def get_engine() -> Engine:
     return create_engine(get_settings().database_url, pool_pre_ping=True)
+
+
+def get_session(engine: Engine = Depends(get_engine)) -> Iterator[Session]:
+    with Session(engine) as session:
+        yield session
 
 
 def database_is_reachable(engine: Engine) -> bool:
