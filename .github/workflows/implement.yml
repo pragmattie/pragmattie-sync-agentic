@@ -238,6 +238,8 @@ jobs:
               build)
                 echo "Implement GitHub issue #$ISSUE on the current branch ($BRANCH), following CLAUDE.md."
                 echo "Commit your work with Conventional Commits messages. Do not push."
+                echo "Commit after each step that works (at least every 10 turns or so): you have a turn"
+                echo "limit, and a run that stops keeps only what it has committed."
                 echo "Run the relevant tests before you finish and report honestly whether they pass."
                 plan=$(gh api "repos/$REPO/issues/$ISSUE/comments" \
                   --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Plan"))] | last | .body // ""')
@@ -329,6 +331,13 @@ jobs:
           RESULT: ${{ steps.agent.outputs.structured_output }}
         run: |
           set -euo pipefail
+          # A run that stopped early (a turn limit, say) keeps its uncommitted edits too, as one
+          # work-in-progress commit on the draft PR. .gitignore keeps secrets and build output out.
+          if [ "$OUTCOME" != "success" ] && [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -q -m "wip: unfinished work when the run stopped (#$ISSUE)"
+            echo "Saved the agent's uncommitted edits as a work-in-progress commit."
+          fi
           if [ -z "$(git log "origin/${{ github.event.repository.default_branch }}..HEAD" --oneline)" ] && [ "$ACTION" = "build" ]; then
             echo "pushed=false" >> "$GITHUB_OUTPUT"; echo "The agent made no commits."; exit 0
           fi
