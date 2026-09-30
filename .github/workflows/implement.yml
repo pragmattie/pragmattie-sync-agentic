@@ -37,10 +37,6 @@ permissions:
   issues: write
   pull-requests: read
 
-concurrency:
-  group: implement-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
-
 env:
   DAILY_CAP_USD: "10"
   RUN_MARKER: pragmattie-run
@@ -60,6 +56,11 @@ jobs:
        startsWith(github.event.pull_request.head.ref, 'agent/')) ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged &&
        startsWith(github.event.pull_request.head.ref, 'agent/'))
+    # On the job, not the workflow: every issue comment and label starts this workflow, and in a
+    # workflow-level group those (skipped) runs could cancel a real run waiting its turn.
+    concurrency:
+      group: implement-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
