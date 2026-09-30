@@ -8,12 +8,17 @@
 #
 # It can only read: the repository, `git diff`, `git log` and `git show`. Sonnet 5 by default, Opus
 # 5.5 when the pull request is T3. Its cost counts toward the implementer's daily cap.
+#
+# A `/review` comment on an agent pull request, from someone with write access, asks for a fresh
+# review of its latest commit (after a failed review, say).
 
 name: Reviewer agent (shadow)
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -21,7 +26,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: review-${{ github.event.pull_request.number }}
+  group: review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 env:
@@ -31,7 +36,11 @@ env:
 
 jobs:
   review:
-    if: startsWith(github.event.pull_request.head.ref, 'agent/') && !github.event.pull_request.draft
+    if: >-
+      (github.event_name == 'pull_request' &&
+       startsWith(github.event.pull_request.head.ref, 'agent/') && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,10 +49,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
+          if [ "$EVENT" = "issue_comment" ]; then  # a /review comment: only from write access
+            perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+            case "$perm" in
+              admin|maintain|write) ;;
+              *) echo "go=false" >> "$GITHUB_OUTPUT"; echo "$ACTOR has $perm access: ignored."; exit 0 ;;
+            esac
+            PR=$(jq -r .issue.number "$GITHUB_EVENT_PATH")
+          else
+            PR=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+          fi
+          read -r BRANCH SHA < <(gh api "repos/$REPO/pulls/$PR" --jq '"\(.head.ref) \(.head.sha)"')
+          case "$BRANCH" in
+            agent/*) ;;
+            *) echo "go=false" >> "$GITHUB_OUTPUT"; echo "#$PR is not an agent pull request."; exit 0 ;;
+          esac
+          { echo "pr=$PR"; echo "sha=$SHA"; } >> "$GITHUB_OUTPUT"
+
           since=$(date -u +%Y-%m-%dT00:00:00Z)
           spent=$(gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" \
               --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
@@ -97,7 +123,7 @@ jobs:
         if: steps.prep.outputs.go == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.prep.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -114,7 +140,7 @@ jobs:
           prompt: ${{ steps.prep.outputs.text }}
           claude_args: >-
             --model ${{ steps.prep.outputs.model }}
-            --max-turns 30
+            --max-turns 50
             --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"criteria":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"met":{"type":"string","enum":["yes","no","unclear"]},"evidence":{"type":"string"}},"required":["criterion","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["blocker","should_fix","note"]},"where":{"type":"string"},"detail":{"type":"string"}},"required":["severity","where","detail"]}}},"required":["verdict","summary","criteria","findings"]}'
 
@@ -123,9 +149,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ steps.prep.outputs.pr }}
           ISSUE: ${{ steps.prep.outputs.issue }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          SHA: ${{ steps.prep.outputs.sha }}
           MODEL: ${{ steps.prep.outputs.model }}
           OUTCOME: ${{ steps.agent.outcome }}
           FILE: ${{ steps.agent.outputs.execution_file }}
@@ -167,6 +193,11 @@ jobs:
             echo "_Advisory only: a person decides. Reviewed commit \`${SHA:0:8}\` against #$ISSUE._"
             echo
             echo "$res" | jq -r '.summary // empty'
+            if [ "$verdict" = "none" ]; then
+              why=$(echo "$r" | jq -r '(.subtype // .result // "no result was recorded") | tostring' 2>/dev/null | cut -c1-200)
+              # shellcheck disable=SC2016  # literal backticks in Markdown
+              printf '**Why it stopped:** %s. Comment `/review` to try again.\n' "${why:-no result was recorded}"
+            fi
             if [ "$(echo "$res" | jq '[.findings[]?] | length')" != "0" ]; then
               echo; echo "**Findings**"; echo
               echo "$res" | jq -r '.findings[] | "- **\(.severity | sub("_"; " "))** `\(.where)`: \(.detail)"'
