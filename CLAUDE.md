@@ -70,6 +70,10 @@ Never put development information in the CRM, or product screens in Delivery Ins
   Billing/Auth and schema migrations are always T3; Pipeline and Forecasting at least T2.
 - T2 and T3 issues start with a plan that a person approves before you build.
 - Every run you make is recorded with its model, turns, tokens and cost.
+- A reviewer agent reads every agent pull request against its issue's spec and this file, and
+  posts an advisory review ("would approve" or "would request changes"). A person still decides.
+- When a person merges your pull request, the next item in the same milestone starts by itself if
+  its spec is approved. The next milestone never starts without a person.
 
 ## Human-written files
 
