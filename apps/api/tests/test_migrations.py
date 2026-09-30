@@ -27,10 +27,11 @@ def test_filter_passes_non_table_names_through(name, type_):
     assert include_name(name, type_, {"table_name": "accounts"}) is True
 
 
-def test_history_has_a_single_initial_head():
+def test_history_is_a_single_line_from_initial():
     config = Config(str(SERVICE_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(SERVICE_ROOT / "migrations"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["0001_initial"]
+    assert script.get_heads() == ["0002_reps_accounts_contacts"]
     assert script.get_revision("0001_initial").down_revision is None
+    assert script.get_revision("0002_reps_accounts_contacts").down_revision == "0001_initial"
