@@ -272,3 +272,12 @@ class ForecastOut(BaseModel):
     by_month: list[MonthForecast]
     by_rep: list[RepForecast]
     by_stage: list[StageForecast]
+
+
+class SummaryOut(BaseModel):
+    quarter: str
+    leads_by_status: dict[str, int]
+    open_leads: int
+    open_pipeline: Decimal
+    open_deals: int
+    won_this_quarter: Decimal
