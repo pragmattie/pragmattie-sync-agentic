@@ -234,3 +234,41 @@ class LeadConvertResponse(BaseModel):
     account_id: int
     contact_id: int
     opportunity_id: int | None
+
+
+class MonthForecast(BaseModel):
+    month: str
+    won: Decimal
+    commit: Decimal
+    best_case: Decimal
+    weighted: Decimal
+
+
+class RepForecast(BaseModel):
+    rep: OwnerOut
+    quota: Decimal
+    won: Decimal
+    commit: Decimal
+    weighted: Decimal
+    attainment_pct: float
+
+
+class StageForecast(BaseModel):
+    stage: Stage
+    count: int
+    amount: Decimal
+
+
+class ForecastOut(BaseModel):
+    quarter: str
+    start: date
+    end: date
+    quota: Decimal
+    won: Decimal
+    commit: Decimal
+    best_case: Decimal
+    pipeline: Decimal
+    weighted: Decimal
+    by_month: list[MonthForecast]
+    by_rep: list[RepForecast]
+    by_stage: list[StageForecast]
