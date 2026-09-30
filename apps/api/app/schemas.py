@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
 
@@ -16,6 +16,13 @@ Region = Annotated[str, Field(min_length=1, max_length=50)]
 Website = Annotated[str, Field(max_length=200)]
 PersonName = Annotated[str, Field(min_length=1, max_length=80)]
 Email = Annotated[EmailStr, StringConstraints(max_length=200)]
+Company = Annotated[str, Field(min_length=1, max_length=200)]
+JobTitle = Annotated[str, Field(max_length=120)]
+Score = Annotated[int, Field(ge=0, le=100)]
+
+LeadStatus = Literal["new", "working", "qualified", "disqualified", "converted"]
+EditableLeadStatus = Literal["new", "working", "qualified", "disqualified"]
+LeadSource = Literal["web", "referral", "event", "outbound", "partner"]
 
 
 class Page(BaseModel, Generic[T]):
@@ -107,3 +114,51 @@ class ContactOut(BaseModel):
 class AccountDetail(AccountOut):
     contacts: list[ContactOut]
     opportunities: list[dict[str, Any]]
+
+
+class LeadCreate(BaseModel):
+    first_name: PersonName
+    last_name: PersonName
+    email: Email
+    company: Company
+    title: JobTitle | None = None
+    source: LeadSource = "web"
+    score: Score = 0
+    owner_id: int | None = None
+
+
+class LeadUpdate(BaseModel):
+    first_name: PersonName | None = None
+    last_name: PersonName | None = None
+    email: Email | None = None
+    company: Company | None = None
+    title: JobTitle | None = None
+    source: LeadSource | None = None
+    status: EditableLeadStatus | None = None
+    score: Score | None = None
+    owner_id: int | None = None
+
+    @model_validator(mode="after")
+    def required_fields_are_not_null(self) -> "LeadUpdate":
+        for field in ("first_name", "last_name", "email", "company", "source", "status", "score"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
+
+class LeadOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    first_name: str
+    last_name: str
+    email: str
+    company: str
+    title: str | None
+    source: LeadSource
+    status: LeadStatus
+    score: int
+    owner_id: int | None
+    owner: OwnerOut | None
+    converted_account_id: int | None
+    created_at: datetime
