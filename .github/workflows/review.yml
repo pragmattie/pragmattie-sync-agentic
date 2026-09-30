@@ -1,0 +1,186 @@
+# The reviewer agent, in shadow. Human-written, like the rest of .github/.
+#
+# On every agent pull request (and every new commit to one) it reads the change against the issue's
+# spec and CLAUDE.md, and posts one comment: would approve, or would request changes, with what it
+# checked and what it found. It is advisory. It never approves, requests changes, merges or edits:
+# a person still decides. Its verdicts are recorded (v1 reads the record in the comment into its
+# audit trail), so they can be compared with the person's decisions before any review is delegated.
+#
+# It can only read: the repository, `git diff`, `git log` and `git show`. Sonnet 5 by default, Opus
+# 5.5 when the pull request is T3. Its cost counts toward the implementer's daily cap.
+
+name: Reviewer agent (shadow)
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  DAILY_CAP_USD: "10"
+  RUN_MARKER: pragmattie-run
+  REVIEW_MARKER: pragmattie-review
+
+jobs:
+  review:
+    if: startsWith(github.event.pull_request.head.ref, 'agent/') && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Prepare
+        id: prep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          since=$(date -u +%Y-%m-%dT00:00:00Z)
+          spent=$(gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
+            | { grep -oE "<!-- ($RUN_MARKER|$REVIEW_MARKER) \{[^}]*\} -->" || true; } \
+            | sed -E 's/.*"cost_usd":([0-9.]+).*/\1/' \
+            | awk '{s += $1} END {printf "%.2f", s + 0}')
+          echo "Spent today: \$$spent of \$$DAILY_CAP_USD"
+          if awk "BEGIN {exit !($spent >= $DAILY_CAP_USD)}"; then
+            echo "go=false" >> "$GITHUB_OUTPUT"; echo "The daily budget is used up: no review."; exit 0
+          fi
+
+          issue=$(echo "$BRANCH" | sed -E 's#^agent/([0-9]+)-.*#\1#')
+          labels=",$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | join(",")'),"
+          model=claude-sonnet-5
+          case "$labels" in *,tier:T3,*|*,forecast:T3,*) model=claude-opus-5-5 ;; esac
+          {
+            echo "go=true"; echo "issue=$issue"; echo "model=$model"
+            echo "text<<PROMPT_END"
+            echo "You are reviewing pull request #$PR, which implements issue #$issue, for the person"
+            echo "who will decide whether to merge it. Your verdict is advisory. Do not change any file."
+            echo
+            echo "Read CLAUDE.md first. See what changed with: git diff origin/main...HEAD --stat"
+            echo "Then read the changed files (git diff origin/main...HEAD -- <path>, or the Read tool)."
+            echo
+            echo "Judge, in this order:"
+            echo "1. Each rule in the issue's Spec and each acceptance criterion: is it met? Name the"
+            echo "   code or the test that shows it."
+            echo "2. Correctness: bugs, unhandled cases, behaviour that differs from the spec."
+            echo "3. Tests: does each rule have a test that would fail if the rule were broken?"
+            echo "4. Scope and rules: nothing outside the issue; no change to .github/workflows/,"
+            echo "   orchestrator/policies/ or CLAUDE.md; no credentials; seed data on .example only;"
+            echo "   no development information in the CRM."
+            echo
+            echo "The pull request's description is its author's own account: check its claims against"
+            echo "the code instead of trusting them."
+            echo
+            echo "Findings have a severity. blocker: a spec rule not met, a bug, or a CLAUDE.md rule"
+            echo "broken. should_fix: worth changing, but not a reason to hold the merge. note: anything"
+            echo "else the reviewer should know. The verdict is approve only when there is no blocker."
+            echo "Be specific and brief: file and line where you can, and no praise."
+            echo
+            echo "The issue:"
+            gh issue view "$issue" -R "$REPO" --json title,body --jq '"# \(.title)\n\n\(.body)"'
+            echo
+            echo "The pull request's description:"
+            gh pr view "$PR" -R "$REPO" --json body --jq .body
+            echo "PROMPT_END"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the pull request
+        if: steps.prep.outputs.go == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reviewer
+        id: agent
+        if: steps.prep.outputs.go == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          # Agent pull requests are opened and pushed by the builder app, a bot. The job's `if`
+          # already limits this to agent/ branches of this repository.
+          allowed_bots: "*"
+          prompt: ${{ steps.prep.outputs.text }}
+          claude_args: >-
+            --model ${{ steps.prep.outputs.model }}
+            --max-turns 30
+            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"criteria":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"met":{"type":"string","enum":["yes","no","unclear"]},"evidence":{"type":"string"}},"required":["criterion","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["blocker","should_fix","note"]},"where":{"type":"string"},"detail":{"type":"string"}},"required":["severity","where","detail"]}}},"required":["verdict","summary","criteria","findings"]}'
+
+      - name: Post the review
+        if: always() && steps.prep.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ISSUE: ${{ steps.prep.outputs.issue }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          MODEL: ${{ steps.prep.outputs.model }}
+          OUTCOME: ${{ steps.agent.outcome }}
+          FILE: ${{ steps.agent.outputs.execution_file }}
+          RESULT: ${{ steps.agent.outputs.structured_output }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          r='{}'
+          if [ -n "${FILE:-}" ] && [ -f "$FILE" ]; then
+            r=$(jq -c 'if type == "array" then ([.[] | select(.type == "result")] | last // {}) else {} end' "$FILE" 2>/dev/null || echo '{}')
+          fi
+          res="${RESULT:-}"; [ -z "$res" ] && res='{}'
+          verdict=$(echo "$res" | jq -r '.verdict // "none"' 2>/dev/null || echo none)
+          [ "$OUTCOME" != "success" ] && verdict=none
+          # A flat record (no nested braces), so the daily cap and v1 can read it with one pattern.
+          record=$(jq -nc --argjson r "$r" --argjson res "$res" \
+            --arg run "$RUN_ID" --arg pr "$PR" --arg issue "$ISSUE" --arg sha "$SHA" \
+            --arg model "$MODEL" --arg outcome "$OUTCOME" --arg verdict "$verdict" '{
+              run: $run, pr: ($pr | tonumber), issue: ($issue | tonumber), sha: $sha, model: $model,
+              outcome: $outcome, verdict: $verdict,
+              blockers: ([$res.findings[]? | select(.severity == "blocker")] | length),
+              should_fix: ([$res.findings[]? | select(.severity == "should_fix")] | length),
+              criteria_met: ([$res.criteria[]? | select(.met == "yes")] | length),
+              criteria: ([$res.criteria[]?] | length),
+              turns: ($r.num_turns // 0),
+              input_tokens: ($r.usage.input_tokens // 0),
+              output_tokens: ($r.usage.output_tokens // 0),
+              cache_read_tokens: ($r.usage.cache_read_input_tokens // 0),
+              cache_write_tokens: ($r.usage.cache_creation_input_tokens // 0),
+              cost_usd: (($r.total_cost_usd // 0) * 10000 | round / 10000)}')
+          cost=$(printf '%.2f' "$(echo "$record" | jq -r '.cost_usd')")
+          {
+            case "$verdict" in
+              approve) echo "## AI review (shadow): would approve" ;;
+              request_changes) echo "## AI review (shadow): would request changes" ;;
+              *) echo "## AI review (shadow): no verdict (the reviewer did not finish)" ;;
+            esac
+            echo
+            echo "_Advisory only: a person decides. Reviewed commit \`${SHA:0:8}\` against #$ISSUE._"
+            echo
+            echo "$res" | jq -r '.summary // empty'
+            if [ "$(echo "$res" | jq '[.findings[]?] | length')" != "0" ]; then
+              echo; echo "**Findings**"; echo
+              echo "$res" | jq -r '.findings[] | "- **\(.severity | sub("_"; " "))** `\(.where)`: \(.detail)"'
+            fi
+            if [ "$(echo "$res" | jq '[.criteria[]?] | length')" != "0" ]; then
+              echo; echo "<details><summary>What it checked against the spec</summary>"; echo
+              echo "| Rule or criterion | Met | Evidence |"; echo "| --- | --- | --- |"
+              echo "$res" | jq -r '.criteria[] | "| \(.criterion | gsub("\\|"; "/") | gsub("\n"; " ")) | \(.met) | \(.evidence | gsub("\\|"; "/") | gsub("\n"; " ")) |"'
+              echo; echo "</details>"
+            fi
+            echo
+            echo "<sub>$MODEL · $(echo "$record" | jq -r '.turns') turns · \$$cost · [run log]($GITHUB_SERVER_URL/$REPO/actions/runs/$RUN_ID)</sub>"
+            echo
+            echo "<!-- $REVIEW_MARKER $record -->"
+          } > review.md
+          # One review comment per pull request, rewritten for each commit reviewed.
+          gh pr comment "$PR" -R "$REPO" --edit-last --create-if-none --body-file review.md

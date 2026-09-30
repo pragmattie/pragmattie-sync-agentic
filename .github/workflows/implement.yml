@@ -8,6 +8,9 @@
 #   - a "Request changes" review on an agent pull request: the agent revises its own branch
 #   - a `/revise <what to change>` comment on an agent pull request: the same, and it works when the
 #     PR has a merge conflict, where GitHub runs no pull request workflows (so reviews start nothing)
+#   - merging an agent pull request: the next open item in the same milestone starts by itself
+#     ("1.2" after "1.1"), as if it had been labelled `agent-ready`, provided its spec is approved (no
+#     `needs-info` label). It never crosses into the next milestone: that gate is a person's.
 #
 # The model is chosen by rule: a `model:opus` / `model:sonnet` label wins; then the PR's `tier:`
 # label (revisions); then the issue's `forecast:` label. T3 uses Opus 5.5, everything else Sonnet 5.
@@ -25,6 +28,8 @@ on:
     types: [created]
   pull_request_review:
     types: [submitted]
+  pull_request:
+    types: [closed]
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ concurrency:
 env:
   DAILY_CAP_USD: "10"
   RUN_MARKER: pragmattie-run
+  REVIEW_MARKER: pragmattie-review  # the reviewer agent's records (review.yml) count toward the cap
   STEPUP_ISSUE: "1"  # the "re-evaluate automatic Opus step-up" reminder
 
 jobs:
@@ -50,6 +56,8 @@ jobs:
        startsWith(github.event.comment.body, '/revise')) ||
       (github.event_name == 'pull_request_review' &&
        github.event.review.state == 'changes_requested' &&
+       startsWith(github.event.pull_request.head.ref, 'agent/')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged &&
        startsWith(github.event.pull_request.head.ref, 'agent/'))
     runs-on: ubuntu-latest
     timeout-minutes: 100
@@ -69,8 +77,35 @@ jobs:
             *) echo "action=none" >> "$GITHUB_OUTPUT"; echo "$ACTOR has $perm access: ignored."; exit 0 ;;
           esac
 
-          pr=""
-          if [ "$EVENT" = "pull_request_review" ]; then
+          pr=""; issue=""
+          if [ "$EVENT" = "pull_request" ]; then
+            # A merged agent PR starts the next item in its milestone, if that item's spec is approved.
+            merged_pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+            done_issue=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH" | sed -E 's#^agent/([0-9]+)-.*#\1#')
+            item=$(gh api "repos/$REPO/issues/$done_issue" --jq .title | sed -nE 's/^([0-9]+\.[0-9]+) .*/\1/p')
+            if [ -z "$item" ]; then
+              echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$done_issue has no plan item number: nothing to chain."; exit 0
+            fi
+            next=$(gh api --paginate "repos/$REPO/issues?state=open&per_page=100" \
+                --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.title)\t\([.labels[].name] | join(","))"' \
+              | awk -F'\t' -v m="${item%%.*}" -v n="${item##*.}" \
+                  '{ split($2, word, " "); split(word[1], part, ".");
+                     if (part[1] == m && part[2] ~ /^[0-9]+$/ && part[2] + 0 > n + 0) print part[2] + 0 "\t" $1 "\t" $3 }' \
+              | sort -n | head -1)
+            if [ -z "$next" ]; then
+              echo "action=none" >> "$GITHUB_OUTPUT"
+              echo "Item $item was the last open item in milestone ${item%%.*}: the next milestone's gate is a person's."; exit 0
+            fi
+            issue=$(echo "$next" | cut -f2)
+            case ",$(echo "$next" | cut -f3)," in
+              *,needs-info,*) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$issue is next, but its spec is not approved (needs-info)."; exit 0 ;;
+              *,agent-ready,*) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$issue is next, and was already started."; exit 0 ;;
+            esac
+            # Labelled with the workflow's own token, which starts no second run: this run does the work.
+            gh issue edit "$issue" -R "$REPO" --add-label agent-ready
+            gh issue comment "$issue" -R "$REPO" --body "Started automatically: @$ACTOR merged #$merged_pr (item $item), and this is the next item in the milestone with an approved spec."
+            EVENT=issues  # from here on, exactly as if a person had added the label
+          elif [ "$EVENT" = "pull_request_review" ]; then
             branch=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
             pr=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
           elif [ "$(jq -r '.issue.pull_request != null' "$GITHUB_EVENT_PATH")" = "true" ]; then
@@ -84,7 +119,7 @@ jobs:
           if [ -n "$pr" ]; then
             issue=$(echo "$branch" | sed -E 's#^agent/([0-9]+)-.*#\1#')
             action=revise
-          else
+          elif [ -z "$issue" ]; then
             issue=$(jq -r .issue.number "$GITHUB_EVENT_PATH")
           fi
           labels=",$(gh api "repos/$REPO/issues/$issue/labels" --jq '[.[].name] | join(",")'),"
@@ -138,7 +173,7 @@ jobs:
           since=$(date -u +%Y-%m-%dT00:00:00Z)
           spent=$(gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" \
               --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
-            | { grep -o "<!-- $RUN_MARKER {[^}]*} -->" || true; } \
+            | { grep -oE "<!-- ($RUN_MARKER|$REVIEW_MARKER) \{[^}]*\} -->" || true; } \
             | sed -E 's/.*"cost_usd":([0-9.]+).*/\1/' \
             | awk '{s += $1} END {printf "%.2f", s + 0}')
           echo "Spent today: \$$spent of \$$DAILY_CAP_USD"
