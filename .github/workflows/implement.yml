@@ -4,7 +4,8 @@
 # What starts it, and only from someone with write access:
 #   - the `agent-ready` label on an issue: T0/T1 issues are built straight away; T2/T3 issues (and
 #     issues with no forecast, which count as T2) get a plan first
-#   - a `/approve-plan` comment on an issue whose plan is waiting
+#   - a `/approve-plan` comment on an issue whose plan is waiting; any text after the command goes
+#     to the agent as the approver's answers to the plan's questions
 #   - a "Request changes" review on an agent pull request: the agent revises its own branch
 #   - a `/revise <what to change>` comment on an agent pull request: the same, and it works when the
 #     PR has a merge conflict, where GitHub runs no pull request workflows (so reviews start nothing)
@@ -240,6 +241,13 @@ jobs:
                 plan=$(gh api "repos/$REPO/issues/$ISSUE/comments" \
                   --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Plan"))] | last | .body // ""')
                 if [ -n "$plan" ]; then echo; echo "The approved plan:"; echo "$plan"; fi
+                # Anything the approver wrote after /approve-plan answers the plan's questions.
+                answers=""
+                [ "$EVENT" = "issue_comment" ] && answers=$(printf '%s' "${NOTE#/approve-plan}" | sed -e 's/^[[:space:]]*//')
+                if [ -n "$answers" ]; then
+                  echo; echo "The approver's answers to the plan's questions (they override the plan where they differ):"
+                  printf '%s\n' "$answers"
+                fi
                 ;;
               revise)
                 echo "Revise pull request #$PR (issue #$ISSUE) on the current branch ($BRANCH),"
@@ -296,7 +304,7 @@ jobs:
           set -euo pipefail
           plan=$(echo "$RESULT" | jq -r '.plan')
           # shellcheck disable=SC2016  # literal $ and backticks in Markdown
-          printf '## Plan\n\n%s\n\nReply `/approve-plan` to build it, or comment with changes and re-add `agent-ready`.\n' "$plan" \
+          printf '## Plan\n\n%s\n\nReply `/approve-plan` to build it (add your answers to any questions after the command, in the same comment), or comment with changes and re-add `agent-ready`.\n' "$plan" \
             | gh issue comment "$ISSUE" -R "$REPO" --body-file -
           gh issue edit "$ISSUE" -R "$REPO" --add-label plan-proposed
 
