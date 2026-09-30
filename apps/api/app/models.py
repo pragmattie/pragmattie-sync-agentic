@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -38,6 +38,10 @@ class Account(Base):
         back_populates="account",
         order_by=lambda: (Contact.last_name, Contact.first_name, Contact.id),
     )
+    opportunities: Mapped[list["Opportunity"]] = relationship(
+        back_populates="account",
+        order_by=lambda: (Opportunity.close_date, Opportunity.id),
+    )
 
 
 class Contact(Base):
@@ -71,4 +75,23 @@ class Lead(Base):
     converted_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    owner: Mapped[Rep | None] = relationship()
+
+
+class Opportunity(Base):
+    __tablename__ = "opportunities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    stage: Mapped[str] = mapped_column(
+        String(20), index=True, default="prospecting", server_default="prospecting"
+    )
+    probability: Mapped[int]
+    close_date: Mapped[date] = mapped_column(Date, index=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("reps.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    account: Mapped[Account] = relationship(back_populates="opportunities")
     owner: Mapped[Rep | None] = relationship()

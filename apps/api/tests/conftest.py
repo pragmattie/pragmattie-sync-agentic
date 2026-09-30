@@ -80,3 +80,20 @@ def make_contact(client):
         return response.json()
 
     return make
+
+
+@pytest.fixture
+def make_opportunity(client):
+    def make(account_id, **overrides):
+        payload = {
+            "account_id": account_id,
+            "name": "Northwind renewal",
+            "amount": "50000.00",
+            "close_date": "2026-12-15",
+        }
+        payload.update(overrides)
+        response = client.post("/api/v1/opportunities", json=payload)
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    return make

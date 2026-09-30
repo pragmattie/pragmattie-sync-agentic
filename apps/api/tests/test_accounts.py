@@ -203,6 +203,44 @@ def test_get_account_includes_contacts_and_opportunities(client, make_account, m
     assert body["opportunities"] == []
 
 
+def test_get_account_lists_its_opportunities_by_close_date(client, make_account, make_opportunity):
+    account = make_account()
+    other = make_account(name="Acme Logistics")
+    later = make_opportunity(account["id"], close_date="2027-03-01")
+    earlier = make_opportunity(account["id"], close_date="2026-11-01", stage="closed_lost")
+    make_opportunity(other["id"])
+
+    body = client.get(f"/api/v1/accounts/{account['id']}").json()
+
+    assert body["opportunities"] == [earlier, later]
+
+
+def test_open_pipeline_counts_only_open_stages(client, make_account, make_opportunity):
+    account = make_account()
+    other = make_account(name="Acme Logistics")
+    for stage, amount in [
+        ("prospecting", "1000.00"),
+        ("qualification", "2000.00"),
+        ("proposal", "3000.00"),
+        ("negotiation", "4000.50"),
+        ("closed_won", "50000.00"),
+        ("closed_lost", "60000.00"),
+    ]:
+        make_opportunity(account["id"], stage=stage, amount=amount)
+    make_opportunity(other["id"], stage="closed_won", amount="7000.00")
+
+    detail = client.get(f"/api/v1/accounts/{account['id']}").json()
+    patched = client.patch(f"/api/v1/accounts/{account['id']}", json={"region": "East"}).json()
+    listed = client.get("/api/v1/accounts").json()["items"]
+
+    assert detail["open_pipeline"] == "10000.50"
+    assert patched["open_pipeline"] == "10000.50"
+    assert [(item["name"], item["open_pipeline"]) for item in listed] == [
+        ("Acme Logistics", "0.00"),
+        ("Northwind Traders", "10000.50"),
+    ]
+
+
 def test_get_unknown_account_is_404(client):
     response = client.get("/api/v1/accounts/7")
 

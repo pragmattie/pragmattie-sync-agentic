@@ -1,0 +1,98 @@
+from datetime import date
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
+
+from app.db import get_session
+from app.lookups import get_or_404
+from app.models import Account, Opportunity, Rep
+from app.schemas import OpportunityCreate, OpportunityOut, OpportunityUpdate, Page
+from app.stages import STAGE_PROBABILITY, Stage
+
+router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/opportunities", response_model=Page[OpportunityOut])
+def list_opportunities(
+    stage: Annotated[list[Stage] | None, Query()] = None,
+    owner_id: int | None = None,
+    account_id: int | None = None,
+    close_from: date | None = None,
+    close_to: date | None = None,
+    q: str | None = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_session),
+) -> Page[OpportunityOut]:
+    filters = []
+    if stage:
+        filters.append(Opportunity.stage.in_(stage))
+    if owner_id is not None:
+        filters.append(Opportunity.owner_id == owner_id)
+    if account_id is not None:
+        filters.append(Opportunity.account_id == account_id)
+    if close_from is not None:
+        filters.append(Opportunity.close_date >= close_from)
+    if close_to is not None:
+        filters.append(Opportunity.close_date <= close_to)
+    if q:
+        filters.append(func.lower(Opportunity.name).contains(q.lower(), autoescape=True))
+
+    total = session.scalar(select(func.count()).select_from(Opportunity).where(*filters))
+    opportunities = session.scalars(
+        select(Opportunity)
+        .where(*filters)
+        .options(selectinload(Opportunity.account), selectinload(Opportunity.owner))
+        .order_by(Opportunity.close_date, Opportunity.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return Page(
+        items=[OpportunityOut.model_validate(opportunity) for opportunity in opportunities],
+        total=total,
+    )
+
+
+@router.post("/opportunities", response_model=OpportunityOut, status_code=201)
+def create_opportunity(
+    payload: OpportunityCreate, session: Session = Depends(get_session)
+) -> OpportunityOut:
+    get_or_404(session, Account, payload.account_id)
+    if payload.owner_id is not None:
+        get_or_404(session, Rep, payload.owner_id)
+    values = payload.model_dump()
+    if values["probability"] is None:
+        values["probability"] = STAGE_PROBABILITY[payload.stage]
+    opportunity = Opportunity(**values)
+    session.add(opportunity)
+    session.commit()
+    session.refresh(opportunity)
+    return OpportunityOut.model_validate(opportunity)
+
+
+@router.get("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+def get_opportunity(opportunity_id: int, session: Session = Depends(get_session)) -> OpportunityOut:
+    return OpportunityOut.model_validate(get_or_404(session, Opportunity, opportunity_id))
+
+
+@router.patch("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+def update_opportunity(
+    opportunity_id: int, payload: OpportunityUpdate, session: Session = Depends(get_session)
+) -> OpportunityOut:
+    opportunity = get_or_404(session, Opportunity, opportunity_id)
+    changes = payload.model_dump(exclude_unset=True)
+    if "account_id" in changes:
+        get_or_404(session, Account, changes["account_id"])
+    if changes.get("owner_id") is not None:
+        get_or_404(session, Rep, changes["owner_id"])
+    # A new stage brings its default probability, unless the request sets one itself.
+    new_stage = changes.get("stage", opportunity.stage)
+    if new_stage != opportunity.stage and "probability" not in changes:
+        changes["probability"] = STAGE_PROBABILITY[new_stage]
+    for field, value in changes.items():
+        setattr(opportunity, field, value)
+    session.commit()
+    session.refresh(opportunity)
+    return OpportunityOut.model_validate(opportunity)
