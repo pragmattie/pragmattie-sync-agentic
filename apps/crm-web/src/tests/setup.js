@@ -7,17 +7,20 @@ class ResizeObserverStub {
 
 globalThis.ResizeObserver = ResizeObserverStub;
 
-window.matchMedia =
-  window.matchMedia ||
-  function matchMedia() {
-    return {
-      matches: false,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
+// The build test runs in Node, where there is no window to patch.
+if (typeof window !== "undefined") {
+  window.matchMedia =
+    window.matchMedia ||
+    function matchMedia() {
+      return {
+        matches: false,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      };
     };
-  };
+}
 
 // Vuetify's overlays (menus, dialogs) position themselves against it.
 globalThis.visualViewport = globalThis.visualViewport || {
