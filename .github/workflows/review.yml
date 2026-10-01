@@ -32,6 +32,8 @@ env:
   DAILY_CAP_USD: "10"
   RUN_MARKER: pragmattie-run
   REVIEW_MARKER: pragmattie-review
+  # The verdict the reviewer must return (both attempts use it).
+  REVIEW_SCHEMA: '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"criteria":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"met":{"type":"string","enum":["yes","no","unclear"]},"evidence":{"type":"string"}},"required":["criterion","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["blocker","should_fix","note"]},"where":{"type":"string"},"detail":{"type":"string"}},"required":["severity","where","detail"]}}},"required":["verdict","summary","criteria","findings"]}'
 
 jobs:
   # A /review posted on an issue rather than its pull request: point to the right page.
@@ -137,6 +139,8 @@ jobs:
             echo "broken. should_fix: worth changing, but not a reason to hold the merge. note: anything"
             echo "else the reviewer should know. The verdict is approve only when there is no blocker."
             echo "Be specific and brief: file and line where you can, and no praise."
+            echo "Finish by returning your verdict in the required structured format: a review"
+            echo "without it is not recorded."
             echo
             echo "The issue:"
             gh issue view "$issue" -R "$REPO" --json title,body --jq '"# \(.title)\n\n\(.body)"'
@@ -169,7 +173,24 @@ jobs:
             --model ${{ steps.prep.outputs.model }}
             --max-turns 50
             --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
-            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"summary":{"type":"string"},"criteria":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"met":{"type":"string","enum":["yes","no","unclear"]},"evidence":{"type":"string"}},"required":["criterion","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["blocker","should_fix","note"]},"where":{"type":"string"},"detail":{"type":"string"}},"required":["severity","where","detail"]}}},"required":["verdict","summary","criteria","findings"]}'
+            --json-schema '${{ env.REVIEW_SCHEMA }}'
+
+      # One retry when the reviewer fails (it has finished without returning its structured
+      # verdict, for instance), so a person doesn't have to ask with /review.
+      - name: Reviewer (retry)
+        id: retry
+        if: ${{ !cancelled() && steps.prep.outputs.go == 'true' && steps.agent.outcome == 'failure' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          allowed_bots: "*"
+          prompt: ${{ steps.prep.outputs.text }}
+          claude_args: >-
+            --model ${{ steps.prep.outputs.model }}
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --json-schema '${{ env.REVIEW_SCHEMA }}'
 
       - name: Post the review
         if: always() && steps.prep.outputs.go == 'true'
@@ -180,9 +201,11 @@ jobs:
           ISSUE: ${{ steps.prep.outputs.issue }}
           SHA: ${{ steps.prep.outputs.sha }}
           MODEL: ${{ steps.prep.outputs.model }}
-          OUTCOME: ${{ steps.agent.outcome }}
-          FILE: ${{ steps.agent.outputs.execution_file }}
-          RESULT: ${{ steps.agent.outputs.structured_output }}
+          # The retry's result when there was one, else the first attempt's.
+          OUTCOME: ${{ steps.retry.outcome == 'skipped' && steps.agent.outcome || steps.retry.outcome }}
+          FILE: ${{ steps.retry.outcome == 'skipped' && steps.agent.outputs.execution_file || steps.retry.outputs.execution_file }}
+          RESULT: ${{ steps.retry.outcome == 'skipped' && steps.agent.outputs.structured_output || steps.retry.outputs.structured_output }}
+          RETRIED: ${{ steps.retry.outcome != 'skipped' }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -233,6 +256,9 @@ jobs:
               printf '**Not counted as a verdict.** Comment `/review` to try again.\n'
             elif [ "$verdict" = "none" ]; then
               why=$(echo "$r" | jq -r '(.subtype // .result // "no result was recorded") | tostring' 2>/dev/null | cut -c1-200)
+              # Claude finished but returned no verdict in the required shape.
+              [ "$why" = "success" ] && why="it finished without returning its verdict in the required format"
+              [ "$RETRIED" = "true" ] && why="$why (after one automatic retry)"
               # shellcheck disable=SC2016  # literal backticks in Markdown
               printf '**Why it stopped:** %s. Comment `/review` to try again.\n' "${why:-no result was recorded}"
             fi
