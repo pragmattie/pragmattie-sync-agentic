@@ -1,8 +1,10 @@
+from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 import app.routers.forecast as forecast_router
@@ -152,6 +154,45 @@ def test_seed_reset_replaces_data_and_restarts_ids(sqlite_engine):
         account_ids = [a.id for a in session.scalars(select(Account).order_by(Account.id))]
     assert rep_ids == list(range(1, 7))
     assert account_ids == list(range(1, 61))
+
+
+class _FakeMySQLEngine:
+    """Just enough of an Engine to record what the reset runs on MySQL."""
+
+    def __init__(self):
+        self.dialect = SimpleNamespace(name="mysql")
+        self.statements = []
+
+    @contextmanager
+    def begin(self):
+        yield SimpleNamespace(execute=lambda statement: self.statements.append(str(statement)))
+
+
+def test_seed_reset_restarts_auto_increment_ids_on_mysql():
+    engine = _FakeMySQLEngine()
+
+    seed_module._restart_auto_increment(engine)
+
+    assert engine.statements == [
+        "ALTER TABLE leads AUTO_INCREMENT = 1",
+        "ALTER TABLE opportunities AUTO_INCREMENT = 1",
+        "ALTER TABLE contacts AUTO_INCREMENT = 1",
+        "ALTER TABLE accounts AUTO_INCREMENT = 1",
+        "ALTER TABLE reps AUTO_INCREMENT = 1",
+    ]
+
+
+def test_seed_reset_runs_no_alter_table_off_mysql(sqlite_engine):
+    statements = []
+    event.listen(
+        sqlite_engine,
+        "before_cursor_execute",
+        lambda conn, cursor, statement, *args: statements.append(statement),
+    )
+
+    seed_database(sqlite_engine, mode="reset", today=TODAY)
+
+    assert not [s for s in statements if s.startswith("ALTER TABLE")]
 
 
 def test_seed_reset_on_an_empty_database_seeds_fresh(sqlite_engine):

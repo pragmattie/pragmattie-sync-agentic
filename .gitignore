@@ -11,6 +11,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.coverage
+htmlcov/
 
 # Node
 node_modules/

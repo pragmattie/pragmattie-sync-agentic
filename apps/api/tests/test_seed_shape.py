@@ -116,15 +116,11 @@ def test_deals_are_round_amounts_with_their_stage_probability_and_account_name(s
 
 
 @pytest.mark.parametrize("label", ["2026-Q2", "2026-Q3"])
-def test_each_of_the_last_two_quarters_has_wins_near_quota_and_some_losses(seeded, label):
+def test_each_of_the_last_two_quarters_has_some_losses_and_no_open_deals(seeded, label):
     data = seeded()
     start, end = _quarter(label)
 
     for rep in data["reps"]:
-        won = _won(data["opportunities"], rep, start, end)
-        # The generator stops on the deal that crosses its target, so it may overshoot by one.
-        assert rep.quarterly_quota * Decimal("0.80") <= won
-        assert won <= rep.quarterly_quota * Decimal("1.15") + LARGEST_DEAL
         lost = [
             d
             for d in data["opportunities"]
@@ -136,10 +132,6 @@ def test_each_of_the_last_two_quarters_has_wins_near_quota_and_some_losses(seede
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Seed overshoots: the deal that crosses the target can lift a quarter past 115%",
-)
 def test_last_two_quarters_won_is_strictly_80_to_115_percent_of_quota(seeded):
     data = seeded()
 
