@@ -1,4 +1,5 @@
 <script setup>
+import AppSnackbar from "./components/AppSnackbar.vue";
 import { navItems } from "./router";
 import { useNavigationStore } from "./stores/navigation";
 
@@ -26,5 +27,7 @@ const navigation = useNavigationStore();
     <v-main>
       <router-view />
     </v-main>
+
+    <AppSnackbar />
   </v-app>
 </template>

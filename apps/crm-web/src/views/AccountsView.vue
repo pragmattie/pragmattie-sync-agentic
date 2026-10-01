@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { getJson } from "../api";
+import LoadError from "../components/LoadError.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { INDUSTRIES } from "../constants";
 import { money, moneyFull } from "../format";
@@ -63,6 +64,8 @@ async function load() {
   const id = ++requestId;
   loading.value = true;
   loadError.value = "";
+  // Clear the last search's rows so the table shows its loading state.
+  accounts.value = [];
   try {
     const body = await getJson("/api/v1/accounts", params.value);
     if (id !== requestId) return;
@@ -138,11 +141,15 @@ function hasPipeline(value) {
         </v-row>
       </v-card-text>
 
-      <v-alert v-if="loadError" type="error" variant="tonal" class="mx-4 mb-4">
-        {{ loadError }}
-      </v-alert>
+      <LoadError
+        v-if="loadError"
+        title="Couldn't load accounts"
+        :message="loadError"
+        class="mx-4"
+      />
 
       <v-data-table-server
+        v-else
         v-model:page="page"
         :items-per-page="PAGE_SIZE"
         :items-per-page-options="[PAGE_SIZE]"
@@ -150,6 +157,8 @@ function hasPipeline(value) {
         :items="accounts"
         :items-length="total"
         :loading="loading"
+        loading-text="Loading accounts…"
+        no-data-text="No accounts match these filters"
         item-value="id"
         hover
         style="cursor: pointer"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { API_URL, buildUrl, getJson, sendJson } from "../api";
+import { API_URL, buildUrl, getJson, NETWORK_ERROR_MESSAGE, sendJson } from "../api";
 
 function respond(status, body, { json = true } = {}) {
   return vi.fn().mockResolvedValue({
@@ -84,6 +84,28 @@ describe("getJson", () => {
     const error = await getJson("/api/v1/leads").catch((e) => e);
     expect(error).toBeInstanceOf(Error);
     expect(error.status).toBeUndefined();
+    expect(error.network).toBe(true);
+  });
+
+  it("says the server can't be reached on a network failure, not the browser's message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    const error = await getJson("/api/v1/leads").catch((e) => e);
+    expect(error.message).toBe(NETWORK_ERROR_MESSAGE);
+    expect(error.message).toContain("Can't reach the PragMattie Sync server");
+    expect(error.message).not.toContain("Failed to fetch");
+  });
+
+  it("gives a network failure and an API error different, readable messages", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const network = await getJson("/api/v1/leads").catch((e) => e);
+
+    vi.stubGlobal("fetch", respond(503, { detail: "Database is unavailable" }));
+    const api = await getJson("/api/v1/leads").catch((e) => e);
+
+    expect(api.message).toBe("Database is unavailable");
+    expect(network.message).not.toBe(api.message);
+    expect(api.network).toBeUndefined();
   });
 });
 

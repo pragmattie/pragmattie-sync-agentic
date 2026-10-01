@@ -230,14 +230,97 @@ describe("ForecastView", () => {
     expect(bars[1].attributes("style")).toContain("width: 100%");
   });
 
-  it("shows an error when the forecast fails to load", async () => {
+  it("shows a progress bar and no numbers while the forecast loads", async () => {
+    let resolve;
+    getJson.mockReturnValue(new Promise((done) => (resolve = done)));
+    await mountView();
+
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(false);
+
+    resolve(forecast);
+    await flushPromises();
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(true);
+  });
+
+  it("clears the last quarter's forecast as soon as another quarter starts loading", async () => {
+    await mountView();
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(true);
+
+    getJson.mockReturnValue(new Promise(() => {}));
+    wrapper.findComponent({ name: "VSelect" }).vm.$emit("update:modelValue", "2026-Q3");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='meter']").exists()).toBe(false);
+  });
+
+  it("doesn't keep the last quarter's forecast when the new quarter fails", async () => {
+    await mountView();
+
+    getJson.mockRejectedValue(new Error("Service unavailable"));
+    wrapper.findComponent({ name: "VSelect" }).vm.$emit("update:modelValue", "2026-Q3");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test='load-error']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("$300,000 of $1,000,000 closed");
+  });
+
+  it("says plainly when the quarter has no deals and no reps", async () => {
+    getJson.mockResolvedValue({
+      ...forecast,
+      quota: "0.00",
+      won: "0.00",
+      commit: "0.00",
+      best_case: "0.00",
+      weighted: "0.00",
+      by_month: forecast.by_month.map((month) => ({
+        ...month,
+        won: "0.00",
+        commit: "0.00",
+        best_case: "0.00",
+        weighted: "0.00",
+      })),
+      by_rep: [],
+      by_stage: [],
+    });
+    await mountView();
+
+    expect(wrapper.find("[data-test='month-empty']").text()).toBe("No deals close in this quarter");
+    expect(wrapper.find("[data-test='month-chart']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='stage-empty']").text()).toBe("No open deals");
+    expect(wrapper.find("[data-test='stage-chart']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='rep-table']").text()).toContain(
+      "No reps with a quota this quarter",
+    );
+  });
+
+  it("shows an error alert, and keeps the header and quarter control, when loading fails", async () => {
     getJson.mockRejectedValue(new Error("Service unavailable"));
     await mountView();
 
-    expect(wrapper.find("[data-test='forecast-error']").text()).toContain(
-      "Couldn't load the forecast: Service unavailable",
-    );
+    const alert = wrapper.find("[data-test='load-error']");
+    expect(alert.classes()).toContain("text-error");
+    expect(alert.text()).toContain("Couldn't load the forecast");
+    expect(alert.text()).toContain("Service unavailable");
+    expect(wrapper.find("h1").text()).toBe("Forecast");
+    expect(wrapper.find("[data-test='quarter']").exists()).toBe(true);
     expect(wrapper.find("[data-test='meter']").exists()).toBe(false);
+  });
+
+  it("tries again when the quarter changes after a failure", async () => {
+    getJson.mockRejectedValue(new Error("Service unavailable"));
+    await mountView();
+
+    getJson.mockResolvedValue(forecast);
+    wrapper.findComponent({ name: "VSelect" }).vm.$emit("update:modelValue", "2026-Q3");
+    await flushPromises();
+
+    expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='tile-quota']").exists()).toBe(true);
   });
 
   it("never mentions development information", async () => {

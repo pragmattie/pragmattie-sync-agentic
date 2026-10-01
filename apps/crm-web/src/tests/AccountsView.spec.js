@@ -193,13 +193,41 @@ describe("AccountsView", () => {
     expect(push).toHaveBeenCalledWith("/accounts/42");
   });
 
-  it("shows an API error", async () => {
+  it("uses the table's loading state, without the last search's rows, while loading", async () => {
+    await mountView();
+    expect(wrapper.find('[data-test="account-name"]').exists()).toBe(true);
+
+    getJson.mockImplementation(() => new Promise(() => {}));
+    wrapper.findAllComponents({ name: "VSelect" })[0].vm.$emit("update:modelValue", "Retail");
+    await flushPromises();
+
+    const table = wrapper.findComponent(VDataTableServer);
+    expect(table.props("loading")).toBe(true);
+    expect(wrapper.find('[data-test="account-name"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Loading accounts…");
+  });
+
+  it("says no accounts match the filters when there are none", async () => {
+    accounts = [];
+    await mountView();
+
+    expect(wrapper.text()).toContain("No accounts match these filters");
+  });
+
+  it("shows an API error alert in place of the table, keeping the header and filters", async () => {
     getJson.mockImplementation((path) => {
       if (path === "/api/v1/reps") return Promise.resolve(reps);
       return Promise.reject(new Error("Service unavailable"));
     });
     await mountView();
 
-    expect(wrapper.find(".v-alert").text()).toContain("Service unavailable");
+    const alert = wrapper.find('[data-test="load-error"]');
+    expect(alert.classes()).toContain("text-error");
+    expect(alert.text()).toContain("Couldn't load accounts");
+    expect(alert.text()).toContain("Service unavailable");
+    expect(wrapper.findComponent(VDataTableServer).exists()).toBe(false);
+    expect(wrapper.find("h1").text()).toBe("Accounts");
+    expect(wrapper.find('[data-test="search"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="industry"]').exists()).toBe(true);
   });
 });

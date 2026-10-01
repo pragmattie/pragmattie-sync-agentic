@@ -1,10 +1,12 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { VSelect, VSwitch, VTextField } from "vuetify/components";
 import { sendJson } from "../api";
 import ConvertLeadDialog from "../components/ConvertLeadDialog.vue";
 import { vuetify } from "../plugins/vuetify";
+import { useSnackbarStore } from "../stores/snackbar";
 
 vi.mock("../api", () => ({
   getJson: vi.fn(),
@@ -22,6 +24,7 @@ const lead = {
 
 let wrapper;
 let router;
+let pinia;
 
 async function mountDialog(props = {}) {
   router = createRouter({
@@ -33,6 +36,7 @@ async function mountDialog(props = {}) {
   });
   await router.push("/leads");
   await router.isReady();
+  pinia = createPinia();
   wrapper = mount(ConvertLeadDialog, {
     attachTo: document.body,
     props: {
@@ -41,7 +45,7 @@ async function mountDialog(props = {}) {
       "onUpdate:modelValue": (value) => wrapper.setProps({ modelValue: value }),
       ...props,
     },
-    global: { plugins: [router, vuetify] },
+    global: { plugins: [pinia, router, vuetify] },
   });
   await flushPromises();
   return wrapper;
@@ -134,6 +138,18 @@ describe("ConvertLeadDialog", () => {
     expect(wrapper.props("modelValue")).toBe(false);
   });
 
+  it("confirms the conversion in the app's snackbar, which survives the route change", async () => {
+    sendJson.mockResolvedValue({ account_id: 42, contact_id: 7, opportunity_id: 9 });
+    await mountDialog();
+
+    await submit();
+
+    const snackbar = useSnackbarStore(pinia);
+    expect(snackbar.show).toBe(true);
+    expect(snackbar.text).toBe("Alex Abbott converted to an account");
+    expect(snackbar.color).toBe("primary");
+  });
+
   it("leaves the opportunity out with the switch off", async () => {
     sendJson.mockResolvedValue({ account_id: 43, contact_id: 8, opportunity_id: null });
     await mountDialog();
@@ -179,6 +195,7 @@ describe("ConvertLeadDialog", () => {
     );
     expect(wrapper.props("modelValue")).toBe(true);
     expect(router.currentRoute.value.fullPath).toBe("/leads");
+    expect(useSnackbarStore(pinia).show).toBe(false);
   });
 
   it("closes on Cancel without a request", async () => {

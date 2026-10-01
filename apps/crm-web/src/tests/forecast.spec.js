@@ -70,6 +70,17 @@ describe("quotaMeter", () => {
     expect(meter.quota).toBeCloseTo((400000 / scale) * 100);
   });
 
+  it("scales to best case, not the sum of clamped segments, when data is inconsistent", () => {
+    // Commit below won: the clamped segments add up to 300k + 0 + 600k = 900k,
+    // but the scale still runs from best case (800k) plus 5%.
+    const meter = quotaMeter({ ...forecast, quota: "400000.00", commit: "200000.00" });
+    const scale = 800000 * 1.05;
+    expect(meter.won).toBeCloseTo((300000 / scale) * 100);
+    expect(meter.negotiation).toBe(0);
+    expect(meter.proposal).toBeCloseTo((600000 / scale) * 100);
+    expect(meter.quota).toBeCloseTo((400000 / scale) * 100);
+  });
+
   it("is empty when there is nothing to show", () => {
     expect(quotaMeter({ quota: "0", won: "0", commit: "0", best_case: "0" })).toEqual({
       won: 0,
