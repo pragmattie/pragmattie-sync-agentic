@@ -4,6 +4,8 @@ import { computed, onMounted, ref, watch } from "vue";
 import { getJson } from "../api";
 import { monthStacks, quarterOptions, quotaMeter, stageBars } from "../charts/forecast";
 import { barValueLabels, LABEL_COLOR, moneyAxis, moneyTooltip } from "../charts/setup";
+import LoadError from "../components/LoadError.vue";
+import LoadingBar from "../components/LoadingBar.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { FORECAST_COLORS } from "../constants";
 import { money, moneyFull, monthLabel, percent } from "../format";
@@ -20,6 +22,8 @@ async function load() {
   const id = ++requestId;
   loading.value = true;
   loadError.value = "";
+  // Never leave the last quarter's numbers on screen under the new quarter's name.
+  forecast.value = null;
   try {
     const body = await getJson("/api/v1/forecast", { quarter: quarter.value });
     if (id !== requestId) return;
@@ -86,8 +90,19 @@ const meterLabel = computed(() => {
 
 const monthView = ref("chart");
 
+function hasAmounts(values) {
+  return values.some((value) => value > 0);
+}
+
+const monthStacked = computed(() => monthStacks(forecast.value));
+
+const hasMonths = computed(() => {
+  const stacks = monthStacked.value;
+  return hasAmounts([...stacks.won, ...stacks.negotiation, ...stacks.proposal]);
+});
+
 const monthChart = computed(() => {
-  const stacks = monthStacks(forecast.value);
+  const stacks = monthStacked.value;
   return {
     labels: stacks.labels,
     datasets: legend.map((item) => ({
@@ -109,8 +124,12 @@ const monthOptions = {
   },
 };
 
+const stageBarData = computed(() => stageBars(forecast.value));
+
+const hasStages = computed(() => hasAmounts(stageBarData.value.values));
+
 const stageChart = computed(() => {
-  const bars = stageBars(forecast.value);
+  const bars = stageBarData.value;
   return {
     labels: bars.labels,
     datasets: [
@@ -165,11 +184,9 @@ const repHeaders = [
       />
     </PageHeader>
 
-    <v-alert v-if="loadError" type="error" variant="tonal" class="mb-4" data-test="forecast-error">
-      Couldn't load the forecast: {{ loadError }}
-    </v-alert>
+    <LoadingBar :active="loading" />
 
-    <v-progress-linear v-if="loading" indeterminate color="secondary" class="mb-2" />
+    <LoadError title="Couldn't load the forecast" :message="loadError" />
 
     <template v-if="forecast">
       <v-row class="mb-2">
@@ -238,7 +255,10 @@ const repHeaders = [
               </v-btn-toggle>
             </v-card-title>
             <v-card-text>
-              <template v-if="monthView === 'chart'">
+              <div v-if="!hasMonths" class="text-medium-emphasis" data-test="month-empty">
+                No deals close in this quarter
+              </div>
+              <template v-else-if="monthView === 'chart'">
                 <div class="d-flex flex-wrap ga-4 mb-2 text-body-2">
                   <span v-for="item in legend" :key="item.key" class="d-flex align-center ga-1">
                     <span class="swatch" :style="{ backgroundColor: item.color }" />
@@ -277,7 +297,10 @@ const repHeaders = [
           <v-card class="h-100">
             <v-card-title>Open pipeline by stage</v-card-title>
             <v-card-text>
-              <div class="chart" data-test="stage-chart">
+              <div v-if="!hasStages" class="text-medium-emphasis" data-test="stage-empty">
+                No open deals
+              </div>
+              <div v-else class="chart" data-test="stage-chart">
                 <Bar :data="stageChart" :options="stageOptions" :plugins="stagePlugins" />
               </div>
             </v-card-text>
@@ -294,6 +317,7 @@ const repHeaders = [
           :items-per-page="-1"
           hide-default-footer
           density="comfortable"
+          no-data-text="No reps with a quota this quarter"
           data-test="rep-table"
         >
           <template #[`item.rep`]="{ item }">{{ item.rep.name }}</template>
