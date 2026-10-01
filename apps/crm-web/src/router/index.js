@@ -1,11 +1,13 @@
 import { createRouter, createWebHistory } from "vue-router";
-import AboutView from "../views/AboutView.vue";
-import AccountDetailView from "../views/AccountDetailView.vue";
-import AccountsView from "../views/AccountsView.vue";
-import ForecastView from "../views/ForecastView.vue";
-import HomeView from "../views/HomeView.vue";
-import LeadsView from "../views/LeadsView.vue";
-import PipelineView from "../views/PipelineView.vue";
+
+// Each page is its own chunk, so the Forecast page's chart library loads only there.
+const HomeView = () => import("../views/HomeView.vue");
+const LeadsView = () => import("../views/LeadsView.vue");
+const AccountsView = () => import("../views/AccountsView.vue");
+const AccountDetailView = () => import("../views/AccountDetailView.vue");
+const PipelineView = () => import("../views/PipelineView.vue");
+const ForecastView = () => import("../views/ForecastView.vue");
+const AboutView = () => import("../views/AboutView.vue");
 
 export const productName = "PragMattie Sync CRM";
 

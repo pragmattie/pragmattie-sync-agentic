@@ -1,13 +1,10 @@
 import "@mdi/font/css/materialdesignicons.css";
-import * as components from "vuetify/components";
-import * as directives from "vuetify/directives";
-import "@mdi/font/css/materialdesignicons.css";
-import "vuetify/styles";
 import { createVuetify } from "vuetify";
+import "vuetify/styles";
 
+// Components are imported where they're used (vite-plugin-vuetify), so only
+// those reach the bundle.
 export const vuetify = createVuetify({
-  components,
-  directives,
   theme: {
     defaultTheme: "pragmattieSync",
     themes: {
