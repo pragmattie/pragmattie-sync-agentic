@@ -65,6 +65,18 @@ describe("HomeView", () => {
     expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
   });
 
+  it("lays the tiles out four across on desktop, two on tablets and one on phones", async () => {
+    getJson.mockResolvedValue(summary);
+    const wrapper = await mountHome();
+
+    for (const tile of wrapper.findAll("[data-test^='tile-']")) {
+      const column = tile.element.parentElement.classList;
+      expect([...column]).toEqual(
+        expect.arrayContaining(["v-col--cols-12", "v-col--cols-sm-6", "v-col--cols-md-3"]),
+      );
+    }
+  });
+
   it("shows a progress bar and no tiles while the summary loads", async () => {
     let resolve;
     getJson.mockReturnValue(new Promise((done) => (resolve = done)));

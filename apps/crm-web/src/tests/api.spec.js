@@ -11,12 +11,21 @@ function respond(status, body, { json = true } = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("buildUrl", () => {
   it("defaults to the local API", () => {
     expect(API_URL).toBe("http://localhost:8000");
     expect(buildUrl("/api/v1/reps")).toBe("http://localhost:8000/api/v1/reps");
+  });
+
+  it("takes the base URL from VITE_API_URL", async () => {
+    vi.stubEnv("VITE_API_URL", "https://api.pragmattie-sync.example");
+    vi.resetModules();
+    const api = await import("../api");
+
+    expect(api.buildUrl("/api/v1/reps")).toBe("https://api.pragmattie-sync.example/api/v1/reps");
   });
 
   it("leaves out undefined, null and empty values", () => {

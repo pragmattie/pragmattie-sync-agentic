@@ -1,10 +1,12 @@
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
+import vuetify from "vite-plugin-vuetify";
 
 // usePolling lets file-change detection work when the source is bind-mounted
 // into a Linux container from a Windows host.
 export default defineConfig({
-  plugins: [vue()],
+  // autoImport bundles only the Vuetify components the app uses.
+  plugins: [vue(), vuetify({ autoImport: true })],
   server: {
     host: true,
     port: 5173,

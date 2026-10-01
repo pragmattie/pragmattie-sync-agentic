@@ -1,6 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getJson } from "../api";
+import { barValueLabels, moneyTooltip } from "../charts/setup";
 import { vuetify } from "../plugins/vuetify";
 import ForecastView from "../views/ForecastView.vue";
 
@@ -216,12 +217,39 @@ describe("ForecastView", () => {
     expect(stages.props("options").indexAxis).toBe("y");
   });
 
+  it("colours the month stacks with the forecast ramp and draws no chart legends", async () => {
+    await mountView();
+
+    const [months, stages] = wrapper.findAllComponents({ name: "Bar" });
+    expect(months.props("data").datasets.map((set) => [set.label, set.backgroundColor])).toEqual([
+      ["Closed won", "#0E5A61"],
+      ["Negotiation", "#1B8A94"],
+      ["Proposal", "#6FBAC1"],
+    ]);
+    expect(months.props("options").scales.x.stacked).toBe(true);
+    expect(months.props("options").scales.y.stacked).toBe(true);
+    expect(months.props("options").scales.y.ticks.callback(150000)).toBe("$150K");
+    // The legend is plain HTML above the chart.
+    const legend = wrapper.find("[data-test='month-chart']").element.previousElementSibling;
+    expect(legend.textContent).toMatch(
+      /Closed won\s*Negotiation\s*Proposal/,
+    );
+    for (const chart of [months, stages]) {
+      expect(chart.props("options").plugins.legend.display).toBe(false);
+      expect(chart.props("options").plugins.tooltip).toBe(moneyTooltip);
+    }
+    expect(stages.props("plugins")).toContain(barValueLabels);
+    expect(stages.props("options").scales.x.ticks.callback(900000)).toBe("$900K");
+  });
+
   it("lists reps in the API's order with capped attainment bars", async () => {
     await mountView();
 
     const rows = wrapper.findAll("[data-test='rep-table'] tbody tr");
     expect(rows.map((row) => row.findAll("td")[0].text())).toEqual(["Jordan Park", "Avery Lee"]);
-    expect(rows[0].text()).toContain("$500,000");
+    expect(rows[0].findAll("td").map((cell) => cell.text())).toEqual(
+      expect.arrayContaining(["Jordan Park", "$500,000", "$250,000", "$300,000", "$400,000"]),
+    );
     expect(rows[0].find("[data-test='attainment']").text()).toBe("50%");
     expect(rows[1].find("[data-test='attainment']").text()).toBe("120%");
 
