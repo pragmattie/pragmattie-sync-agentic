@@ -275,6 +275,21 @@ def _amounts_to_target(rng, target: Decimal, min_count: int = 1) -> list[Decimal
     return amounts
 
 
+def _amounts_within(rng, target: Decimal, ceiling: Decimal) -> list[Decimal]:
+    """Round amounts reaching `target` without their total passing `ceiling`. If it stops
+    short of `target`, no amount fitted, so the total is within the smallest one of `ceiling`."""
+    amounts: list[Decimal] = []
+    total = Decimal("0")
+    while total < target:
+        fitting = [a for a in ROUND_AMOUNTS if total + a <= ceiling]
+        if not fitting:
+            break
+        amount = Decimal(rng.choice(fitting))
+        amounts.append(amount)
+        total += amount
+    return amounts
+
+
 def _random_date(rng, start: date, end: date) -> date:
     span = (end - start).days
     return start if span <= 0 else start + timedelta(days=rng.randint(0, span))
@@ -330,10 +345,11 @@ def _past_quarter_deals(
 ) -> list[Opportunity]:
     start, end = _quarter_bounds(year, q)
     target = rep.quarterly_quota * _pct(rng, 0.80, 1.15)
+    ceiling = rep.quarterly_quota * Decimal("1.15")
 
     deals = [
         _deal(rng, rep, accounts, "closed_won", amount, _random_date(rng, start, end))
-        for amount in _amounts_to_target(rng, target)
+        for amount in _amounts_within(rng, target, ceiling)
     ]
     for _ in range(rng.randint(1, 3)):
         amount = Decimal(rng.choice(ROUND_AMOUNTS))
