@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { getJson } from "../api";
+import LoadError from "../components/LoadError.vue";
+import LoadingBar from "../components/LoadingBar.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { OPEN_STAGES, stageTitle } from "../constants";
 import { money, moneyFull, shortDate } from "../format";
@@ -101,27 +103,26 @@ function stageColor(stage) {
       ← Accounts
     </v-btn>
 
-    <v-progress-linear v-if="loading" indeterminate color="secondary" class="mb-4" />
+    <!-- The header stays up while loading or after a failure; it names the account once loaded. -->
+    <PageHeader :title="account?.name ?? 'Account'" :subtitle="subtitle">
+      <v-btn
+        v-if="account?.website"
+        :href="account.website"
+        target="_blank"
+        rel="noopener"
+        variant="outlined"
+        color="secondary"
+        data-test="website"
+      >
+        Website ↗
+      </v-btn>
+    </PageHeader>
 
-    <v-alert v-if="loadError" type="error" variant="tonal" data-test="load-error">
-      {{ loadError }}
-    </v-alert>
+    <LoadingBar :active="loading" />
+
+    <LoadError title="Couldn't load this account" :message="loadError" />
 
     <template v-if="account">
-      <PageHeader :title="account.name" :subtitle="subtitle">
-        <v-btn
-          v-if="account.website"
-          :href="account.website"
-          target="_blank"
-          rel="noopener"
-          variant="outlined"
-          color="secondary"
-          data-test="website"
-        >
-          Website ↗
-        </v-btn>
-      </PageHeader>
-
       <v-row class="mb-2">
         <v-col v-for="tile in tiles" :key="tile.key" cols="12" sm="6" md="3">
           <v-card :data-test="`tile-${tile.key}`" class="h-100">

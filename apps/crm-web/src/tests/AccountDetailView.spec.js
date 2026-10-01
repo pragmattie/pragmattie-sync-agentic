@@ -214,8 +214,33 @@ describe("AccountDetailView", () => {
 
     expect(getJson).toHaveBeenCalledWith("/api/v1/accounts/999");
     const alert = wrapper.find('[data-test="load-error"]');
+    expect(alert.text()).toContain("Couldn't load this account");
     expect(alert.text()).toContain("Account 999 not found");
     expect(alert.classes()).toContain("text-error");
-    expect(wrapper.find("h1").exists()).toBe(false);
+    expect(wrapper.find("h1").text()).toBe("Account");
+    expect(wrapper.find('[data-test="back"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="tile-open-pipeline"]').exists()).toBe(false);
+  });
+
+  it("shows the header, a progress bar and no numbers while the account loads", async () => {
+    let resolve;
+    getJson.mockReturnValue(new Promise((done) => (resolve = done)));
+    await mountView();
+
+    expect(wrapper.find("h1").text()).toBe("Account");
+    expect(wrapper.find('[data-test="loading-bar"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="tile-open-pipeline"]').exists()).toBe(false);
+
+    resolve(accountDetail());
+    await flushPromises();
+    expect(wrapper.find('[data-test="loading-bar"]').exists()).toBe(false);
+    expect(wrapper.find("h1").text()).toBe("Northwind Example");
+  });
+
+  it("says when there are no opportunities", async () => {
+    getJson.mockResolvedValue(accountDetail({ opportunities: [] }));
+    await mountView();
+
+    expect(wrapper.find('[data-test="opportunities"]').text()).toContain("No opportunities yet");
   });
 });
