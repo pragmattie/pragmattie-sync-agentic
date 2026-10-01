@@ -296,6 +296,9 @@ jobs:
           # Commits are the builder app's, not the action's default claude[bot].
           bot_name: ${{ steps.prompt.outputs.bot_name }}
           bot_id: ${{ steps.prompt.outputs.bot_id }}
+          # An auto-merge (by the builder app, a bot) starts the next item. Who may start a run is
+          # already decided above: write access, or a merge that passed main's required checks.
+          allowed_bots: "*"
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: >-
             --model ${{ steps.route.outputs.model }}
