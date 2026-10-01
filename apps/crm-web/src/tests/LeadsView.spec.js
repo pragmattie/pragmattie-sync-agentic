@@ -241,6 +241,20 @@ describe("LeadsView", () => {
     expect(marks).toEqual(["Mark new", "Mark working", "Mark qualified"]);
   });
 
+  it("opens the conversion dialog for the lead", async () => {
+    leads = [lead({ status: "qualified" })];
+    await mountView();
+    await openActions();
+
+    body('[data-test="convert"]').click();
+    await flushPromises();
+
+    const dialog = wrapper.findComponent({ name: "ConvertLeadDialog" });
+    expect(dialog.props("modelValue")).toBe(true);
+    expect(body('[data-test="convert-dialog"]').textContent).toContain("Convert Alex Abbott");
+    expect(sendJson).not.toHaveBeenCalled();
+  });
+
   it("marks a status, confirms and reloads", async () => {
     sendJson.mockResolvedValue(lead({ status: "qualified" }));
     await mountView();
