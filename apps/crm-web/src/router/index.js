@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import HomeView from "../views/HomeView.vue";
+import LeadsView from "../views/LeadsView.vue";
 import PlaceholderView from "../views/PlaceholderView.vue";
 
 export const navItems = [
@@ -14,12 +15,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", name: "home", component: HomeView },
-    {
-      path: "/leads",
-      name: "leads",
-      component: PlaceholderView,
-      props: { title: "Leads" },
-    },
+    { path: "/leads", name: "leads", component: LeadsView },
     {
       path: "/accounts",
       name: "accounts",
