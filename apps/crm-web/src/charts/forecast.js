@@ -15,7 +15,7 @@ function gap(high, low) {
 
 // Each month's won, negotiation (commit − won) and proposal (best case − commit).
 export function monthStacks(forecast) {
-  const months = forecast.by_month;
+  const months = forecast.by_month ?? [];
   return {
     labels: months.map((month) => monthLabel(month.month)),
     won: months.map((month) => Math.max(0, num(month.won))),
@@ -26,7 +26,7 @@ export function monthStacks(forecast) {
 
 // The four open stages, in pipeline order, labelled "<Stage> (<count>)".
 export function stageBars(forecast) {
-  const byStage = new Map(forecast.by_stage.map((row) => [row.stage, row]));
+  const byStage = new Map((forecast.by_stage ?? []).map((row) => [row.stage, row]));
   return {
     labels: OPEN_STAGES.map(
       (stage) => `${stageTitle(stage)} (${byStage.get(stage)?.count ?? 0})`,
