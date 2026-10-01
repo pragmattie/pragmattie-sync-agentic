@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NETWORK_ERROR_MESSAGE } from "../api";
 import { useRepsStore } from "../stores/reps";
 
 const reps = [
@@ -40,8 +41,8 @@ describe("reps store", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     const store = useRepsStore();
 
-    await expect(store.load()).rejects.toThrow("Failed to fetch");
-    expect(store.error).toBe("Failed to fetch");
+    await expect(store.load()).rejects.toThrow(NETWORK_ERROR_MESSAGE);
+    expect(store.error).toBe(NETWORK_ERROR_MESSAGE);
     expect(store.loaded).toBe(false);
   });
 });

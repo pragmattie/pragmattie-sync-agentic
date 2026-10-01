@@ -42,7 +42,7 @@ export function quotaMeter(forecast) {
   const negotiation = gap(forecast.commit, forecast.won);
   const proposal = gap(forecast.best_case, forecast.commit);
   const quota = Math.max(0, num(forecast.quota));
-  const scale = Math.max(won + negotiation + proposal, quota) * 1.05;
+  const scale = Math.max(num(forecast.best_case), quota) * 1.05;
   const pct = (value) => (scale > 0 ? (value / scale) * 100 : 0);
   return {
     won: pct(won),

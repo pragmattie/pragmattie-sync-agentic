@@ -27,8 +27,20 @@ function detailMessage(detail) {
   return null;
 }
 
+export const NETWORK_ERROR_MESSAGE =
+  "Can't reach the PragMattie Sync server. Check your connection and try again.";
+
 async function request(path, url, options) {
-  const response = await fetch(url, options);
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch {
+    // No response at all: the browser's own message ("Failed to fetch") means
+    // little to a user, so say what happened instead.
+    const error = new Error(NETWORK_ERROR_MESSAGE);
+    error.network = true;
+    throw error;
+  }
   let body = null;
   let isJson = false;
   try {
