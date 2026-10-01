@@ -82,6 +82,31 @@ class TestBuildForecast:
         # weighted = won + (20000*.75 + 30000*.50 + 15000*.25 + 8000*.10)
         assert forecast["weighted"] == Decimal("10000.00") + Decimal("34550.00")
 
+    def test_weighted_is_rounded_half_up_to_two_places(self):
+        reps = [Rep(id=1, name="Zoe Park", quarterly_quota=Decimal("100000.00"))]
+        # 0.10 * 25% = 0.025 and 1001.01 * 10% = 100.101: together 100.126, so 100.13.
+        deals = [
+            Deal(Decimal("0.10"), "qualification", 25, date(2026, 7, 10), owner_id=1),
+            Deal(Decimal("1001.01"), "prospecting", 10, date(2026, 7, 20), owner_id=1),
+            Deal(Decimal("500.00"), "closed_won", 100, date(2026, 7, 25), owner_id=1),
+        ]
+
+        forecast = build_forecast(reps, deals, QUARTER_START, QUARTER_END)
+
+        assert forecast["weighted"] == Decimal("600.13")
+        assert forecast["by_month"][0]["weighted"] == Decimal("600.13")
+        assert forecast["by_rep"][0]["weighted"] == Decimal("600.13")
+
+    def test_closed_lost_deals_count_in_no_category(self):
+        reps = [Rep(id=1, name="Zoe Park", quarterly_quota=Decimal("100000.00"))]
+        # A probability left on a lost deal (PATCH can set one) still doesn't weight it.
+        deals = [Deal(Decimal("9000.00"), "closed_lost", 30, date(2026, 8, 1), owner_id=1)]
+
+        forecast = build_forecast(reps, deals, QUARTER_START, QUARTER_END)
+
+        for category in ("won", "commit", "best_case", "pipeline", "weighted"):
+            assert forecast[category] == Decimal("0.00"), category
+
     def test_deals_outside_the_quarter_do_not_count(self):
         reps = [Rep(id=1, name="Zoe Park", quarterly_quota=Decimal("0.00"))]
         deals = [
