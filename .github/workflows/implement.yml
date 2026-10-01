@@ -78,11 +78,15 @@ jobs:
           ACTOR: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
-          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
-          case "$perm" in
-            admin|maintain|write) ;;
-            *) echo "action=none" >> "$GITHUB_OUTPUT"; echo "$ACTOR has $perm access: ignored."; exit 0 ;;
-          esac
+          # A merge needs no permission check: it already passed every required check on main
+          # (CI, risk-gate, a person's approval above T0), and auto-merge merges as the builder app.
+          if [ "$EVENT" != "pull_request" ]; then
+            perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+            case "$perm" in
+              admin|maintain|write) ;;
+              *) echo "action=none" >> "$GITHUB_OUTPUT"; echo "$ACTOR has $perm access: ignored."; exit 0 ;;
+            esac
+          fi
 
           pr=""; issue=""
           if [ "$EVENT" = "pull_request" ]; then
@@ -110,7 +114,7 @@ jobs:
             esac
             # Labelled with the workflow's own token, which starts no second run: this run does the work.
             gh issue edit "$issue" -R "$REPO" --add-label agent-ready
-            gh issue comment "$issue" -R "$REPO" --body "Started automatically: @$ACTOR merged #$merged_pr (item $item), and this is the next item in the milestone with an approved spec."
+            gh issue comment "$issue" -R "$REPO" --body "Started automatically: #$merged_pr (item $item) was merged, and this is the next item in the milestone with an approved spec."
             EVENT=issues  # from here on, exactly as if a person had added the label
           elif [ "$EVENT" = "pull_request_review" ]; then
             branch=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
