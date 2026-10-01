@@ -29,7 +29,7 @@ permissions:
   pull-requests: write
 
 env:
-  DAILY_CAP_USD: "10"
+  DAILY_CAP_USD: "20"  # the same cap as implement.yml
   RUN_MARKER: pragmattie-run
   REVIEW_MARKER: pragmattie-review
   # The verdict the reviewer must return (both attempts use it).

@@ -43,7 +43,7 @@ permissions:
   pull-requests: write  # only to say on a pull request that its revision has finished
 
 env:
-  DAILY_CAP_USD: "10"
+  DAILY_CAP_USD: "20"  # raised from 10 by Geoff on 2026-10-01, for M2 on Opus
   RUN_MARKER: pragmattie-run
   REVIEW_MARKER: pragmattie-review  # the reviewer agent's records (review.yml) count toward the cap
   STEPUP_ISSUE: "1"  # the "re-evaluate automatic Opus step-up" reminder
@@ -425,6 +425,12 @@ jobs:
           cost=$(printf '%.2f' "$(echo "$record" | jq -r '.cost_usd')"); turns=$(echo "$record" | jq -r '.turns')
           reason=""
           [ -n "$why" ] && reason=$(printf '\n\n**Why it stopped:** %s' "$why")
+          # A build that "succeeds" without a pull request chose not to change anything (a
+          # dependency not merged yet, say): say so, with the agent's own reason.
+          if [ "$ACTION" = "build" ] && [ "$OUTCOME" = "success" ] && [ -z "$PR" ]; then
+            said=$(echo "$res" | jq -r '.summary // ""' 2>/dev/null | tr '\n\r' '  ' | sed 's/<!--//g' | cut -c1-600)
+            reason=$(printf '\n\n**No pull request: the agent made no changes.** It said: %s' "${said:-nothing}")
+          fi
           # shellcheck disable=SC2016  # literal $ and backticks in Markdown
           printf 'Agent run (%s, `%s`, %s): %s turns, $%s. [Run log](%s/%s/actions/runs/%s)%s\n\n<!-- %s %s -->\n' \
             "$ACTION" "$MODEL" "$OUTCOME" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" "$reason" "$RUN_MARKER" "$record" \
