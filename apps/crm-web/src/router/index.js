@@ -3,6 +3,7 @@ import AccountDetailView from "../views/AccountDetailView.vue";
 import AccountsView from "../views/AccountsView.vue";
 import HomeView from "../views/HomeView.vue";
 import LeadsView from "../views/LeadsView.vue";
+import PipelineView from "../views/PipelineView.vue";
 import PlaceholderView from "../views/PlaceholderView.vue";
 
 export const navItems = [
@@ -25,12 +26,7 @@ export const router = createRouter({
       component: AccountDetailView,
       props: true,
     },
-    {
-      path: "/pipeline",
-      name: "pipeline",
-      component: PlaceholderView,
-      props: { title: "Pipeline" },
-    },
+    { path: "/pipeline", name: "pipeline", component: PipelineView },
     {
       path: "/forecast",
       name: "forecast",
