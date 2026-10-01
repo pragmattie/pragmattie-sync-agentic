@@ -62,17 +62,48 @@ describe("HomeView", () => {
       { text: "Open pipeline$12.5M", href: "/pipeline" },
       { text: "Won in 2026-Q4$1.2M", href: "/forecast" },
     ]);
-    expect(wrapper.find("[data-test='summary-error']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
   });
 
-  it("shows a warning and no tiles when the summary fails to load", async () => {
+  it("shows a progress bar and no tiles while the summary loads", async () => {
+    let resolve;
+    getJson.mockReturnValue(new Promise((done) => (resolve = done)));
+    const wrapper = await mountHome();
+
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(true);
+    expect(wrapper.findAll("[data-test^='tile-']")).toHaveLength(0);
+
+    resolve(summary);
+    await flushPromises();
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(false);
+    expect(wrapper.findAll("[data-test^='tile-']")).toHaveLength(4);
+  });
+
+  it("shows zeros, not a blank area, when there is nothing yet", async () => {
+    getJson.mockResolvedValue({
+      ...summary,
+      open_leads: 0,
+      open_deals: 0,
+      open_pipeline: "0.00",
+      won_this_quarter: "0.00",
+    });
+    const wrapper = await mountHome();
+
+    const values = wrapper.findAll("[data-test^='tile-'] .text-h4").map((value) => value.text());
+    expect(values).toEqual(["0", "0", "$0", "$0"]);
+  });
+
+  it("shows an error alert, still under the heading, when the summary fails to load", async () => {
     getJson.mockRejectedValue(new Error("Service unavailable"));
     const wrapper = await mountHome();
 
-    expect(wrapper.find("[data-test='summary-error']").text()).toContain(
-      "Couldn't load the sales summary: Service unavailable",
-    );
+    const alert = wrapper.find("[data-test='load-error']");
+    expect(alert.classes()).toContain("text-error");
+    expect(alert.text()).toContain("Couldn't load the sales summary");
+    expect(alert.text()).toContain("Service unavailable");
+    expect(wrapper.find("h1").text()).toBe("Welcome to PragMattie Sync");
     expect(wrapper.findAll("[data-test^='tile-']")).toHaveLength(0);
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(false);
   });
 
   it("never mentions development information", async () => {

@@ -1,12 +1,15 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { getJson } from "../api";
+import LoadError from "../components/LoadError.vue";
+import LoadingBar from "../components/LoadingBar.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { money } from "../format";
 
 const count = new Intl.NumberFormat("en-US");
 
 const summary = ref(null);
+const loading = ref(false);
 const error = ref("");
 
 const tiles = computed(() => {
@@ -45,10 +48,13 @@ const tiles = computed(() => {
 });
 
 onMounted(async () => {
+  loading.value = true;
   try {
     summary.value = await getJson("/api/v1/summary");
   } catch (e) {
     error.value = e.message;
+  } finally {
+    loading.value = false;
   }
 });
 </script>
@@ -60,11 +66,11 @@ onMounted(async () => {
       subtitle="A CRM for mid-market B2B sales teams."
     />
 
-    <v-alert v-if="error" type="warning" variant="tonal" data-test="summary-error">
-      Couldn't load the sales summary: {{ error }}
-    </v-alert>
+    <LoadingBar :active="loading" />
 
-    <v-row v-else>
+    <LoadError title="Couldn't load the sales summary" :message="error" />
+
+    <v-row v-if="summary">
       <v-col v-for="tile in tiles" :key="tile.key" cols="12" sm="6" md="3">
         <v-card :to="tile.to" :data-test="`tile-${tile.key}`" class="h-100">
           <v-card-text class="d-flex align-center ga-4">
