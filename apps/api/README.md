@@ -8,6 +8,18 @@ Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it
 Migrations live in `migrations/` (Alembic, reading `DATABASE_URL`); this history ignores the
 orchestrator's `sdlc_*` tables. See "Database migrations" in the root `README.md`.
 
+## Seed data
+
+`python -m app.seed` fills the database with invented demo data (six reps, 60 accounts, their
+contacts and opportunities, and 220 leads), using a fixed random seed and dates relative to today
+so the forecast always looks current. Every email and website lives on the reserved `.example`
+domain.
+
+- **Default:** adds the data; refuses if the database already has any reps.
+- **`--if-empty`:** adds the data only if there are no reps yet, otherwise skips.
+- **`--reset`:** deletes all CRM rows, then adds fresh data. On MySQL this also restarts each
+  table's ids at 1, so links like `/accounts/1` stay stable between demos.
+
 ## API conventions
 
 - **Lists** return `{"items": [...], "total": n}` and take `limit` (1–200, default 25; opportunities
