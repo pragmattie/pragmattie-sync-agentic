@@ -8,6 +8,12 @@ Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it
 Migrations live in `migrations/` (Alembic, reading `DATABASE_URL`); this history ignores the
 orchestrator's `sdlc_*` tables. See "Database migrations" in the root `README.md`.
 
+## Tests
+
+`pytest` runs the whole suite on a throwaway SQLite database, with no MySQL or network needed.
+`pytest --cov=app` adds a line-coverage report. `tests/test_end_to_end.py` walks one deal from a
+rep's lead to a won deal through the API and checks it on the account, `/summary` and `/forecast`.
+
 ## Seed data
 
 `python -m app.seed` fills the database with invented demo data (six reps, 60 accounts, their
