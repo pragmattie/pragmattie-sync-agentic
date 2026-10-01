@@ -196,6 +196,73 @@ describe("LeadsView", () => {
     expect(lastParams()).toMatchObject({ limit: 50, offset: 100 });
   });
 
+  it("offers 10, 25, 50 or 100 rows and sorts only the sortable columns", async () => {
+    await mountView();
+    const table = wrapper.findComponent(VDataTableServer);
+
+    expect(table.props("itemsPerPageOptions")).toEqual([10, 25, 50, 100]);
+    const sortable = table
+      .props("headers")
+      .filter((header) => header.sortable)
+      .map((header) => header.key);
+    expect(sortable).toEqual(["last_name", "company", "status", "score", "created_at"]);
+  });
+
+  it("sorts by company, status and created date", async () => {
+    await mountView();
+    const table = wrapper.findComponent(VDataTableServer);
+
+    for (const key of ["company", "status", "created_at"]) {
+      table.vm.$emit("update:sortBy", [{ key, order: "asc" }]);
+      await flushPromises();
+      expect(lastParams().sort).toBe(key);
+    }
+  });
+
+  it("shows the status as a coloured chip with its icon, and the score as a bar", async () => {
+    leads = [lead({ status: "qualified", score: 72 })];
+    await mountView();
+
+    const chip = wrapper.find("tbody .v-chip");
+    expect(chip.text()).toBe("Qualified");
+    expect(chip.classes()).toContain("text-success");
+    expect(chip.find(".mdi-check-circle-outline").exists()).toBe(true);
+    const bar = wrapper.find("tbody").findComponent({ name: "VProgressLinear" });
+    expect(bar.props("modelValue")).toBe(72);
+    expect(wrapper.find("tbody").text()).toContain("72");
+  });
+
+  it("goes back to page 1 when the search, source or owner changes", async () => {
+    total = 500;
+    await mountView();
+    const table = wrapper.findComponent(VDataTableServer);
+    const [sourceSelect, ownerSelect] = wrapper.findAllComponents({ name: "VSelect" });
+
+    async function toPage3() {
+      table.vm.$emit("update:page", 3);
+      await flushPromises();
+      expect(lastParams().offset).toBe(50);
+    }
+
+    await toPage3();
+    vi.useFakeTimers();
+    await wrapper.find('[data-test="search"] input').setValue("abb");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    vi.useRealTimers();
+    expect(lastParams()).toMatchObject({ q: "abb", offset: 0 });
+
+    await toPage3();
+    sourceSelect.vm.$emit("update:modelValue", "event");
+    await flushPromises();
+    expect(lastParams()).toMatchObject({ source: "event", offset: 0 });
+
+    await toPage3();
+    ownerSelect.vm.$emit("update:modelValue", 1);
+    await flushPromises();
+    expect(lastParams()).toMatchObject({ owner_id: 1, offset: 0 });
+  });
+
   it("goes back to page 1 when a filter changes", async () => {
     total = 500;
     await mountView();
@@ -407,6 +474,49 @@ describe("New lead dialog", () => {
     expect(useSnackbarStore(pinia).text).toBe("Lead created for Contoso Example");
     expect(leadCalls()).toHaveLength(2);
     expect(wrapper.findComponent({ name: "NewLeadDialog" }).props("modelValue")).toBe(false);
+  });
+
+  it("offers sources, owners and a 0 to 100 score, and sends what was chosen", async () => {
+    sendJson.mockResolvedValue(lead({ id: 8, company: "Contoso Example" }));
+    await mountView();
+    await openDialog();
+
+    const dialog = wrapper.findComponent({ name: "NewLeadDialog" });
+    const [source, owner] = dialog.findAllComponents({ name: "VSelect" });
+    const slider = dialog.findComponent({ name: "VSlider" });
+    expect(source.props("modelValue")).toBe("web");
+    expect(source.props("items").map((item) => item.title)).toEqual([
+      "Web",
+      "Referral",
+      "Event",
+      "Outbound",
+      "Partner",
+    ]);
+    expect(owner.props("items")).toEqual([
+      { value: 1, title: "Avery Lee" },
+      { value: 2, title: "Jordan Park" },
+    ]);
+    expect(slider.props("modelValue")).toBe(50);
+    expect([slider.props("min"), slider.props("max")].map(Number)).toEqual([0, 100]);
+
+    await fillRequired();
+    type("title", "Head of Sales");
+    source.vm.$emit("update:modelValue", "referral");
+    owner.vm.$emit("update:modelValue", 2);
+    slider.vm.$emit("update:modelValue", 85);
+    await flushPromises();
+    await save();
+
+    expect(sendJson).toHaveBeenCalledWith("POST", "/api/v1/leads", {
+      first_name: "Sam",
+      last_name: "Lee",
+      email: "sam.lee@contoso.example",
+      company: "Contoso Example",
+      title: "Head of Sales",
+      source: "referral",
+      owner_id: 2,
+      score: 85,
+    });
   });
 
   it("keeps the dialog open and shows an API error", async () => {
