@@ -203,6 +203,17 @@ def test_get_account_includes_contacts_and_opportunities(client, make_account, m
     assert body["opportunities"] == []
 
 
+def test_get_account_lists_every_contact_unpaged(client, make_account, make_contact):
+    account = make_account()
+    for i in range(30):
+        make_contact(account["id"], email=f"contact{i}@northwind.example")
+
+    body = client.get(f"/api/v1/accounts/{account['id']}").json()
+
+    assert body["contact_count"] == 30
+    assert len(body["contacts"]) == 30
+
+
 def test_get_account_lists_its_opportunities_by_close_date(client, make_account, make_opportunity):
     account = make_account()
     other = make_account(name="Acme Logistics")

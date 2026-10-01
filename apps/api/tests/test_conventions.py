@@ -123,6 +123,21 @@ def test_reps_stays_a_plain_array(client, reps):
     assert [rep["name"] for rep in body] == ["Avery Cole", "Zoe Park"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/accounts/1",
+        "/api/v1/contacts",
+        "/api/v1/leads/1",
+        "/api/v1/opportunities/1",
+        "/api/v1/reps",
+    ],
+)
+def test_there_are_no_delete_endpoints(client, make_account, path):
+    make_account()
+    assert client.delete(path).status_code == 405
+
+
 # Errors
 
 
