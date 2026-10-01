@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { getJson, sendJson } from "../api";
 import { vuetify } from "../plugins/vuetify";
+import { useSnackbarStore } from "../stores/snackbar";
 import PipelineView from "../views/PipelineView.vue";
 
 vi.mock("../api", () => ({
@@ -37,6 +38,7 @@ function deal(overrides = {}) {
 
 let deals;
 let wrapper;
+let pinia;
 
 function dealCalls() {
   return getJson.mock.calls.filter(([path]) => path === "/api/v1/opportunities");
@@ -64,9 +66,10 @@ async function mountView() {
   });
   await router.push("/pipeline");
   await router.isReady();
+  pinia = createPinia();
   wrapper = mount(PipelineView, {
     attachTo: document.body,
-    global: { plugins: [createPinia(), router, vuetify] },
+    global: { plugins: [pinia, router, vuetify] },
   });
   await flushPromises();
   return wrapper;
@@ -274,7 +277,10 @@ describe("PipelineView", () => {
     expect(sendJson).toHaveBeenCalledWith("PATCH", "/api/v1/opportunities/9", {
       stage: "closed_won",
     });
-    expect(document.body.textContent).toContain("Northwind renewal moved to Closed won");
+    const snackbar = useSnackbarStore(pinia);
+    expect(snackbar.show).toBe(true);
+    expect(snackbar.text).toBe("Northwind renewal moved to Closed won");
+    expect(snackbar.color).toBe("primary");
     expect(dealCalls()).toHaveLength(2);
     expect(wrapper.findAll('[data-test="deal"]')).toHaveLength(0);
     expect(wrapper.find('[data-test="summary-count"]').text()).toBe("0");
@@ -289,17 +295,86 @@ describe("PipelineView", () => {
     body('[data-test="move-proposal"]').click();
     await flushPromises();
 
-    expect(document.body.textContent).toContain("Stage change not allowed");
+    const snackbar = useSnackbarStore(pinia);
+    expect(snackbar.text).toBe("Stage change not allowed");
+    expect(snackbar.color).toBe("error");
     expect(dealCalls()).toHaveLength(1);
   });
 
-  it("shows an API error", async () => {
+  it("shows a progress bar and no summary or board while deals load", async () => {
+    let resolve;
+    getJson.mockImplementation((path) => {
+      if (path === "/api/v1/reps") return Promise.resolve(reps);
+      return new Promise((done) => (resolve = done));
+    });
+    await mountView();
+
+    expect(wrapper.find('[data-test="loading-bar"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="summary"]').exists()).toBe(false);
+    expect(column("prospecting").exists()).toBe(false);
+
+    resolve({ items: deals, total: deals.length });
+    await flushPromises();
+    expect(wrapper.find('[data-test="loading-bar"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="summary-count"]').text()).toBe("1");
+  });
+
+  it("clears the last window's deals as soon as another window starts loading", async () => {
+    await mountView();
+    expect(wrapper.findAll('[data-test="deal"]')).toHaveLength(1);
+
+    getJson.mockImplementation(() => new Promise(() => {}));
+    selects()[0].vm.$emit("update:modelValue", "next");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="loading-bar"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="summary"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="deal"]')).toHaveLength(0);
+  });
+
+  it("says No deals in every column when there are none", async () => {
+    deals = [];
+    await mountView();
+
+    for (const stage of OPEN) {
+      expect(column(stage).find('[data-test="column-empty"]').text()).toBe("No deals");
+    }
+    expect(wrapper.find('[data-test="summary-count"]').text()).toBe("0");
+  });
+
+  it("shows an API error alert in place of the board, keeping the header and filters", async () => {
     getJson.mockImplementation((path) => {
       if (path === "/api/v1/reps") return Promise.resolve(reps);
       return Promise.reject(new Error("Service unavailable"));
     });
     await mountView();
 
-    expect(wrapper.find(".v-alert").text()).toContain("Service unavailable");
+    const alert = wrapper.find('[data-test="load-error"]');
+    expect(alert.classes()).toContain("text-error");
+    expect(alert.text()).toContain("Couldn't load the pipeline");
+    expect(alert.text()).toContain("Service unavailable");
+    expect(wrapper.find("h1").text()).toBe("Pipeline");
+    expect(wrapper.find('[data-test="window"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="owner"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="summary"]').exists()).toBe(false);
+    expect(column("prospecting").exists()).toBe(false);
+  });
+
+  it("loads again when a filter changes after a failure", async () => {
+    getJson.mockImplementation((path) => {
+      if (path === "/api/v1/reps") return Promise.resolve(reps);
+      return Promise.reject(new Error("Service unavailable"));
+    });
+    await mountView();
+
+    getJson.mockImplementation((path) => {
+      if (path === "/api/v1/reps") return Promise.resolve(reps);
+      return Promise.resolve({ items: deals, total: deals.length });
+    });
+    selects()[0].vm.$emit("update:modelValue", "all");
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="load-error"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="deal"]')).toHaveLength(1);
   });
 });
