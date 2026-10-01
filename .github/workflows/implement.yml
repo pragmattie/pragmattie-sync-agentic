@@ -9,6 +9,8 @@
 #   - a "Request changes" review on an agent pull request: the agent revises its own branch
 #   - a `/revise <what to change>` comment on an agent pull request: the same, and it works when the
 #     PR has a merge conflict, where GitHub runs no pull request workflows (so reviews start nothing)
+#   - every agent pull request is set to auto-merge, so it merges itself once the required checks
+#     pass: CI, and v1's `risk-gate` (T0: the AI reviewer's approval; T1+: a person's)
 #   - merging an agent pull request: the next open item in the same milestone starts by itself
 #     ("1.2" after "1.1"), as if it had been labelled `agent-ready`, provided its spec is approved (no
 #     `spec-draft` label: written on a spec until a person approves it, and never touched by the
@@ -347,6 +349,8 @@ jobs:
           if [ "$ACTION" = "revise" ] && [ "$OUTCOME" = "success" ] \
             && [ "$(gh pr view "$PR" -R "$REPO" --json isDraft --jq .isDraft)" = "true" ]; then
             gh pr ready "$PR" -R "$REPO"  # an unfinished draft is now finished
+            gh pr merge "$PR" -R "$REPO" --auto --merge \
+              || echo "Auto-merge not enabled (is 'Allow auto-merge' on in the repository?)"
           fi
           if [ "$ACTION" = "build" ] && [ "$OUTCOME" != "success" ]; then
             title=$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)
@@ -367,6 +371,11 @@ jobs:
             url=$(gh pr create -R "$REPO" --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
               --title "$title" --body-file pr-body.md --label "forecast:$TIER")
             echo "pr=${url##*/}" >> "$GITHUB_OUTPUT"
+            # Auto-merge: GitHub merges this once every required check passes. CI and v1's
+            # risk-gate decide that: a T0 change merges after the AI reviewer approves it, a T1+
+            # change once a person has approved (and, for T3, the rest of its sign-off).
+            gh pr merge "$url" -R "$REPO" --auto --merge \
+              || echo "Auto-merge not enabled (is 'Allow auto-merge' on in the repository?)"
             gh issue edit "$ISSUE" -R "$REPO" --remove-label plan-proposed --add-label plan-approved || true
           fi
 
