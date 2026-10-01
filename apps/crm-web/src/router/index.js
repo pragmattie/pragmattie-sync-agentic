@@ -1,4 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
+import AccountDetailView from "../views/AccountDetailView.vue";
+import AccountsView from "../views/AccountsView.vue";
 import HomeView from "../views/HomeView.vue";
 import LeadsView from "../views/LeadsView.vue";
 import PlaceholderView from "../views/PlaceholderView.vue";
@@ -16,11 +18,12 @@ export const router = createRouter({
   routes: [
     { path: "/", name: "home", component: HomeView },
     { path: "/leads", name: "leads", component: LeadsView },
+    { path: "/accounts", name: "accounts", component: AccountsView },
     {
-      path: "/accounts",
-      name: "accounts",
-      component: PlaceholderView,
-      props: { title: "Accounts" },
+      path: "/accounts/:id",
+      name: "account",
+      component: AccountDetailView,
+      props: true,
     },
     {
       path: "/pipeline",
