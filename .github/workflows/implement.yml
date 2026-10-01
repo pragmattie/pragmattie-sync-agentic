@@ -38,7 +38,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write  # only to say on a pull request that its revision has finished
 
 env:
   DAILY_CAP_USD: "10"
@@ -420,6 +420,19 @@ jobs:
           printf 'Agent run (%s, `%s`, %s): %s turns, $%s. [Run log](%s/%s/actions/runs/%s)%s\n\n<!-- %s %s -->\n' \
             "$ACTION" "$MODEL" "$OUTCOME" "$turns" "$cost" "$GITHUB_SERVER_URL" "$REPO" "$RUN_ID" "$reason" "$RUN_MARKER" "$record" \
             | gh issue comment "$ISSUE" -R "$REPO" --body-file -
+
+          # A revision also says on its pull request when it is finished, so the person deciding
+          # whether to merge doesn't have to look for the record on the issue.
+          if [ "$ACTION" = "revise" ] && [ -n "$PR" ]; then
+            if [ "$OUTCOME" = "success" ] && [ "$tests" != "false" ]; then
+              note="**Revision finished.** The agent's changes are pushed to this pull request ($turns turns, \$$cost). Merge once CI is green and you're happy with them."
+            elif [ "$OUTCOME" = "success" ]; then
+              note="**Revision finished, but the agent reports failing tests** ($turns turns, \$$cost). Check CI before merging, or comment \`/revise\` with what to fix."
+            else
+              note="**Revision stopped before it finished** ($OUTCOME${why:+: $why}). Anything it committed is on this branch. Comment \`/revise continue\` to carry on."
+            fi
+            gh pr comment "$PR" -R "$REPO" --body "$note [Run log]($GITHUB_SERVER_URL/$REPO/actions/runs/$RUN_ID)" || true
+          fi
 
           if [ "$OUTCOME" = "success" ] && [ "$tests" != "false" ]; then
             # A later run that works clears an earlier failure's flag.
