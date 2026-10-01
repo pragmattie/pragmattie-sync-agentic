@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { sendJson } from "../api";
 import { INDUSTRIES, REGIONS } from "../constants";
+import { useSnackbarStore } from "../stores/snackbar";
 
 const props = defineProps({
   modelValue: {
@@ -18,6 +19,7 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue"]);
 
 const router = useRouter();
+const snackbar = useSnackbarStore();
 
 const atLeastOne = (value) => (value !== "" && Number(value) >= 1) || "Must be at least 1";
 const required = (value) => (!!value && !!String(value).trim()) || "Required";
@@ -76,6 +78,7 @@ async function convert() {
   }
   try {
     const result = await sendJson("POST", `/api/v1/leads/${props.lead.id}/convert`, payload);
+    snackbar.confirm(`${props.lead.first_name} ${props.lead.last_name} converted to an account`);
     close();
     await router.push(`/accounts/${result.account_id}`);
   } catch (err) {

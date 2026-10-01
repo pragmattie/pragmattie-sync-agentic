@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getJson, sendJson } from "../api";
 import ConvertLeadDialog from "../components/ConvertLeadDialog.vue";
+import LoadError from "../components/LoadError.vue";
 import NewLeadDialog from "../components/NewLeadDialog.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { LEAD_SOURCES, LEAD_STATUSES, leadStatus } from "../constants";
 import { shortDate } from "../format";
 import { useRepsStore } from "../stores/reps";
+import { useSnackbarStore } from "../stores/snackbar";
 
 const SEARCH_DEBOUNCE_MS = 300;
 const DEFAULT_STATUSES = ["new", "working", "qualified"];
@@ -23,6 +25,7 @@ const headers = [
 ];
 
 const reps = useRepsStore();
+const snackbar = useSnackbarStore();
 
 const searchInput = ref("");
 const search = ref("");
@@ -42,7 +45,6 @@ const loadError = ref("");
 const newLeadOpen = ref(false);
 const convertOpen = ref(false);
 const convertingLead = ref(null);
-const snackbar = ref({ show: false, text: "", color: "success" });
 
 let searchTimer = null;
 watch(searchInput, (value) => {
@@ -74,11 +76,14 @@ const params = computed(() => ({
   offset: (page.value - 1) * itemsPerPage.value,
 }));
 
+// A new search, filter, sort or page clears the rows so the table shows its
+// loading state; a refresh after a change keeps them up while it reloads.
 let requestId = 0;
-async function load() {
+async function load({ keepRows = false } = {}) {
   const id = ++requestId;
   loading.value = true;
   loadError.value = "";
+  if (!keepRows) leads.value = [];
   try {
     const body = await getJson("/api/v1/leads", params.value);
     if (id !== requestId) return;
@@ -92,16 +97,12 @@ async function load() {
   }
 }
 
-watch(params, load, { deep: true });
+watch(params, () => load(), { deep: true });
 
 onMounted(() => {
   load();
   reps.load().catch(() => {});
 });
-
-function notify(text, color = "success") {
-  snackbar.value = { show: true, text, color };
-}
 
 function capitalise(value) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
@@ -116,11 +117,12 @@ function markOptions(lead) {
 async function markStatus(lead, status) {
   try {
     await sendJson("PATCH", `/api/v1/leads/${lead.id}`, { status: status.value });
-    notify(`${lead.first_name} ${lead.last_name} marked ${status.value}`);
-    await load();
   } catch (err) {
-    notify(err.message, "error");
+    snackbar.error(err.message);
+    return;
   }
+  snackbar.confirm(`${lead.first_name} ${lead.last_name} marked ${status.value}`);
+  await load({ keepRows: true });
 }
 
 function startConvert(lead) {
@@ -129,8 +131,8 @@ function startConvert(lead) {
 }
 
 function onCreated(lead) {
-  notify(`Lead created for ${lead.company}`);
-  load();
+  snackbar.confirm(`Lead created for ${lead.company}`);
+  load({ keepRows: true });
 }
 </script>
 
@@ -195,11 +197,10 @@ function onCreated(lead) {
         </v-chip-group>
       </v-card-text>
 
-      <v-alert v-if="loadError" type="error" variant="tonal" class="mx-4 mb-4">
-        {{ loadError }}
-      </v-alert>
+      <LoadError v-if="loadError" title="Couldn't load leads" :message="loadError" class="mx-4" />
 
       <v-data-table-server
+        v-else
         v-model:page="page"
         v-model:items-per-page="itemsPerPage"
         v-model:sort-by="sortBy"
@@ -208,6 +209,8 @@ function onCreated(lead) {
         :items-length="total"
         :items-per-page-options="[10, 25, 50, 100]"
         :loading="loading"
+        loading-text="Loading leads…"
+        no-data-text="No leads match these filters"
         item-value="id"
         must-sort
       >
@@ -290,9 +293,5 @@ function onCreated(lead) {
 
     <NewLeadDialog v-model="newLeadOpen" :owner-options="reps.options" @created="onCreated" />
     <ConvertLeadDialog v-model="convertOpen" :lead="convertingLead" />
-
-    <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="4000">
-      {{ snackbar.text }}
-    </v-snackbar>
   </v-container>
 </template>
