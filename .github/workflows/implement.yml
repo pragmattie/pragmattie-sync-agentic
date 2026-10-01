@@ -11,7 +11,9 @@
 #     PR has a merge conflict, where GitHub runs no pull request workflows (so reviews start nothing)
 #   - merging an agent pull request: the next open item in the same milestone starts by itself
 #     ("1.2" after "1.1"), as if it had been labelled `agent-ready`, provided its spec is approved (no
-#     `needs-info` label). It never crosses into the next milestone: that gate is a person's.
+#     `spec-draft` label: written on a spec until a person approves it, and never touched by the
+#     triage agent, whose `needs-info` means it has questions, not that the spec is unapproved). It
+#     never crosses into the next milestone: that gate is a person's.
 #
 # The model is Opus 5.5 for every run (Geoff, 2026-10-01: in M1, Opus finished builds in about half
 # the turns at similar or lower cost, while Sonnet 5 hit its turn limit on 1.8 and 1.9). A
@@ -101,7 +103,7 @@ jobs:
             fi
             issue=$(echo "$next" | cut -f2)
             case ",$(echo "$next" | cut -f3)," in
-              *,needs-info,*) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$issue is next, but its spec is not approved (needs-info)."; exit 0 ;;
+              *,spec-draft,*) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$issue is next, but its spec is not approved (spec-draft)."; exit 0 ;;
               *,agent-ready,*) echo "action=none" >> "$GITHUB_OUTPUT"; echo "#$issue is next, and was already started."; exit 0 ;;
             esac
             # Labelled with the workflow's own token, which starts no second run: this run does the work.
