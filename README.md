@@ -56,6 +56,13 @@ The whole stack starts with `docker compose up --build`. To bring up just the da
 `docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
 `docker compose ps` shows it as such.
 
+## CRM API
+
+The CRM API serves the CRM web app on <http://localhost:8000>, under `/api/v1`, and documents
+itself at `/docs` and `/redoc`. [`apps/api/README.md`](apps/api/README.md) covers running it, its
+tests, migrations and seed data, its conventions (paging, errors, money and dates), every endpoint,
+and how the forecast categories are defined.
+
 ## Database migrations
 
 The CRM API and the orchestrator share one MySQL database but keep separate Alembic histories,
