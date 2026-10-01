@@ -6,8 +6,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_session
-from app.lookups import get_or_404
-from app.models import Account, Contact, Lead, Opportunity, Rep
+from app.lookups import check_owner, get_or_404
+from app.models import Account, Contact, Lead, Opportunity
+from app.paging import DEFAULT_LIMIT, Limit, Offset
 from app.schemas import (
     LeadConvertRequest,
     LeadConvertResponse,
@@ -45,8 +46,8 @@ def list_leads(
     source: LeadSource | None = None,
     owner_id: int | None = None,
     sort: str = "-created_at",
-    limit: int = Query(25, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Offset = 0,
     session: Session = Depends(get_session),
 ) -> Page[LeadOut]:
     order_by = _order_by(sort)
@@ -82,8 +83,7 @@ def list_leads(
 
 @router.post("/leads", response_model=LeadOut, status_code=201)
 def create_lead(payload: LeadCreate, session: Session = Depends(get_session)) -> LeadOut:
-    if payload.owner_id is not None:
-        get_or_404(session, Rep, payload.owner_id)
+    check_owner(session, payload.owner_id)
     lead = Lead(**payload.model_dump())
     session.add(lead)
     session.commit()
@@ -104,8 +104,7 @@ def update_lead(
     if lead.status == "converted":
         raise HTTPException(status_code=409, detail="Converted leads cannot be edited")
     changes = payload.model_dump(exclude_unset=True)
-    if changes.get("owner_id") is not None:
-        get_or_404(session, Rep, changes["owner_id"])
+    check_owner(session, changes.get("owner_id"))
     for field, value in changes.items():
         setattr(lead, field, value)
     session.commit()
