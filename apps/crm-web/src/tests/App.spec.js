@@ -52,9 +52,9 @@ describe("App", () => {
   });
 
   it("shows a placeholder for sections that have not landed yet", async () => {
-    const wrapper = await mountApp("/leads");
+    const wrapper = await mountApp("/forecast");
 
-    expect(wrapper.text()).toContain("Leads");
+    expect(wrapper.text()).toContain("Forecast");
     expect(wrapper.text()).toContain("coming soon");
   });
 });
