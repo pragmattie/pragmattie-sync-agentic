@@ -13,8 +13,9 @@
 #     ("1.2" after "1.1"), as if it had been labelled `agent-ready`, provided its spec is approved (no
 #     `needs-info` label). It never crosses into the next milestone: that gate is a person's.
 #
-# The model is chosen by rule: a `model:opus` / `model:sonnet` label wins; then the PR's `tier:`
-# label (revisions); then the issue's `forecast:` label. T3 uses Opus 5.5, everything else Sonnet 5.
+# The model is Opus 5.5 for every run (Geoff, 2026-10-01: in M1, Opus finished builds in about half
+# the turns at similar or lower cost, while Sonnet 5 hit its turn limit on 1.8 and 1.9). A
+# `model:sonnet` label on the issue still chooses Sonnet 5 for that issue; `model:opus` is the default.
 # Turn limits scale with the tier, or with the story points when that is more (10 a point, at most
 # 100); a run that stops early keeps its commits on a draft PR. The agent only commits; this workflow pushes and opens the PR as
 # the app. Every run posts a record (model, turns, tokens, cost) on its issue, which v1 reads into
@@ -141,9 +142,7 @@ jobs:
             tier=${prtier:-$tier}
           fi
 
-          model=claude-sonnet-5
-          [ "$tier" = "T3" ] && model=claude-opus-5-5
-          echo "$labels" | grep -q ',model:opus,' && model=claude-opus-5-5
+          model=claude-opus-5-5
           echo "$labels" | grep -q ',model:sonnet,' && model=claude-sonnet-5
           case "$tier" in T0) turns=20 ;; T1) turns=40 ;; T2) turns=60 ;; *) turns=80 ;; esac
           # Tiers measure risk, not size: a big low-risk issue gets 10 turns a story point (at most 100).
