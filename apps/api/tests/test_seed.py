@@ -1,13 +1,16 @@
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import app.routers.forecast as forecast_router
+import app.seed as seed_module
 from app.db import Base
 from app.forecast import build_forecast, parse_quarter
 from app.models import Account, Contact, Lead, Opportunity, Rep
-from app.seed import SeedError, seed_database
+from app.seed import SeedError, main, seed_database
 
 TODAY = date(2026, 10, 1)
 
@@ -169,12 +172,13 @@ def test_seed_is_repeatable(sqlite_engine, tmp_path):
     assert first == second
 
 
-def test_seed_forecast_has_won_commit_and_pipeline_for_the_current_quarter(sqlite_engine):
-    seed_database(sqlite_engine, today=TODAY)
+@pytest.mark.parametrize("today", [TODAY, date(2026, 11, 14)])
+def test_seed_forecast_has_won_commit_and_pipeline_for_the_current_quarter(sqlite_engine, today):
+    seed_database(sqlite_engine, today=today)
 
     with Session(sqlite_engine) as session:
         reps = session.scalars(select(Rep)).all()
-        _label, start, end = parse_quarter(None, TODAY)
+        _label, start, end = parse_quarter(None, today)
         opportunities = session.scalars(
             select(Opportunity).where(
                 Opportunity.close_date >= start, Opportunity.close_date <= end
@@ -185,3 +189,60 @@ def test_seed_forecast_has_won_commit_and_pipeline_for_the_current_quarter(sqlit
     assert forecast["won"] > 0
     assert forecast["commit"] > 0
     assert forecast["pipeline"] > 0
+
+
+def test_seed_forecast_endpoint_shows_won_commit_and_pipeline(sqlite_engine, client, monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.combine(TODAY, datetime.min.time(), tzinfo=tz)
+
+    monkeypatch.setattr(forecast_router, "datetime", FixedDatetime)
+    seed_database(sqlite_engine, today=TODAY)
+
+    response = client.get("/api/v1/forecast")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["quarter"] == "2026-Q4"
+    assert Decimal(body["won"]) > 0
+    assert Decimal(body["commit"]) > 0
+    assert Decimal(body["pipeline"]) > 0
+
+
+@pytest.fixture
+def cli_engine(sqlite_engine, monkeypatch):
+    monkeypatch.setattr(seed_module, "get_engine", lambda: sqlite_engine)
+    return sqlite_engine
+
+
+def test_cli_default_seeds_then_refuses(cli_engine, capsys):
+    assert main([]) == 0
+    assert capsys.readouterr().out.startswith("Seeded 6 reps, 60 accounts")
+
+    assert main([]) == 1
+    assert "refusing to seed" in capsys.readouterr().err
+
+
+def test_cli_if_empty_seeds_then_skips(cli_engine, capsys):
+    assert main(["--if-empty"]) == 0
+    assert capsys.readouterr().out.startswith("Seeded 6 reps")
+
+    assert main(["--if-empty"]) == 0
+    assert "skipped" in capsys.readouterr().out
+    assert _counts(cli_engine)["reps"] == 6
+
+
+def test_cli_reset_replaces_existing_data(cli_engine, capsys):
+    main([])
+    before = _snapshot(cli_engine)
+    capsys.readouterr()
+
+    assert main(["--reset"]) == 0
+    assert capsys.readouterr().out.startswith("Seeded 6 reps")
+    assert _snapshot(cli_engine) == before
+
+
+def test_cli_rejects_if_empty_with_reset(cli_engine):
+    with pytest.raises(SystemExit):
+        main(["--if-empty", "--reset"])

@@ -1,9 +1,10 @@
 """Deterministic demo data for the CRM.
 
-Run from `apps/api` with `python -m app.seed` (add `--if-empty` or `--reset`; see
-module docstring in issue 1.9 for the full spec). Every name, email and website is
-invented and lives on the reserved `.example` domain. Generation uses a fixed random
-seed and dates relative to `today`, so the same day always produces the same data.
+Run from `apps/api` with `python -m app.seed`. By default it refuses if any reps
+exist; `--if-empty` skips instead, and `--reset` deletes all CRM rows first. Every
+name, email and website is invented and lives on the reserved `.example` domain.
+Generation uses a fixed random seed and dates relative to `today`, so the same day
+always produces the same data.
 """
 
 import argparse
@@ -24,6 +25,7 @@ from app.stages import OPEN_STAGES, STAGE_PROBABILITY
 
 _SEED = 20260131
 
+# fmt: off
 REP_REGIONS = ["East", "West", "Central", "EMEA", "EMEA", "APAC"]
 
 FIRST_NAMES = [
@@ -88,6 +90,8 @@ ROUND_AMOUNTS = [
     50000, 55000, 60000, 65000, 70000, 75000, 80000, 90000, 100000, 110000, 120000,
 ]
 DEAL_SUFFIXES = ["Expansion", "Renewal", "New Business", "Platform Upgrade", "Upsell"]
+
+# fmt: on
 
 RESET_TABLES = ("leads", "opportunities", "contacts", "accounts", "reps")
 
@@ -225,9 +229,7 @@ def _make_accounts(rng, reps: list[Rep], today: date) -> list[Account]:
         revenue_per_employee = rng.uniform(120_000, 280_000)
         annual_revenue = Decimal(round(employee_count * revenue_per_employee, -3))
         owner = rng.choice(reps)
-        created_at = datetime.combine(
-            today - timedelta(days=rng.randint(120, 730)), time(9, 0)
-        )
+        created_at = datetime.combine(today - timedelta(days=rng.randint(120, 730)), time(9, 0))
 
         accounts.append(
             Account(
@@ -458,9 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--if-empty", action="store_true", help="Seed only if the database has no reps yet."
     )
-    group.add_argument(
-        "--reset", action="store_true", help="Delete all CRM data, then seed fresh."
-    )
+    group.add_argument("--reset", action="store_true", help="Delete all CRM data, then seed fresh.")
     args = parser.parse_args(argv)
     mode = "reset" if args.reset else "if_empty" if args.if_empty else "default"
 
