@@ -157,7 +157,7 @@ jobs:
           points=$(echo "$labels" | tr ',' '\n' | sed -n 's/^points:\([0-9][0-9]*\)$/\1/p' | head -1)
           if [ -n "$points" ] && [ $((points * 10)) -gt "$turns" ]; then turns=$((points * 10)); fi
           [ "$turns" -gt 100 ] && turns=100
-          [ "$action" = "plan" ] && turns=15
+          [ "$action" = "plan" ] && turns=25  # 15 ran out on 2.7 once the CRM web app had grown
 
           if [ "$action" != "revise" ]; then
             title=$(gh api "repos/$REPO/issues/$issue" --jq .title)
@@ -296,6 +296,9 @@ jobs:
           # Commits are the builder app's, not the action's default claude[bot].
           bot_name: ${{ steps.prompt.outputs.bot_name }}
           bot_id: ${{ steps.prompt.outputs.bot_id }}
+          # An auto-merge (by the builder app, a bot) starts the next item. Who may start a run is
+          # already decided above: write access, or a merge that passed main's required checks.
+          allowed_bots: "*"
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: >-
             --model ${{ steps.route.outputs.model }}
