@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App.vue";
 import { vuetify } from "../plugins/vuetify";
 import { navItems, router } from "../router";
@@ -15,6 +15,13 @@ async function mountApp(path = "/") {
     },
   });
 }
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) }),
+  );
+});
 
 describe("App", () => {
   it("shows the app bar title", async () => {
@@ -41,7 +48,7 @@ describe("App", () => {
   it("renders the home page by default", async () => {
     const wrapper = await mountApp();
 
-    expect(wrapper.text()).toContain("Welcome to PragMattie Sync CRM");
+    expect(wrapper.text()).toContain("Welcome to PragMattie Sync");
   });
 
   it("shows a placeholder for sections that have not landed yet", async () => {
