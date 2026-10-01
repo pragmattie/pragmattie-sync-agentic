@@ -95,6 +95,16 @@ describe("AccountsView", () => {
     expect(wrapper.text()).toContain("EMEA");
     expect(wrapper.text()).toContain("12,500");
     expect(wrapper.text()).toContain("Avery Lee");
+    const cells = wrapper.findAll("tbody tr td").map((cell) => cell.text());
+    expect(cells).toEqual([
+      "Northwind Example",
+      "Manufacturing",
+      "EMEA",
+      "12,500",
+      "4",
+      "$1.2M",
+      "Avery Lee",
+    ]);
   });
 
   it("shows open pipeline compactly with the full amount on hover", async () => {
@@ -173,6 +183,29 @@ describe("AccountsView", () => {
     industrySelect.vm.$emit("update:modelValue", "Energy");
     await flushPromises();
     expect(lastParams()).toMatchObject({ industry: "Energy", offset: 0 });
+  });
+
+  it("goes back to page 1 when the search or owner changes", async () => {
+    total = 120;
+    await mountView();
+    const table = wrapper.findComponent(VDataTableServer);
+    const [, ownerSelect] = wrapper.findAllComponents({ name: "VSelect" });
+
+    table.vm.$emit("update:page", 3);
+    await flushPromises();
+    vi.useFakeTimers();
+    await wrapper.find('[data-test="search"] input').setValue("north");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    vi.useRealTimers();
+    expect(lastParams()).toMatchObject({ q: "north", offset: 0 });
+
+    table.vm.$emit("update:page", 2);
+    await flushPromises();
+    expect(lastParams().offset).toBe(25);
+    ownerSelect.vm.$emit("update:modelValue", 1);
+    await flushPromises();
+    expect(lastParams()).toMatchObject({ owner_id: 1, offset: 0 });
   });
 
   it("has no column sorting", async () => {

@@ -6,6 +6,7 @@ import { getJson, sendJson } from "../api";
 import { vuetify } from "../plugins/vuetify";
 import { useSnackbarStore } from "../stores/snackbar";
 import PipelineView from "../views/PipelineView.vue";
+import pipelineSource from "../views/PipelineView.vue?raw";
 
 vi.mock("../api", () => ({
   getJson: vi.fn(),
@@ -201,6 +202,17 @@ describe("PipelineView", () => {
       .map((el) => el.attributes("data-test"))
       .filter((name) => OPEN.some((stage) => name === `column-${stage}`));
     expect(order).toEqual(OPEN.map((stage) => `column-${stage}`));
+  });
+
+  it("scrolls the board sideways with columns at least 240px wide", async () => {
+    await mountView();
+
+    // jsdom applies no stylesheets, so check the classes and the rules they carry.
+    expect(wrapper.find(".board").exists()).toBe(true);
+    for (const stage of OPEN) expect(column(stage).classes()).toContain("column");
+    const style = pipelineSource.slice(pipelineSource.indexOf("<style"));
+    expect(style).toMatch(/\.board\s*\{[^}]*overflow-x:\s*auto/);
+    expect(style).toMatch(/\.column\s*\{[^}]*min-width:\s*240px/);
   });
 
   it("shows No deals in an empty column", async () => {
