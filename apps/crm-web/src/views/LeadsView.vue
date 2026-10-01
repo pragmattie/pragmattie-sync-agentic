@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getJson, sendJson } from "../api";
+import ConvertLeadDialog from "../components/ConvertLeadDialog.vue";
 import NewLeadDialog from "../components/NewLeadDialog.vue";
 import PageHeader from "../components/PageHeader.vue";
 import { LEAD_SOURCES, LEAD_STATUSES, leadStatus } from "../constants";
@@ -39,7 +40,7 @@ const loading = ref(false);
 const loadError = ref("");
 
 const newLeadOpen = ref(false);
-// The lead being converted; 2.4's conversion dialog opens from this.
+const convertOpen = ref(false);
 const convertingLead = ref(null);
 const snackbar = ref({ show: false, text: "", color: "success" });
 
@@ -120,6 +121,11 @@ async function markStatus(lead, status) {
   } catch (err) {
     notify(err.message, "error");
   }
+}
+
+function startConvert(lead) {
+  convertingLead.value = lead;
+  convertOpen.value = true;
 }
 
 function onCreated(lead) {
@@ -267,7 +273,7 @@ function onCreated(lead) {
                 v-if="item.status !== 'disqualified'"
                 title="Convert to account"
                 data-test="convert"
-                @click="convertingLead = item"
+                @click="startConvert(item)"
               />
               <v-list-item
                 v-for="status in markOptions(item)"
@@ -283,6 +289,7 @@ function onCreated(lead) {
     </v-card>
 
     <NewLeadDialog v-model="newLeadOpen" :owner-options="reps.options" @created="onCreated" />
+    <ConvertLeadDialog v-model="convertOpen" :lead="convertingLead" />
 
     <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="4000">
       {{ snackbar.text }}
