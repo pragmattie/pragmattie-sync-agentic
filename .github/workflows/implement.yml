@@ -247,6 +247,9 @@ jobs:
                 echo "Commit your work with Conventional Commits messages. Do not push."
                 echo "Commit after each step that works (at least every 10 turns or so): you have a turn"
                 echo "limit, and a run that stops keeps only what it has committed."
+                echo "Your structured 'summary' becomes the pull request's description, word for word, and"
+                echo "nothing else you write is kept. Anything the issue asks for in the PR description (a"
+                echo "table, a coverage figure) must be in the summary, as Markdown."
                 echo "Run the relevant tests before you finish and report honestly whether they pass."
                 plan=$(gh api "repos/$REPO/issues/$ISSUE/comments" \
                   --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Plan"))] | last | .body // ""')
