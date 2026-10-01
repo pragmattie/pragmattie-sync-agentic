@@ -1,9 +1,9 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App.vue";
 import { vuetify } from "../plugins/vuetify";
-import { navItems, router } from "../router";
+import { navItems, pageTitle, router } from "../router";
 
 async function mountApp(path = "/") {
   await router.push(path);
@@ -16,6 +16,8 @@ async function mountApp(path = "/") {
   });
 }
 
+enableAutoUnmount(afterEach);
+
 beforeEach(() => {
   vi.stubGlobal(
     "fetch",
@@ -24,10 +26,28 @@ beforeEach(() => {
 });
 
 describe("App", () => {
-  it("shows the app bar title", async () => {
+  it("shows the logo and CRM in the app bar", async () => {
     const wrapper = await mountApp();
 
-    expect(wrapper.text()).toContain("PragMattie Sync CRM");
+    const bar = wrapper.find("header");
+    expect(bar.find("svg[aria-label='PragMattie Sync']").exists()).toBe(true);
+    expect(bar.find("[data-test='app-bar-product']").text()).toBe("CRM");
+  });
+
+  it("shows the footer with the current year and an About link", async () => {
+    const wrapper = await mountApp("/about");
+
+    expect(wrapper.find("[data-test='copyright']").text()).toBe(
+      `© ${new Date().getFullYear()} PragMattie Sync`,
+    );
+    expect(wrapper.find("[data-test='about-link']").attributes("href")).toBe("/about");
+  });
+
+  it("renders the About page", async () => {
+    const wrapper = await mountApp("/about");
+
+    expect(wrapper.find("h1").text()).toBe("PragMattie Sync CRM");
+    expect(wrapper.find("[data-test='version']").exists()).toBe(true);
   });
 
   it("navigates to the product's sections only", async () => {
@@ -58,6 +78,30 @@ describe("App", () => {
     expect(wrapper.text()).toContain(
       "Where the quarter will land, based on deal stage and close date.",
     );
+  });
+});
+
+describe("App tab titles", () => {
+  it.each([
+    ["/", "Home · PragMattie Sync CRM"],
+    ["/leads", "Leads · PragMattie Sync CRM"],
+    ["/accounts", "Accounts · PragMattie Sync CRM"],
+    ["/accounts/1", "Account · PragMattie Sync CRM"],
+    ["/pipeline", "Pipeline · PragMattie Sync CRM"],
+    ["/forecast", "Forecast · PragMattie Sync CRM"],
+    ["/about", "About · PragMattie Sync CRM"],
+  ])("titles %s as %s", (path, title) => {
+    expect(pageTitle(router.resolve(path))).toBe(title);
+  });
+
+  it("sets the browser tab title on navigation", async () => {
+    await mountApp("/about");
+
+    expect(document.title).toBe("About · PragMattie Sync CRM");
+  });
+
+  it("falls back to the product name for a route without a page name", () => {
+    expect(pageTitle({ meta: {} })).toBe("PragMattie Sync CRM");
   });
 });
 
