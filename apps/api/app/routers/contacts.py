@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.lookups import get_or_404
 from app.models import Account, Contact
+from app.paging import DEFAULT_LIMIT, Limit, Offset
 from app.schemas import ContactCreate, ContactOut, Page
 
 router = APIRouter(prefix="/api/v1")
@@ -14,8 +15,8 @@ router = APIRouter(prefix="/api/v1")
 def list_contacts(
     account_id: int | None = None,
     q: str | None = None,
-    limit: int = Query(25, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Offset = 0,
     session: Session = Depends(get_session),
 ) -> Page[ContactOut]:
     filters = []

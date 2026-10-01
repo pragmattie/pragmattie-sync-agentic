@@ -1,14 +1,32 @@
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    model_validator,
+)
 
 from app.stages import Stage
 
 T = TypeVar("T")
 
 MAX_INT = 2_147_483_647
+
+# Money goes out as a JSON string with exactly two decimal places, e.g. "12500000.00".
+Money = Annotated[
+    Decimal,
+    PlainSerializer(
+        lambda value: str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        return_type=str,
+        when_used="json",
+    ),
+]
 
 AccountName = Annotated[str, Field(min_length=1, max_length=200)]
 Industry = Annotated[str, Field(min_length=1, max_length=80)]
@@ -42,7 +60,7 @@ class RepOut(BaseModel):
     name: str
     email: str
     region: str
-    quarterly_quota: Decimal
+    quarterly_quota: Money
 
 
 class OwnerOut(BaseModel):
@@ -84,13 +102,13 @@ class AccountOut(BaseModel):
     name: str
     industry: str
     employee_count: int
-    annual_revenue: Decimal
+    annual_revenue: Money
     region: str
     website: str | None
     owner_id: int | None
     owner: OwnerOut | None
     created_at: datetime
-    open_pipeline: Decimal
+    open_pipeline: Money
     contact_count: int
 
 
@@ -157,7 +175,7 @@ class OpportunityOut(BaseModel):
     account_id: int
     account: AccountRef
     name: str
-    amount: Decimal
+    amount: Money
     stage: Stage
     probability: int
     close_date: date
@@ -238,37 +256,37 @@ class LeadConvertResponse(BaseModel):
 
 class MonthForecast(BaseModel):
     month: str
-    won: Decimal
-    commit: Decimal
-    best_case: Decimal
-    weighted: Decimal
+    won: Money
+    commit: Money
+    best_case: Money
+    weighted: Money
 
 
 class RepForecast(BaseModel):
     rep: OwnerOut
-    quota: Decimal
-    won: Decimal
-    commit: Decimal
-    weighted: Decimal
+    quota: Money
+    won: Money
+    commit: Money
+    weighted: Money
     attainment_pct: float
 
 
 class StageForecast(BaseModel):
     stage: Stage
     count: int
-    amount: Decimal
+    amount: Money
 
 
 class ForecastOut(BaseModel):
     quarter: str
     start: date
     end: date
-    quota: Decimal
-    won: Decimal
-    commit: Decimal
-    best_case: Decimal
-    pipeline: Decimal
-    weighted: Decimal
+    quota: Money
+    won: Money
+    commit: Money
+    best_case: Money
+    pipeline: Money
+    weighted: Money
     by_month: list[MonthForecast]
     by_rep: list[RepForecast]
     by_stage: list[StageForecast]
@@ -278,6 +296,6 @@ class SummaryOut(BaseModel):
     quarter: str
     leads_by_status: dict[str, int]
     open_leads: int
-    open_pipeline: Decimal
+    open_pipeline: Money
     open_deals: int
-    won_this_quarter: Decimal
+    won_this_quarter: Money

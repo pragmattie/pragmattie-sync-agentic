@@ -6,8 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_session
-from app.lookups import get_or_404
-from app.models import Account, Opportunity, Rep
+from app.lookups import check_owner, get_or_404
+from app.models import Account, Opportunity
+from app.paging import DEFAULT_OPPORTUNITY_LIMIT, Offset, OpportunityLimit
 from app.schemas import OpportunityCreate, OpportunityOut, OpportunityUpdate, Page
 from app.stages import STAGE_PROBABILITY, Stage
 
@@ -22,8 +23,8 @@ def list_opportunities(
     close_from: date | None = None,
     close_to: date | None = None,
     q: str | None = None,
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    limit: OpportunityLimit = DEFAULT_OPPORTUNITY_LIMIT,
+    offset: Offset = 0,
     session: Session = Depends(get_session),
 ) -> Page[OpportunityOut]:
     filters = []
@@ -60,8 +61,7 @@ def create_opportunity(
     payload: OpportunityCreate, session: Session = Depends(get_session)
 ) -> OpportunityOut:
     get_or_404(session, Account, payload.account_id)
-    if payload.owner_id is not None:
-        get_or_404(session, Rep, payload.owner_id)
+    check_owner(session, payload.owner_id)
     values = payload.model_dump()
     if values["probability"] is None:
         values["probability"] = STAGE_PROBABILITY[payload.stage]
@@ -85,8 +85,7 @@ def update_opportunity(
     changes = payload.model_dump(exclude_unset=True)
     if "account_id" in changes:
         get_or_404(session, Account, changes["account_id"])
-    if changes.get("owner_id") is not None:
-        get_or_404(session, Rep, changes["owner_id"])
+    check_owner(session, changes.get("owner_id"))
     # A new stage brings its default probability, unless the request sets one itself.
     new_stage = changes.get("stage", opportunity.stage)
     if new_stage != opportunity.stage and "probability" not in changes:

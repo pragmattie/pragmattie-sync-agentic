@@ -1,12 +1,13 @@
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_session
-from app.lookups import get_or_404
-from app.models import Account, Contact, Opportunity, Rep
+from app.lookups import check_owner, get_or_404
+from app.models import Account, Contact, Opportunity
+from app.paging import DEFAULT_LIMIT, Limit, Offset
 from app.schemas import (
     AccountCreate,
     AccountDetail,
@@ -56,8 +57,8 @@ def list_accounts(
     q: str | None = None,
     industry: str | None = None,
     owner_id: int | None = None,
-    limit: int = Query(25, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Offset = 0,
     session: Session = Depends(get_session),
 ) -> Page[AccountOut]:
     filters = []
@@ -103,8 +104,7 @@ def list_accounts(
 
 @router.post("/accounts", response_model=AccountOut, status_code=201)
 def create_account(payload: AccountCreate, session: Session = Depends(get_session)) -> AccountOut:
-    if payload.owner_id is not None:
-        get_or_404(session, Rep, payload.owner_id)
+    check_owner(session, payload.owner_id)
     account = Account(**payload.model_dump())
     session.add(account)
     session.commit()
@@ -132,8 +132,7 @@ def update_account(
 ) -> AccountOut:
     account = get_or_404(session, Account, account_id)
     changes = payload.model_dump(exclude_unset=True)
-    if changes.get("owner_id") is not None:
-        get_or_404(session, Rep, changes["owner_id"])
+    check_owner(session, changes.get("owner_id"))
     for field, value in changes.items():
         setattr(account, field, value)
     session.commit()
