@@ -8,10 +8,12 @@ from app.forecast import parse_quarter
 from app.schemas import SummaryOut
 from app.summary import query_summary
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["summary"])
 
 
-@router.get("/summary", response_model=SummaryOut)
+@router.get(
+    "/summary", response_model=SummaryOut, summary="Get the dashboard's lead and pipeline totals"
+)
 def get_summary(session: Session = Depends(get_session)) -> SummaryOut:
     quarter_label, start, end = parse_quarter(None, datetime.now(UTC).date())
     return SummaryOut(quarter=quarter_label, **query_summary(session, start, end))

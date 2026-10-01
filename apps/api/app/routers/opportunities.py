@@ -12,17 +12,25 @@ from app.paging import DEFAULT_OPPORTUNITY_LIMIT, Offset, OpportunityLimit
 from app.schemas import OpportunityCreate, OpportunityOut, OpportunityUpdate, Page
 from app.stages import STAGE_PROBABILITY, Stage
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["opportunities"])
 
 
-@router.get("/opportunities", response_model=Page[OpportunityOut])
+@router.get(
+    "/opportunities", response_model=Page[OpportunityOut], summary="List and filter opportunities"
+)
 def list_opportunities(
-    stage: Annotated[list[Stage] | None, Query()] = None,
-    owner_id: int | None = None,
-    account_id: int | None = None,
-    close_from: date | None = None,
-    close_to: date | None = None,
-    q: str | None = None,
+    stage: Annotated[
+        list[Stage] | None, Query(description="Only deals in these stages (repeatable).")
+    ] = None,
+    owner_id: Annotated[int | None, Query(description="Only deals this rep owns.")] = None,
+    account_id: Annotated[int | None, Query(description="Only this account's deals.")] = None,
+    close_from: Annotated[
+        date | None, Query(description="Only deals closing on or after this date.")
+    ] = None,
+    close_to: Annotated[
+        date | None, Query(description="Only deals closing on or before this date.")
+    ] = None,
+    q: Annotated[str | None, Query(description="Text to find in the deal name.")] = None,
     limit: OpportunityLimit = DEFAULT_OPPORTUNITY_LIMIT,
     offset: Offset = 0,
     session: Session = Depends(get_session),
@@ -56,7 +64,12 @@ def list_opportunities(
     )
 
 
-@router.post("/opportunities", response_model=OpportunityOut, status_code=201)
+@router.post(
+    "/opportunities",
+    response_model=OpportunityOut,
+    status_code=201,
+    summary="Create an opportunity",
+)
 def create_opportunity(
     payload: OpportunityCreate, session: Session = Depends(get_session)
 ) -> OpportunityOut:
@@ -72,12 +85,18 @@ def create_opportunity(
     return OpportunityOut.model_validate(opportunity)
 
 
-@router.get("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+@router.get(
+    "/opportunities/{opportunity_id}", response_model=OpportunityOut, summary="Get an opportunity"
+)
 def get_opportunity(opportunity_id: int, session: Session = Depends(get_session)) -> OpportunityOut:
     return OpportunityOut.model_validate(get_or_404(session, Opportunity, opportunity_id))
 
 
-@router.patch("/opportunities/{opportunity_id}", response_model=OpportunityOut)
+@router.patch(
+    "/opportunities/{opportunity_id}",
+    response_model=OpportunityOut,
+    summary="Change some of an opportunity's fields, such as its stage",
+)
 def update_opportunity(
     opportunity_id: int, payload: OpportunityUpdate, session: Session = Depends(get_session)
 ) -> OpportunityOut:

@@ -1,6 +1,7 @@
 from decimal import Decimal
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -20,7 +21,7 @@ from app.schemas import (
 )
 from app.stages import OPEN_STAGES
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["accounts"])
 
 
 def _account_out(account: Account, contact_count: int, open_pipeline: Decimal) -> AccountOut:
@@ -52,11 +53,11 @@ def _open_pipeline(session: Session, account_id: int) -> Decimal:
     )
 
 
-@router.get("/accounts", response_model=Page[AccountOut])
+@router.get("/accounts", response_model=Page[AccountOut], summary="List and search accounts")
 def list_accounts(
-    q: str | None = None,
-    industry: str | None = None,
-    owner_id: int | None = None,
+    q: Annotated[str | None, Query(description="Text to find in the account name.")] = None,
+    industry: Annotated[str | None, Query(description="Only accounts in this industry.")] = None,
+    owner_id: Annotated[int | None, Query(description="Only accounts this rep owns.")] = None,
     limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
     session: Session = Depends(get_session),
@@ -102,7 +103,7 @@ def list_accounts(
     )
 
 
-@router.post("/accounts", response_model=AccountOut, status_code=201)
+@router.post("/accounts", response_model=AccountOut, status_code=201, summary="Create an account")
 def create_account(payload: AccountCreate, session: Session = Depends(get_session)) -> AccountOut:
     check_owner(session, payload.owner_id)
     account = Account(**payload.model_dump())
@@ -112,7 +113,11 @@ def create_account(payload: AccountCreate, session: Session = Depends(get_sessio
     return _account_out(account, 0, Decimal("0.00"))
 
 
-@router.get("/accounts/{account_id}", response_model=AccountDetail)
+@router.get(
+    "/accounts/{account_id}",
+    response_model=AccountDetail,
+    summary="Get an account with its contacts and opportunities",
+)
 def get_account(account_id: int, session: Session = Depends(get_session)) -> AccountDetail:
     account = get_or_404(session, Account, account_id)
     return AccountDetail(
@@ -126,7 +131,11 @@ def get_account(account_id: int, session: Session = Depends(get_session)) -> Acc
     )
 
 
-@router.patch("/accounts/{account_id}", response_model=AccountOut)
+@router.patch(
+    "/accounts/{account_id}",
+    response_model=AccountOut,
+    summary="Change some of an account's fields",
+)
 def update_account(
     account_id: int, payload: AccountUpdate, session: Session = Depends(get_session)
 ) -> AccountOut:

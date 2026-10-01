@@ -6,9 +6,9 @@ from app.db import get_session
 from app.models import Rep
 from app.schemas import RepOut
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["reps"])
 
 
-@router.get("/reps", response_model=list[RepOut])
+@router.get("/reps", response_model=list[RepOut], summary="List every sales rep")
 def list_reps(session: Session = Depends(get_session)) -> list[Rep]:
     return list(session.scalars(select(Rep).order_by(Rep.name, Rep.id)))
