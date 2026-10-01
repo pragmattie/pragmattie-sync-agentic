@@ -1,10 +1,10 @@
 import { createRouter, createWebHistory } from "vue-router";
 import AccountDetailView from "../views/AccountDetailView.vue";
 import AccountsView from "../views/AccountsView.vue";
+import ForecastView from "../views/ForecastView.vue";
 import HomeView from "../views/HomeView.vue";
 import LeadsView from "../views/LeadsView.vue";
 import PipelineView from "../views/PipelineView.vue";
-import PlaceholderView from "../views/PlaceholderView.vue";
 
 export const navItems = [
   { title: "Home", to: "/", name: "home" },
@@ -27,11 +27,6 @@ export const router = createRouter({
       props: true,
     },
     { path: "/pipeline", name: "pipeline", component: PipelineView },
-    {
-      path: "/forecast",
-      name: "forecast",
-      component: PlaceholderView,
-      props: { title: "Forecast" },
-    },
+    { path: "/forecast", name: "forecast", component: ForecastView },
   ],
 });

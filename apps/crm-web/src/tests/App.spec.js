@@ -51,10 +51,12 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Welcome to PragMattie Sync");
   });
 
-  it("shows a placeholder for sections that have not landed yet", async () => {
+  it("renders the forecast page", async () => {
     const wrapper = await mountApp("/forecast");
 
-    expect(wrapper.text()).toContain("Forecast");
-    expect(wrapper.text()).toContain("coming soon");
+    expect(wrapper.find("h1").text()).toBe("Forecast");
+    expect(wrapper.text()).toContain(
+      "Where the quarter will land, based on deal stage and close date.",
+    );
   });
 });
