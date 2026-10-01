@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -21,7 +21,7 @@ from app.schemas import (
 )
 from app.stages import STAGE_PROBABILITY
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["leads"])
 
 SORTS = {
     "company": Lead.company,
@@ -39,13 +39,23 @@ def _order_by(sort: str):
     return (column.desc() if sort.startswith("-") else column.asc()), Lead.id.desc()
 
 
-@router.get("/leads", response_model=Page[LeadOut])
+@router.get("/leads", response_model=Page[LeadOut], summary="List, search and sort leads")
 def list_leads(
-    q: str | None = None,
-    status: Annotated[list[LeadStatus] | None, Query()] = None,
-    source: LeadSource | None = None,
-    owner_id: int | None = None,
-    sort: str = "-created_at",
+    q: Annotated[
+        str | None, Query(description="Text to find in first name, last name, company or email.")
+    ] = None,
+    status: Annotated[
+        list[LeadStatus] | None, Query(description="Only leads in these statuses (repeatable).")
+    ] = None,
+    source: Annotated[LeadSource | None, Query(description="Only leads from this source.")] = None,
+    owner_id: Annotated[int | None, Query(description="Only leads this rep owns.")] = None,
+    sort: Annotated[
+        str,
+        Query(
+            description="company, created_at, last_name, score or status; a leading - "
+            "sorts descending."
+        ),
+    ] = "-created_at",
     limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
     session: Session = Depends(get_session),
@@ -81,7 +91,7 @@ def list_leads(
     return Page(items=[LeadOut.model_validate(lead) for lead in leads], total=total)
 
 
-@router.post("/leads", response_model=LeadOut, status_code=201)
+@router.post("/leads", response_model=LeadOut, status_code=201, summary="Create a lead")
 def create_lead(payload: LeadCreate, session: Session = Depends(get_session)) -> LeadOut:
     check_owner(session, payload.owner_id)
     lead = Lead(**payload.model_dump())
@@ -91,14 +101,23 @@ def create_lead(payload: LeadCreate, session: Session = Depends(get_session)) ->
     return LeadOut.model_validate(lead)
 
 
-@router.get("/leads/{lead_id}", response_model=LeadOut)
-def get_lead(lead_id: int, session: Session = Depends(get_session)) -> LeadOut:
+@router.get("/leads/{lead_id}", response_model=LeadOut, summary="Get a lead")
+def get_lead(
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    session: Session = Depends(get_session),
+) -> LeadOut:
     return LeadOut.model_validate(get_or_404(session, Lead, lead_id))
 
 
-@router.patch("/leads/{lead_id}", response_model=LeadOut)
+@router.patch(
+    "/leads/{lead_id}",
+    response_model=LeadOut,
+    summary="Change some of an unconverted lead's fields",
+)
 def update_lead(
-    lead_id: int, payload: LeadUpdate, session: Session = Depends(get_session)
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    payload: LeadUpdate,
+    session: Session = Depends(get_session),
 ) -> LeadOut:
     lead = get_or_404(session, Lead, lead_id)
     if lead.status == "converted":
@@ -112,9 +131,15 @@ def update_lead(
     return LeadOut.model_validate(lead)
 
 
-@router.post("/leads/{lead_id}/convert", response_model=LeadConvertResponse)
+@router.post(
+    "/leads/{lead_id}/convert",
+    response_model=LeadConvertResponse,
+    summary="Convert a lead into an account, a contact and optionally an opportunity",
+)
 def convert_lead(
-    lead_id: int, payload: LeadConvertRequest, session: Session = Depends(get_session)
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    payload: LeadConvertRequest,
+    session: Session = Depends(get_session),
 ) -> LeadConvertResponse:
     lead = get_or_404(session, Lead, lead_id)
     if lead.status == "converted":

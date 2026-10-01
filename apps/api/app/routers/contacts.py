@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -8,13 +10,15 @@ from app.models import Account, Contact
 from app.paging import DEFAULT_LIMIT, Limit, Offset
 from app.schemas import ContactCreate, ContactOut, Page
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["contacts"])
 
 
-@router.get("/contacts", response_model=Page[ContactOut])
+@router.get("/contacts", response_model=Page[ContactOut], summary="List and search contacts")
 def list_contacts(
-    account_id: int | None = None,
-    q: str | None = None,
+    account_id: Annotated[int | None, Query(description="Only this account's contacts.")] = None,
+    q: Annotated[
+        str | None, Query(description="Text to find in first name, last name or email.")
+    ] = None,
     limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
     session: Session = Depends(get_session),
@@ -44,7 +48,9 @@ def list_contacts(
     return Page(items=[ContactOut.model_validate(contact) for contact in contacts], total=total)
 
 
-@router.post("/contacts", response_model=ContactOut, status_code=201)
+@router.post(
+    "/contacts", response_model=ContactOut, status_code=201, summary="Add a contact to an account"
+)
 def create_contact(payload: ContactCreate, session: Session = Depends(get_session)) -> Contact:
     get_or_404(session, Account, payload.account_id)
     contact = Contact(**payload.model_dump())
