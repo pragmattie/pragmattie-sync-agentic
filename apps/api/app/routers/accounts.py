@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -118,7 +118,10 @@ def create_account(payload: AccountCreate, session: Session = Depends(get_sessio
     response_model=AccountDetail,
     summary="Get an account with its contacts and opportunities",
 )
-def get_account(account_id: int, session: Session = Depends(get_session)) -> AccountDetail:
+def get_account(
+    account_id: Annotated[int, Path(description="The account's id.")],
+    session: Session = Depends(get_session),
+) -> AccountDetail:
     account = get_or_404(session, Account, account_id)
     return AccountDetail(
         **_account_out(
@@ -137,7 +140,9 @@ def get_account(account_id: int, session: Session = Depends(get_session)) -> Acc
     summary="Change some of an account's fields",
 )
 def update_account(
-    account_id: int, payload: AccountUpdate, session: Session = Depends(get_session)
+    account_id: Annotated[int, Path(description="The account's id.")],
+    payload: AccountUpdate,
+    session: Session = Depends(get_session),
 ) -> AccountOut:
     account = get_or_404(session, Account, account_id)
     changes = payload.model_dump(exclude_unset=True)

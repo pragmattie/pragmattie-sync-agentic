@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -102,7 +102,10 @@ def create_lead(payload: LeadCreate, session: Session = Depends(get_session)) ->
 
 
 @router.get("/leads/{lead_id}", response_model=LeadOut, summary="Get a lead")
-def get_lead(lead_id: int, session: Session = Depends(get_session)) -> LeadOut:
+def get_lead(
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    session: Session = Depends(get_session),
+) -> LeadOut:
     return LeadOut.model_validate(get_or_404(session, Lead, lead_id))
 
 
@@ -112,7 +115,9 @@ def get_lead(lead_id: int, session: Session = Depends(get_session)) -> LeadOut:
     summary="Change some of an unconverted lead's fields",
 )
 def update_lead(
-    lead_id: int, payload: LeadUpdate, session: Session = Depends(get_session)
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    payload: LeadUpdate,
+    session: Session = Depends(get_session),
 ) -> LeadOut:
     lead = get_or_404(session, Lead, lead_id)
     if lead.status == "converted":
@@ -132,7 +137,9 @@ def update_lead(
     summary="Convert a lead into an account, a contact and optionally an opportunity",
 )
 def convert_lead(
-    lead_id: int, payload: LeadConvertRequest, session: Session = Depends(get_session)
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    payload: LeadConvertRequest,
+    session: Session = Depends(get_session),
 ) -> LeadConvertResponse:
     lead = get_or_404(session, Lead, lead_id)
     if lead.status == "converted":

@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -88,7 +88,10 @@ def create_opportunity(
 @router.get(
     "/opportunities/{opportunity_id}", response_model=OpportunityOut, summary="Get an opportunity"
 )
-def get_opportunity(opportunity_id: int, session: Session = Depends(get_session)) -> OpportunityOut:
+def get_opportunity(
+    opportunity_id: Annotated[int, Path(description="The opportunity's id.")],
+    session: Session = Depends(get_session),
+) -> OpportunityOut:
     return OpportunityOut.model_validate(get_or_404(session, Opportunity, opportunity_id))
 
 
@@ -98,7 +101,9 @@ def get_opportunity(opportunity_id: int, session: Session = Depends(get_session)
     summary="Change some of an opportunity's fields, such as its stage",
 )
 def update_opportunity(
-    opportunity_id: int, payload: OpportunityUpdate, session: Session = Depends(get_session)
+    opportunity_id: Annotated[int, Path(description="The opportunity's id.")],
+    payload: OpportunityUpdate,
+    session: Session = Depends(get_session),
 ) -> OpportunityOut:
     opportunity = get_or_404(session, Opportunity, opportunity_id)
     changes = payload.model_dump(exclude_unset=True)
