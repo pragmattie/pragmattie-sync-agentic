@@ -125,6 +125,8 @@ def _by_rep(reps: list[Any], deals: list[Any]) -> list[dict]:
     rows = []
     for rep in reps:
         rep_deals = deals_by_owner.get(rep.id, [])
+        if not rep_deals:
+            continue  # nothing to report for a rep without deals in the quarter
         won, commit, _best_case, weighted = _category_totals(rep_deals)
         rows.append(
             {
