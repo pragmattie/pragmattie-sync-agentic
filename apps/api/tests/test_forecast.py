@@ -152,7 +152,7 @@ class TestBuildForecast:
 
         assert forecast["by_rep"][0]["attainment_pct"] == 0.0
 
-    def test_reps_with_no_deals_are_still_listed(self):
+    def test_reps_with_no_deals_are_left_out(self):
         reps = [
             Rep(id=1, name="Zoe Park", quarterly_quota=Decimal("50000.00")),
             Rep(id=2, name="Avery Cole", quarterly_quota=Decimal("40000.00")),
@@ -160,11 +160,7 @@ class TestBuildForecast:
 
         forecast = build_forecast(reps, [], QUARTER_START, QUARTER_END)
 
-        assert [row["rep"]["name"] for row in forecast["by_rep"]] in (
-            ["Zoe Park", "Avery Cole"],
-            ["Avery Cole", "Zoe Park"],
-        )
-        assert all(row["won"] == Decimal("0.00") for row in forecast["by_rep"])
+        assert forecast["by_rep"] == []
 
     def test_by_rep_is_sorted_by_weighted_descending(self):
         reps = [
