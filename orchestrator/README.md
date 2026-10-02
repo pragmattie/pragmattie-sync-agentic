@@ -8,4 +8,8 @@ Its database tables are prefixed `sdlc_`, with their own Alembic history (`sdlc_
 separate from the CRM's. Migrations live in `migrations/` (Alembic, reading `DATABASE_URL`) and
 see only `sdlc_*` tables. See "Database migrations" in the root `README.md`.
 
+Simulated engineering history (about six months of sprints, issues and pull requests, every row
+`source = "synthetic"`) comes from `sdlc/synth.py`: run `python -m sdlc.synth` to add it,
+`--if-empty` to skip when it already exists, or `--reset` to replace it.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
