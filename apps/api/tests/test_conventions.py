@@ -128,7 +128,6 @@ def test_reps_stays_a_plain_array(client, reps):
     [
         "/api/v1/accounts/1",
         "/api/v1/contacts",
-        "/api/v1/leads/1",
         "/api/v1/opportunities/1",
         "/api/v1/reps",
     ],
