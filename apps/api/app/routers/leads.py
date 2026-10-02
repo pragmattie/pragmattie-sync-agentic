@@ -109,6 +109,15 @@ def get_lead(
     return LeadOut.model_validate(get_or_404(session, Lead, lead_id))
 
 
+@router.delete("/leads/{lead_id}", status_code=204, summary="Delete a lead")
+def delete_lead(
+    lead_id: Annotated[int, Path(description="The lead's id.")],
+    session: Session = Depends(get_session),
+) -> None:
+    session.delete(get_or_404(session, Lead, lead_id))
+    session.commit()
+
+
 @router.patch(
     "/leads/{lead_id}",
     response_model=LeadOut,
