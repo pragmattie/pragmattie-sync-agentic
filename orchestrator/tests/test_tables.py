@@ -119,6 +119,18 @@ def test_one_row_of_each_kind_reads_back_with_its_relationships(session):
     assert incident.deployment.version == "1.4.0"
 
 
+def test_pull_request_needs_no_number_author_issue_or_module(session):
+    session.add(PullRequest(external_id="pr-99", source="github", title="Bump", created_at=OPENED))
+    session.commit()
+    session.expire_all()
+
+    pull_request = session.scalars(select(PullRequest)).one()
+    assert pull_request.number is None
+    assert pull_request.author is None
+    assert pull_request.issue is None
+    assert pull_request.module is None
+
+
 def _ci_run(session, external_id, source):
     return CIRun(
         external_id=external_id,

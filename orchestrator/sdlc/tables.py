@@ -103,11 +103,11 @@ class PullRequest(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = _source(index=True)
     external_id: Mapped[str | None] = mapped_column(String(64))
-    number: Mapped[int]
+    number: Mapped[int | None]
     title: Mapped[str] = mapped_column(String(300))
-    author_id: Mapped[int] = mapped_column(ForeignKey("sdlc_engineers.id"))
-    issue_id: Mapped[int] = mapped_column(ForeignKey("sdlc_issues.id"))
-    module: Mapped[str] = mapped_column(String(30), index=True)
+    author_id: Mapped[int | None] = mapped_column(ForeignKey("sdlc_engineers.id"))
+    issue_id: Mapped[int | None] = mapped_column(ForeignKey("sdlc_issues.id"))
+    module: Mapped[str | None] = mapped_column(String(30), index=True)
     files_changed: Mapped[int] = _count()
     additions: Mapped[int] = _count()
     deletions: Mapped[int] = _count()
@@ -127,8 +127,8 @@ class PullRequest(Base):
     caused_incident: Mapped[bool] = _flag()
     reverted: Mapped[bool] = _flag()
 
-    author: Mapped[Engineer] = relationship()
-    issue: Mapped[Issue] = relationship()
+    author: Mapped[Engineer | None] = relationship()
+    issue: Mapped[Issue | None] = relationship()
 
 
 class CIRun(Base):
