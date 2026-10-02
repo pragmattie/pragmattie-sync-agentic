@@ -45,7 +45,7 @@ def query_summary(session: Session, start: date, end: date) -> dict:
         select(func.coalesce(func.sum(Opportunity.amount), 0)).where(
             Opportunity.stage == "closed_won",
             Opportunity.close_date >= start,
-            Opportunity.close_date <= end,
+            Opportunity.close_date < end,
         )
     )
 
