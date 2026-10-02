@@ -49,6 +49,7 @@ Never put development information in the CRM, or product screens in Delivery Ins
 | Web apps | **Vue 3, not React**: Vite, **Vuetify** (MIT), Pinia, Vue Router, Chart.js via vue-chartjs |
 | Tests and lint | pytest + ruff (line length 100, rules `E,F,I,B,UP`, target py312); Vitest for web |
 | Local run | Docker Compose; everything starts with `docker compose up --build` |
+| API docs | OpenAPI pages at `/docs` and `/redoc` on each API service |
 
 ## Conventions
 
