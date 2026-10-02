@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import sdlc.tables  # noqa: F401  (registers the tables on Base.metadata)
 from sdlc.config import get_settings
 from sdlc.db import Base
 from sdlc.migrations_filter import VERSION_TABLE, include_name
