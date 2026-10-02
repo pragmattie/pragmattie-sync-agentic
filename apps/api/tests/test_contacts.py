@@ -161,6 +161,7 @@ def test_list_contacts_pages_after_counting_every_match(client, account, make_co
 def test_list_contacts_rejects_paging_outside_the_bounds(client, params):
     assert client.get("/api/v1/contacts", params=params).status_code == 422
 
+
 def test_list_contacts_offset_past_the_end_returns_no_items_but_the_full_total(
     client, account, make_contact
 ):
