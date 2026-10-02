@@ -72,8 +72,10 @@ Never put development information in the CRM, or product screens in Delivery Ins
 - Every run you make is recorded with its model, turns, tokens and cost.
 - A reviewer agent reads every agent pull request against its issue's spec and this file, and
   posts a review ("would approve" or "would request changes"). For a T0 pull request its
-  approval is the only review: once CI passes, the pull request merges itself. Above T0 a person
-  approves, and the pull request then merges itself.
+  approval is the only review: once CI passes, the pull request merges itself. A T1 pull request
+  that changes only the web apps (`apps/crm-web/`, `apps/insights-web/`) and that the reviewer
+  approved merges itself an hour later, unless a person comments `/hold`. Anything else needs a
+  person's approval, and then merges itself.
 - When a person merges your pull request, the next item in the same milestone starts by itself if
   its spec is approved. The next milestone never starts without a person.
 
