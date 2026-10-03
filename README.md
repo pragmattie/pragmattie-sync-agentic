@@ -52,7 +52,17 @@ Copy `.env.example` to `.env` and fill in local-only values before running anyth
 folder's README for what belongs there, and `CLAUDE.md` for the stack, conventions and rules
 every agent follows.
 
-The whole stack starts with `docker compose up --build`. To bring up just the database, run
+The whole stack starts with `docker compose up --build`, and serves:
+
+| Service | Address |
+| --- | --- |
+| CRM web app (`crm-web`) | <http://localhost:5173> |
+| Delivery Insights (`insights-web`) | <http://localhost:5174> |
+| CRM API (`api`) | <http://localhost:8000> |
+| Orchestrator (`orchestrator`) | <http://localhost:8001> |
+| MySQL (`db`) | `localhost:${MYSQL_HOST_PORT:-3307}` |
+
+To bring up just the database, run
 `docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
 `docker compose ps` shows it as such.
 
