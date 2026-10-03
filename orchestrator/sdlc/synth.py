@@ -13,10 +13,14 @@ Patterns built in on purpose, which the later models should rediscover:
 - Marcus ships big pull requests with few defects, Dana small steady ones, and Tomas has slower
   reviews and more rework.
 
+Merged work ships in near-daily releases of ``main``, and about 3% of merged pull requests (mostly
+the risky ones) cause a production incident after their release.
+
 Determinism: the same ``seed`` and ``now`` always give the same rows. Sprints, issues and pull
-requests draw from a single ``random.Random(seed)``. CI runs and later kinds of history (deploys,
-epics) use their own streams, seeded from strings such as ``f"{seed}:ci:{pr_number}"``, and
-never draw from this one, so adding them never changes the rows drawn here.
+requests draw from a single ``random.Random(seed)``. CI runs, deploys, incidents and later kinds
+of history (epics) use their own streams, seeded from strings such as
+``f"{seed}:ci:{pr_number}"``, and never draw from this one, so adding them never changes the rows
+drawn here.
 
 Run ``python -m sdlc.synth`` to add the history (``--if-empty`` to skip quietly when it exists,
 ``--reset`` to replace it).
@@ -129,6 +133,19 @@ CI_SUITES = {
 FLAKY_SUITE = "integrations-e2e"
 CI_RERUN_DELAY = timedelta(minutes=12)
 
+INCIDENT_SHARE = 0.03
+DEPLOY_CHANCE = 0.75
+DEPLOY_TIME = time(15)
+MODULE_DISPLAY_NAMES = {
+    "leads": "Leads",
+    "accounts": "Accounts",
+    "pipeline": "Pipeline",
+    "forecasting": "Forecasting",
+    "integrations": "Integrations",
+    "billing_auth": "Billing & Auth",
+    "platform": "Platform",
+}
+
 
 def incident_risk(
     *,
@@ -204,6 +221,15 @@ def _past_weekend(moment: datetime) -> datetime:
     return datetime.combine(monday, time(9, 30))
 
 
+def may_ship(deploy_at: datetime, pull_requests: list[PullRequest]) -> bool:
+    """Whether a release of ``pull_requests`` may ship at ``deploy_at``.
+
+    Always yes for now; the release gate (6.3) replaces this, and a hold only moves the work to a
+    later deploy.
+    """
+    return True
+
+
 def _pick(rng: random.Random, items, weights):
     return rng.choices(items, weights=weights)[0]
 
@@ -231,17 +257,22 @@ class _Builder:
         self.engineers = _engineers(db)
         self.issue_number = 0
         self.pr_number = 0
+        self.merged: list[tuple[PullRequest, float]] = []
         self.counts = {
             "engineers": len(self.engineers),
             "sprints": 0,
             "issues": 0,
             "pull_requests": 0,
             "ci_runs": 0,
+            "deployments": 0,
+            "incidents": 0,
         }
 
     def build(self) -> dict[str, int]:
         for index, start in enumerate(sprint_starts(self.now)):
             self._sprint(index, start)
+        self.db.flush()
+        self._deploys_and_incidents()
         self.db.flush()
         return self.counts
 
@@ -391,6 +422,16 @@ class _Builder:
         )
         self.db.add(pr)
         self.counts["pull_requests"] += 1
+        if state == "merged":
+            risk = incident_risk(
+                module=module.name,
+                author=author.login,
+                additions=additions,
+                touches_migration=touches_migration,
+                docs_only=docs_only,
+                merged_at=pr.merged_at,
+            )
+            self.merged.append((pr, risk))
         self._ci_runs(pr)
 
     def _ci_runs(self, pr: PullRequest) -> None:
@@ -454,6 +495,98 @@ class _Builder:
         )
         self.counts["ci_runs"] += 1
 
+    def _deploys_and_incidents(self) -> None:
+        self._pick_incident_causes()
+        self._deploys()
+
+    def _pick_incident_causes(self) -> None:
+        """About 3% of merged PRs (at least one), drawn by incident risk squared, cause incidents.
+
+        Half of them, by a 50% draw each, were reverted.
+        """
+        rng = random.Random(f"{self.seed}:incidents")
+        candidates = [(pr, risk**2) for pr, risk in self.merged if risk > 0]
+        count = max(1, round(INCIDENT_SHARE * len(self.merged)))
+        causes = []
+        while candidates and len(causes) < count:
+            index = rng.choices(range(len(candidates)), weights=[w for _, w in candidates])[0]
+            causes.append(candidates.pop(index)[0])
+        for pr in causes:
+            pr.caused_incident = True
+            pr.reverted = rng.random() < 0.5
+
+    def _deploys(self) -> None:
+        """Walks day by day from the first merge to today, releasing ``main`` on most weekdays."""
+        waiting = sorted((pr for pr, _ in self.merged), key=lambda pr: (pr.merged_at, pr.number))
+        if not waiting:
+            return
+        day = waiting[0].merged_at.date()
+        while day <= self.now.date() and waiting:
+            rng = random.Random(f"{self.seed}:deploy:{day.isoformat()}")
+            deploy_at = _after(datetime.combine(day, DEPLOY_TIME), rng.uniform(0, 1))
+            wants = rng.random() < DEPLOY_CHANCE
+            ready = [pr for pr in waiting if pr.merged_at < deploy_at]
+            if (
+                day.weekday() < 5
+                and wants
+                and deploy_at <= self.now
+                and ready
+                and may_ship(deploy_at, ready)
+            ):
+                waiting = waiting[len(ready) :]
+                self._deploy(day, deploy_at, ready)
+            day += timedelta(days=1)
+
+    def _deploy(self, day: date, deploy_at: datetime, prs: list[PullRequest]) -> None:
+        self.counts["deployments"] += 1
+        number = self.counts["deployments"]
+        deployment = Deployment(
+            source=SOURCE,
+            external_id=f"syn-deploy-{number}",
+            version=f"{day.year}.{day.timetuple().tm_yday:03d}.{number}",
+            deployed_at=deploy_at,
+            pr_count=len(prs),
+            status=(
+                "rolled_back"
+                if any(pr.caused_incident and pr.reverted for pr in prs)
+                else "success"
+            ),
+        )
+        self.db.add(deployment)
+        for pr in sorted(prs, key=lambda pr: pr.number):
+            if pr.caused_incident:
+                self._incident(pr, deployment)
+
+    def _incident(self, pr: PullRequest, deployment: Deployment) -> None:
+        """The incident ``pr`` caused after ``deployment``, from the PR's own stream.
+
+        An incident that would open after ``now`` is not written yet.
+        """
+        rng = random.Random(f"{self.seed}:incident:{pr.number}")
+        severity = rng.choice(("sev2", "sev3", "sev3"))
+        if pr.module == "billing_auth":
+            severity = "sev1"
+        opened_at = _after(deployment.deployed_at, rng.uniform(0.5, 20))
+        restore_hours = rng.uniform(0.5, 3) if pr.reverted else rng.uniform(2, 14)
+        resolved_at = _after(opened_at, restore_hours)
+        if opened_at > self.now:
+            return
+        module = MODULE_DISPLAY_NAMES[pr.module]
+        self.db.add(
+            Incident(
+                source=SOURCE,
+                external_id=f"syn-incident-{pr.number}",
+                title=f"{module} degraded after {deployment.version}",
+                severity=severity,
+                module=pr.module,
+                opened_at=opened_at,
+                resolved_at=resolved_at if resolved_at <= self.now else None,
+                caused_by_pr=pr,
+                deployment=deployment,
+            )
+        )
+        self.counts["incidents"] += 1
+
 
 def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, int]:
     """Generates the history up to ``now`` and returns how many rows of each kind it wrote."""
@@ -467,14 +600,21 @@ def reset(db: Session) -> None:
     synthetic_issues = select(Issue.id).where(Issue.source == SOURCE)
     synthetic_sprints = select(Sprint.id).where(Sprint.source == SOURCE)
     synthetic_engineers = select(Engineer.id).where(Engineer.source == SOURCE)
+    synthetic_deployments = select(Deployment.id).where(Deployment.source == SOURCE)
 
-    for table in (Incident, CIRun, Deployment):
-        db.execute(delete(table).where(table.source == SOURCE))
+    db.execute(delete(Incident).where(Incident.source == SOURCE))
     db.execute(
         update(Incident)
         .where(Incident.caused_by_pr_id.in_(synthetic_prs))
         .values(caused_by_pr_id=None)
     )
+    db.execute(
+        update(Incident)
+        .where(Incident.deployment_id.in_(synthetic_deployments))
+        .values(deployment_id=None)
+    )
+    for table in (CIRun, Deployment):
+        db.execute(delete(table).where(table.source == SOURCE))
     db.execute(
         update(CIRun).where(CIRun.pull_request_id.in_(synthetic_prs)).values(pull_request_id=None)
     )
