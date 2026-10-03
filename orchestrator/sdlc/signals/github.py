@@ -106,6 +106,7 @@ class Collector:
             labels = labels_of(item)
             if "pull_request" in item or "incident" in labels:
                 continue
+            assignee = self._engineer(item.get("assignee"))
             issue = self._row(Issue, f"issue-{item['number']}")
             issue.number = item["number"]
             issue.title = item["title"][:300]
@@ -120,7 +121,7 @@ class Collector:
             issue.actual_days = (
                 _days(issue.created_at, issue.closed_at) if issue.closed_at else None
             )
-            issue.assignee = self._engineer(item.get("assignee"))
+            issue.assignee = assignee
             count += 1
         self.db.flush()
         return count
@@ -150,11 +151,8 @@ class Collector:
         merged_at = parse_time(detail.get("merged_at"))
         issue_number = linked_issue_number(detail.get("body"))
 
-        pr = self._row(PullRequest, f"pr-{detail['number']}")
-        pr.number = detail["number"]
-        pr.title = detail["title"][:300]
-        pr.author = self._engineer(detail.get("user"))
-        pr.issue = (
+        author = self._engineer(detail.get("user"))
+        issue = (
             self.db.scalar(
                 select(Issue).where(
                     Issue.source == self.source, Issue.external_id == f"issue-{issue_number}"
@@ -163,6 +161,12 @@ class Collector:
             if issue_number is not None
             else None
         )
+
+        pr = self._row(PullRequest, f"pr-{detail['number']}")
+        pr.number = detail["number"]
+        pr.title = detail["title"][:300]
+        pr.author = author
+        pr.issue = issue
         pr.module = labels.get("module") or infer_module(paths)
         pr.files_changed = detail.get("changed_files", len(files))
         pr.additions = detail.get("additions", 0)
