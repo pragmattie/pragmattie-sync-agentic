@@ -12,4 +12,8 @@ Simulated engineering history (about six months of sprints, issues and pull requ
 `source = "synthetic"`) comes from `sdlc/synth.py`: run `python -m sdlc.synth` to add it,
 `--if-empty` to skip when it already exists, or `--reset` to replace it.
 
+Real work (issues, pull requests with their files and reviews, and CI jobs, every row
+`source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_TOKEN` and `GITHUB_REPO`
+in `.env`, then run `python -m sdlc.signals.github`. Re-running updates rows in place.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
