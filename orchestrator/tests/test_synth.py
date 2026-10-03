@@ -1,5 +1,7 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 from statistics import mean
+from unittest import mock
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -7,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from sdlc import synth
 from sdlc.db import Base
-from sdlc.tables import Engineer, Issue, PullRequest, Sprint
+from sdlc.tables import CIRun, Engineer, Issue, PullRequest, Sprint
 
 EVEN_WEEK_NOW = datetime(2026, 10, 2, 15, 30)  # ISO week 40, a Friday
 ODD_WEEK_NOW = datetime(2026, 7, 15, 11, 0)  # ISO week 29, a Wednesday
@@ -105,7 +107,7 @@ def test_the_same_seed_and_now_give_identical_rows(tmp_path):
 def test_every_row_is_synthetic_and_counts_match(session):
     counts = synth.build(session, now=EVEN_WEEK_NOW)
 
-    for table in (Engineer, Sprint, Issue, PullRequest):
+    for table in (Engineer, Sprint, Issue, PullRequest, CIRun):
         sources = set(session.scalars(select(table.source)))
         assert sources == {"synthetic"}
     assert counts == {
@@ -113,6 +115,7 @@ def test_every_row_is_synthetic_and_counts_match(session):
         "sprints": 13,
         "issues": session.scalar(select(func.count(Issue.id))),
         "pull_requests": session.scalar(select(func.count(PullRequest.id))),
+        "ci_runs": session.scalar(select(func.count(CIRun.id))),
     }
     assert counts["issues"] > 200
     assert counts["pull_requests"] > counts["issues"]
@@ -224,6 +227,115 @@ def test_incident_risk_returns_the_documented_values(case, expected):
     assert synth.incident_risk(**{**arguments, **case}) == pytest.approx(expected)
 
 
+def _push(run):
+    """The push number in ``syn-ci-<pr>-<push>-<suite>[-rerun]``."""
+    return int(run.external_id.split("-")[3])
+
+
+def _first_runs(session):
+    """Every CI run except re-runs."""
+    return session.scalars(
+        select(CIRun).where(CIRun.external_id.not_like("%-rerun")).order_by(CIRun.id)
+    ).all()
+
+
+def test_every_pull_request_runs_all_suites_on_each_push(built):
+    session = built
+    pushes = defaultdict(lambda: defaultdict(set))
+    for run in _first_runs(session):
+        assert run.external_id == f"syn-ci-{run.pull_request.number}-{_push(run)}-{run.suite}"
+        assert run.started_at <= EVEN_WEEK_NOW
+        pushes[run.pull_request_id][_push(run)].add(run.suite)
+
+    pull_requests = session.scalars(select(PullRequest)).all()
+    assert {pr.state for pr in pull_requests} == {"open", "merged", "closed"}
+    for pr in pull_requests:
+        by_push = pushes[pr.id]
+        # Push 0 starts when the PR opens; later pushes only appear once they have happened.
+        assert 0 in by_push
+        assert sorted(by_push) == list(range(len(by_push)))
+        assert len(by_push) <= 1 + pr.rework_commits
+        for suites in by_push.values():
+            assert suites == set(synth.CI_SUITES)
+    assert any(len(pushes[pr.id]) > 1 for pr in pull_requests)
+
+
+def test_pushes_start_after_the_pr_opens_and_durations_track_the_suite(built):
+    session = built
+    starts = defaultdict(dict)
+    for run in _first_runs(session):
+        seconds = synth.CI_SUITES[run.suite]
+        assert 0.8 * seconds - 1 <= run.duration_seconds <= 1.3 * seconds + 1
+        starts[run.pull_request][_push(run)] = run.started_at
+    for pr, by_push in starts.items():
+        assert by_push[0] == pr.created_at
+        for push, started_at in by_push.items():
+            if push:
+                gap_hours = (started_at - pr.created_at) / timedelta(hours=push)
+                assert 1 - 1 / 3600 <= gap_hours <= 6 + 1 / 3600
+
+
+def test_integrations_e2e_is_the_flaky_suite(built):
+    runs = _first_runs(built)
+    for suite in synth.CI_SUITES:
+        suite_runs = [run for run in runs if run.suite == suite]
+        rate = sum(run.flaky for run in suite_runs) / len(suite_runs)
+        if suite == "integrations-e2e":
+            assert 0.04 <= rate <= 0.12
+        else:
+            assert rate < 0.03
+    for run in runs:
+        assert run.conclusion in {"success", "failure"}
+        if run.flaky:
+            assert run.conclusion == "failure"
+
+
+def test_every_flaky_failure_has_a_passing_rerun_twelve_minutes_later(built):
+    session = built
+    reruns = {
+        run.external_id: run
+        for run in session.scalars(select(CIRun).where(CIRun.external_id.like("%-rerun")))
+    }
+    flaky = [run for run in _first_runs(session) if run.flaky]
+    assert flaky
+    for run in flaky:
+        rerun = reruns.pop(f"{run.external_id}-rerun")
+        assert rerun.suite == run.suite
+        assert rerun.pull_request_id == run.pull_request_id
+        assert rerun.conclusion == "success" and not rerun.flaky
+        assert rerun.started_at - run.started_at == timedelta(minutes=12)
+    assert reruns == {}
+
+
+def test_large_pull_requests_fail_more_often_on_their_first_push(built):
+    session = built
+    real_failures = defaultdict(list)
+    for run in _first_runs(session):
+        if _push(run) == 0:
+            failed = run.conclusion == "failure" and not run.flaky
+            real_failures[run.pull_request.additions > 400].append(failed)
+    assert mean(real_failures[True]) > mean(real_failures[False])
+
+
+def test_ci_runs_never_change_the_issues_and_pull_requests(tmp_path):
+    snapshots = []
+    for name, with_ci in (("with", True), ("without", False)):
+        engine = create_engine(f"sqlite:///{tmp_path / f'{name}.db'}")
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            if with_ci:
+                synth.build(session, now=EVEN_WEEK_NOW)
+                assert session.scalar(select(func.count(CIRun.id))) > 0
+            else:
+                with mock.patch.object(synth._Builder, "_ci_runs"):
+                    synth.build(session, now=EVEN_WEEK_NOW)
+                assert session.scalar(select(func.count(CIRun.id))) == 0
+            snapshots.append(_snapshot(session))
+        engine.dispose()
+
+    assert snapshots[0] == snapshots[1]
+
+
 def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     session = built
     session.add(
@@ -232,11 +344,13 @@ def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     session.commit()
     assert synth.has_synthetic(session)
 
+    assert session.scalar(select(func.count(CIRun.id))) > 0
+
     synth.reset(session)
     session.commit()
 
     assert not synth.has_synthetic(session)
-    for table in (Engineer, Sprint, Issue, PullRequest):
+    for table in (Engineer, Sprint, Issue, PullRequest, CIRun):
         assert session.scalar(select(func.count()).where(table.source == "synthetic")) == 0
     assert session.scalars(select(PullRequest.title)).all() == ["Real change"]
 
