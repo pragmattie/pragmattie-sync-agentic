@@ -143,7 +143,8 @@ class Collector:
         facts = classify_files(paths)
         created_at = parse_time(detail["created_at"])
         submitted = sorted(
-            moment for moment in (parse_time(review.get("submitted_at")) for review in reviews)
+            moment
+            for moment in (parse_time(review.get("submitted_at")) for review in reviews)
             if moment is not None
         )
         merged_at = parse_time(detail.get("merged_at"))
