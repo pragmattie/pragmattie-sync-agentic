@@ -1,6 +1,3 @@
-# Planned services (added by the issues that create them):
-#   insights-web   - Delivery Insights    - 5174
-
 services:
   crm-web:
     build: ./apps/crm-web
@@ -9,6 +6,17 @@ services:
     volumes:
       - ./apps/crm-web:/app
       - crm-web-node-modules:/app/node_modules
+    command: npm run dev
+
+  insights-web:
+    build: ./apps/insights-web
+    environment:
+      VITE_ORCH_URL: http://localhost:8001
+    ports:
+      - "5174:5174"
+    volumes:
+      - ./apps/insights-web:/app
+      - insights-web-node-modules:/app/node_modules
     command: npm run dev
 
   api:
@@ -69,3 +77,4 @@ services:
 volumes:
   db-data:
   crm-web-node-modules:
+  insights-web-node-modules:
