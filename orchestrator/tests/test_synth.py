@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from sdlc import synth
 from sdlc.db import Base
-from sdlc.tables import CIRun, Engineer, Issue, PullRequest, Sprint
+from sdlc.tables import CIRun, Deployment, Engineer, Incident, Issue, PullRequest, Sprint
 
 EVEN_WEEK_NOW = datetime(2026, 10, 2, 15, 30)  # ISO week 40, a Friday
 ODD_WEEK_NOW = datetime(2026, 7, 15, 11, 0)  # ISO week 29, a Wednesday
@@ -107,7 +107,7 @@ def test_the_same_seed_and_now_give_identical_rows(tmp_path):
 def test_every_row_is_synthetic_and_counts_match(session):
     counts = synth.build(session, now=EVEN_WEEK_NOW)
 
-    for table in (Engineer, Sprint, Issue, PullRequest, CIRun):
+    for table in (Engineer, Sprint, Issue, PullRequest, CIRun, Deployment, Incident):
         sources = set(session.scalars(select(table.source)))
         assert sources == {"synthetic"}
     assert counts == {
@@ -116,6 +116,8 @@ def test_every_row_is_synthetic_and_counts_match(session):
         "issues": session.scalar(select(func.count(Issue.id))),
         "pull_requests": session.scalar(select(func.count(PullRequest.id))),
         "ci_runs": session.scalar(select(func.count(CIRun.id))),
+        "deployments": session.scalar(select(func.count(Deployment.id))),
+        "incidents": session.scalar(select(func.count(Incident.id))),
     }
     assert counts["issues"] > 200
     assert counts["pull_requests"] > counts["issues"]
@@ -336,6 +338,182 @@ def test_ci_runs_never_change_the_issues_and_pull_requests(tmp_path):
     assert snapshots[0] == snapshots[1]
 
 
+def _merged(session):
+    return session.scalars(
+        select(PullRequest).where(PullRequest.state == "merged").order_by(PullRequest.merged_at)
+    ).all()
+
+
+def _risk(pr):
+    return synth.incident_risk(
+        module=pr.module,
+        author=pr.author.login,
+        additions=pr.additions,
+        touches_migration=pr.touches_migration,
+        docs_only=pr.docs_only,
+        merged_at=pr.merged_at,
+    )
+
+
+def _deployments(session):
+    return session.scalars(select(Deployment).order_by(Deployment.deployed_at)).all()
+
+
+def test_about_three_percent_of_merged_prs_caused_incidents_mostly_risky_ones(built):
+    merged = _merged(built)
+    causes = [pr for pr in merged if pr.caused_incident]
+    assert len(causes) == max(1, round(0.03 * len(merged)))
+    assert mean(_risk(pr) for pr in causes) > 2 * mean(_risk(pr) for pr in merged)
+    assert all(
+        not pr.caused_incident for pr in built.scalars(select(PullRequest)) if not pr.merged_at
+    )
+    assert not any(pr.reverted for pr in merged if not pr.caused_incident)
+    assert 0 < sum(pr.reverted for pr in causes) < len(causes)
+
+
+def test_deploys_are_weekday_afternoons_up_to_now_and_ship_every_merged_pr_once(built):
+    deployments = _deployments(built)
+    assert len(deployments) > 50
+    for number, deployment in enumerate(sorted(deployments, key=lambda d: d.id), start=1):
+        deployed_at = deployment.deployed_at
+        assert deployed_at.weekday() < 5
+        assert deployed_at <= EVEN_WEEK_NOW
+        assert 15 <= deployed_at.hour + deployed_at.minute / 60 <= 16
+        day_of_year = deployed_at.timetuple().tm_yday
+        assert deployment.version == f"{deployed_at.year}.{day_of_year:03d}.{number}"
+        assert deployment.external_id == f"syn-deploy-{number}"
+
+    # A PR ships in the first deploy after its merge, so each deploy carries exactly the PRs
+    # merged since the one before it.
+    merged = _merged(built)
+    previous = datetime.min
+    for deployment in deployments:
+        shipped = [pr for pr in merged if previous <= pr.merged_at < deployment.deployed_at]
+        assert deployment.pr_count == len(shipped) > 0
+        previous = deployment.deployed_at
+    last = deployments[-1].deployed_at
+    assert sum(d.pr_count for d in deployments) == sum(pr.merged_at < last for pr in merged)
+
+
+def _deployment_of(pr, deployments):
+    return next(d for d in deployments if pr.merged_at < d.deployed_at)
+
+
+def test_every_shipped_incident_cause_has_one_incident_linked_to_its_deploy(built):
+    session = built
+    deployments = _deployments(session)
+    last = deployments[-1].deployed_at
+    incidents = session.scalars(select(Incident)).all()
+    by_pr = defaultdict(list)
+    for incident in incidents:
+        by_pr[incident.caused_by_pr_id].append(incident)
+
+    shipped = [pr for pr in _merged(session) if pr.caused_incident and pr.merged_at < last]
+    assert shipped
+    for pr in shipped:
+        deployment = _deployment_of(pr, deployments)
+        found = by_pr.pop(pr.id, [])
+        if deployment.deployed_at + timedelta(hours=20) <= EVEN_WEEK_NOW:
+            assert len(found) == 1
+        if not found:
+            continue
+        (incident,) = found
+        assert incident.deployment_id == deployment.id
+        assert incident.module == pr.module
+        assert incident.external_id == f"syn-incident-{pr.number}"
+        name = synth.MODULE_DISPLAY_NAMES[pr.module]
+        assert incident.title == f"{name} degraded after {deployment.version}"
+        if pr.module == "billing_auth":
+            assert incident.severity == "sev1"
+        else:
+            assert incident.severity in {"sev2", "sev3"}
+
+        opened_hours = (incident.opened_at - deployment.deployed_at) / timedelta(hours=1)
+        assert 0.5 - 1 / 3600 <= opened_hours <= 20 + 1 / 3600
+        assert incident.opened_at <= EVEN_WEEK_NOW
+        if incident.resolved_at is not None:
+            assert incident.resolved_at <= EVEN_WEEK_NOW
+            low, high = (0.5, 3) if pr.reverted else (2, 14)
+            hours = (incident.resolved_at - incident.opened_at) / timedelta(hours=1)
+            assert low - 1 / 3600 <= hours <= high + 1 / 3600
+        else:
+            assert incident.opened_at + timedelta(hours=14) > EVEN_WEEK_NOW
+    assert by_pr == {}
+
+
+def test_a_reverted_cause_rolls_its_deploy_back(built):
+    deployments = _deployments(built)
+    merged = _merged(built)
+    rolled_back = set()
+    for pr in merged:
+        if pr.caused_incident and pr.reverted and pr.merged_at < deployments[-1].deployed_at:
+            rolled_back.add(_deployment_of(pr, deployments).id)
+    assert rolled_back
+    for deployment in deployments:
+        expected = "rolled_back" if deployment.id in rolled_back else "success"
+        assert deployment.status == expected
+
+
+@pytest.mark.parametrize(
+    "now",
+    [datetime(2026, 10, 2, 15, 30), datetime(2026, 10, 3, 12, 0), datetime(2026, 8, 19, 9, 0)],
+    ids=["friday-afternoon", "saturday", "wednesday-morning"],
+)
+def test_ongoing_incidents_have_no_resolution_and_nothing_is_after_now(session, now):
+    synth.build(session, now=now)
+    for deployment in session.scalars(select(Deployment)):
+        assert deployment.deployed_at <= now and deployment.deployed_at.weekday() < 5
+    for incident in session.scalars(select(Incident)):
+        assert incident.opened_at <= now
+        assert incident.resolved_at is None or incident.resolved_at <= now
+
+
+def test_a_held_release_ships_later_with_the_work_that_waited(session):
+    held_day = None
+
+    def hold_first(deploy_at, pull_requests):
+        nonlocal held_day
+        if held_day is None:
+            held_day = deploy_at.date()
+        return deploy_at.date() != held_day
+
+    with mock.patch.object(synth, "may_ship", side_effect=hold_first):
+        synth.build(session, now=EVEN_WEEK_NOW)
+    deployments = _deployments(session)
+    assert deployments[0].deployed_at.date() > held_day
+    merged = _merged(session)
+    last = deployments[-1].deployed_at
+    assert sum(d.pr_count for d in deployments) == sum(pr.merged_at < last for pr in merged)
+
+
+def test_deploys_and_incidents_never_change_issues_prs_or_ci_runs(tmp_path):
+    snapshots = []
+    for name, with_deploys in (("with", True), ("without", False)):
+        engine = create_engine(f"sqlite:///{tmp_path / f'{name}.db'}")
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            if with_deploys:
+                synth.build(session, now=EVEN_WEEK_NOW)
+                assert session.scalar(select(func.count(Incident.id))) > 0
+            else:
+                with mock.patch.object(synth._Builder, "_deploys_and_incidents"):
+                    synth.build(session, now=EVEN_WEEK_NOW)
+                assert session.scalar(select(func.count(Deployment.id))) == 0
+            ci_runs = session.execute(
+                select(
+                    CIRun.external_id,
+                    CIRun.conclusion,
+                    CIRun.flaky,
+                    CIRun.started_at,
+                    CIRun.duration_seconds,
+                ).order_by(CIRun.id)
+            ).all()
+            snapshots.append((_snapshot(session), ci_runs))
+        engine.dispose()
+
+    assert snapshots[0] == snapshots[1]
+
+
 def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     session = built
     session.add(
@@ -345,12 +523,13 @@ def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     assert synth.has_synthetic(session)
 
     assert session.scalar(select(func.count(CIRun.id))) > 0
+    assert session.scalar(select(func.count(Incident.id))) > 0
 
     synth.reset(session)
     session.commit()
 
     assert not synth.has_synthetic(session)
-    for table in (Engineer, Sprint, Issue, PullRequest, CIRun):
+    for table in (Engineer, Sprint, Issue, PullRequest, CIRun, Deployment, Incident):
         assert session.scalar(select(func.count()).where(table.source == "synthetic")) == 0
     assert session.scalars(select(PullRequest.title)).all() == ["Real change"]
 
