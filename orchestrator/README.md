@@ -16,4 +16,8 @@ Real work (issues, pull requests with their files and reviews, and CI jobs, ever
 `source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_TOKEN` and `GITHUB_REPO`
 in `.env`, then run `python -m sdlc.signals.github`. Re-running updates rows in place.
 
+The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
+`python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
+`--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.

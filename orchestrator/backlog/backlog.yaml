@@ -1,0 +1,280 @@
+# PragMattie Sync product backlog. `python -m sdlc.backlog --apply` creates these as
+# GitHub Issues (skipping any whose title already exists) with module/type/priority/points
+# labels. Edit freely; the script is safe to re-run.
+
+epics:
+  - AI lead scoring
+  - Multi-currency forecasting
+  - Salesforce import
+  - SOC 2 audit logging
+
+issues:
+  # --- Leads -------------------------------------------------------------------------
+  - title: Score leads with a model instead of a manual slider
+    module: leads
+    type: feature
+    priority: p1
+    points: 8
+    epic: AI lead scoring
+    criteria:
+      - Score is computed from source, title seniority, company size and engagement
+      - Reps can see the top three reasons behind each score
+      - Manual override is kept and logged
+  - title: Explain lead score on the lead row
+    module: leads
+    type: feature
+    priority: p2
+    points: 3
+    epic: AI lead scoring
+    criteria:
+      - Hovering the score shows the reasons
+  - title: Auto-assign new leads by region and rep capacity
+    module: leads
+    type: feature
+    priority: p2
+    points: 5
+    criteria:
+      - New leads route to the rep with the lowest open-lead count in their region
+      - Assignment rules are editable by an admin
+  - title: Detect duplicate leads by email domain and name
+    module: leads
+    type: feature
+    priority: p2
+    points: 5
+    criteria:
+      - Possible duplicates are flagged on create
+      - Reps can merge two leads
+  - title: Lead search ignores accents in names
+    module: leads
+    type: bug
+    priority: p3
+    points: 2
+    criteria:
+      - Searching "Jose" finds "José"
+  - title: Bulk-change lead owner from the leads table
+    module: leads
+    type: feature
+    priority: p3
+    points: 3
+
+  # --- Accounts & contacts -----------------------------------------------------------
+  - title: Add, edit and remove contacts from the account page
+    module: accounts
+    type: feature
+    priority: p1
+    points: 5
+    criteria:
+      - Inline form with validation
+      - Removing a contact asks for confirmation
+  - title: Account activity timeline
+    module: accounts
+    type: feature
+    priority: p2
+    points: 8
+    criteria:
+      - Shows deals, stage changes and contact changes in date order
+  - title: Parent and child accounts
+    module: accounts
+    type: feature
+    priority: p3
+    points: 8
+  - title: Account open-pipeline total double-counts reopened deals
+    module: accounts
+    type: bug
+    priority: p1
+    points: 2
+
+  # --- Pipeline ------------------------------------------------------------------------
+  - title: Drag and drop deals between pipeline stages
+    module: pipeline
+    type: feature
+    priority: p1
+    points: 5
+    criteria:
+      - Dragging a card changes its stage and probability
+      - Keyboard alternative is available
+  - title: Record stage history for every opportunity
+    module: pipeline
+    type: feature
+    priority: p1
+    points: 5
+    criteria:
+      - Each stage change stores who, when, from and to
+      - History is visible on the opportunity
+  - title: Warn when a deal's close date has passed
+    module: pipeline
+    type: feature
+    priority: p2
+    points: 3
+  - title: Create and edit opportunities from the account page
+    module: pipeline
+    type: feature
+    priority: p1
+    points: 5
+  - title: Pipeline board totals ignore the owner filter
+    module: pipeline
+    type: bug
+    priority: p2
+    points: 1
+
+  # --- Forecasting ---------------------------------------------------------------------
+  - title: Forecast in multiple currencies with a reporting currency
+    module: forecasting
+    type: feature
+    priority: p1
+    points: 8
+    epic: Multi-currency forecasting
+    criteria:
+      - Opportunities store a currency
+      - Forecast converts at the rate on the close date
+  - title: Store daily exchange rates
+    module: forecasting
+    type: feature
+    priority: p1
+    points: 5
+    epic: Multi-currency forecasting
+  - title: Weekly forecast snapshots to show forecast movement
+    module: forecasting
+    type: feature
+    priority: p2
+    points: 8
+    criteria:
+      - A snapshot is saved every Monday
+      - The forecast page shows change since last week
+  - title: Rep can submit a manual commit number
+    module: forecasting
+    type: feature
+    priority: p2
+    points: 5
+  - title: Forecast rounding differs between tiles and table
+    module: forecasting
+    type: bug
+    priority: p3
+    points: 2
+
+  # --- Integrations --------------------------------------------------------------------
+  - title: Import accounts, contacts and opportunities from a Salesforce export
+    module: integrations
+    type: feature
+    priority: p1
+    points: 8
+    epic: Salesforce import
+    criteria:
+      - Accepts the standard Salesforce CSV exports
+      - Shows a preview with errors before importing
+  - title: Map Salesforce stages to PragMattie Sync stages
+    module: integrations
+    type: feature
+    priority: p1
+    points: 3
+    epic: Salesforce import
+  - title: Two-way email sync with Gmail and Outlook
+    module: integrations
+    type: feature
+    priority: p2
+    points: 8
+  - title: Outbound webhooks for deal stage changes
+    module: integrations
+    type: feature
+    priority: p2
+    points: 5
+  - title: Webhook retries give up after one failure
+    module: integrations
+    type: bug
+    priority: p1
+    points: 3
+
+  # --- Billing & Auth ------------------------------------------------------------------
+  - title: Sign in with Google and Microsoft (SSO)
+    module: billing_auth
+    type: feature
+    priority: p1
+    points: 8
+    criteria:
+      - OIDC login for Google Workspace and Microsoft Entra
+      - Admins can require SSO for their company
+  - title: Roles and permissions (admin, manager, rep)
+    module: billing_auth
+    type: feature
+    priority: p1
+    points: 8
+  - title: Seat-based billing with plan upgrades
+    module: billing_auth
+    type: feature
+    priority: p2
+    points: 8
+  - title: Audit log of sign-ins and permission changes
+    module: billing_auth
+    type: feature
+    priority: p1
+    points: 5
+    epic: SOC 2 audit logging
+  - title: Session does not expire after password change
+    module: billing_auth
+    type: bug
+    priority: p1
+    points: 2
+
+  # --- Platform ------------------------------------------------------------------------
+  - title: Audit log for all record changes
+    module: platform
+    type: feature
+    priority: p1
+    points: 8
+    epic: SOC 2 audit logging
+    criteria:
+      - Every create, update and delete stores who, when and the change
+      - Logs are retained for 12 months
+  - title: Cursor pagination for large list endpoints
+    module: platform
+    type: chore
+    priority: p3
+    points: 3
+  - title: Structured JSON logging with request IDs
+    module: platform
+    type: chore
+    priority: p2
+    points: 3
+  - title: Upgrade to Python 3.13 in the API image
+    module: platform
+    type: chore
+    priority: p3
+    points: 2
+
+  # --- Orchestrator (the predictive delivery layer itself) ------------------------------
+  - title: Triage agent labels and estimates new issues
+    module: orchestrator
+    type: feature
+    priority: p1
+    points: 5
+    criteria:
+      - Runs when an issue is opened or edited
+      - Adds module, type and points labels with a short rationale comment
+  - title: PR risk model trained on merged pull requests
+    module: orchestrator
+    type: feature
+    priority: p1
+    points: 8
+    criteria:
+      - Predicts the chance a PR causes an incident within 14 days
+      - Reports precision and recall on held-out PRs
+  - title: PR risk agent comments a score and reasons on each PR
+    module: orchestrator
+    type: feature
+    priority: p1
+    points: 5
+  - title: Governance tiers as a YAML policy with a risk-gate status check
+    module: orchestrator
+    type: feature
+    priority: p1
+    points: 5
+  - title: Collect GitHub signals on a schedule
+    module: orchestrator
+    type: chore
+    priority: p2
+    points: 3
+  - title: Sprint forecaster with P50 and P85 completion dates
+    module: orchestrator
+    type: feature
+    priority: p2
+    points: 8
