@@ -14,8 +14,8 @@ Patterns built in on purpose, which the later models should rediscover:
   reviews and more rework.
 
 Determinism: the same ``seed`` and ``now`` always give the same rows. Sprints, issues and pull
-requests draw from a single ``random.Random(seed)``. Later kinds of history (CI runs, deploys,
-epics) must use their own streams, seeded from strings such as ``f"{seed}:ci:{pr_number}"``, and
+requests draw from a single ``random.Random(seed)``. CI runs and later kinds of history (deploys,
+epics) use their own streams, seeded from strings such as ``f"{seed}:ci:{pr_number}"``, and
 never draw from this one, so adding them never changes the rows drawn here.
 
 Run ``python -m sdlc.synth`` to add the history (``--if-empty`` to skip quietly when it exists,
@@ -117,6 +117,18 @@ VERBS = {"feature": ("Add", "Build", "Support"), "bug": ("Fix", "Resolve"), "cho
 PRIORITIES = ("p1", "p2", "p3")
 PRIORITY_WEIGHTS = (15, 55, 30)
 
+# Typical seconds per CI suite. integrations-e2e is simulated only (no real CI job has that
+# name) and is the flaky one.
+CI_SUITES = {
+    "api": 150,
+    "web": 110,
+    "migrations": 90,
+    "orchestrator": 240,
+    "integrations-e2e": 540,
+}
+FLAKY_SUITE = "integrations-e2e"
+CI_RERUN_DELAY = timedelta(minutes=12)
+
 
 def incident_risk(
     *,
@@ -214,6 +226,7 @@ class _Builder:
     def __init__(self, db: Session, now: datetime, seed: int):
         self.db = db
         self.now = now
+        self.seed = seed
         self.rng = random.Random(seed)
         self.engineers = _engineers(db)
         self.issue_number = 0
@@ -223,6 +236,7 @@ class _Builder:
             "sprints": 0,
             "issues": 0,
             "pull_requests": 0,
+            "ci_runs": 0,
         }
 
     def build(self) -> dict[str, int]:
@@ -352,32 +366,93 @@ class _Builder:
             rework = 0
 
         self.pr_number += 1
+        pr = PullRequest(
+            source=SOURCE,
+            external_id=f"syn-pr-{self.pr_number}",
+            number=self.pr_number,
+            title=title,
+            author_id=self.engineers[author.login].id,
+            issue_id=issue.id,
+            module=module.name,
+            files_changed=files_changed,
+            additions=additions,
+            deletions=deletions,
+            touches_migration=touches_migration,
+            test_files_changed=test_files,
+            docs_only=docs_only,
+            modules_touched=modules_touched,
+            review_count=(1 + rework // 2 + (additions > 400)) if reviewed else 0,
+            first_review_hours=first_review if reviewed else None,
+            rework_commits=rework,
+            state=state,
+            created_at=opened_at,
+            merged_at=finished_at if state == "merged" else None,
+            closed_at=finished_at if state != "open" else None,
+        )
+        self.db.add(pr)
+        self.counts["pull_requests"] += 1
+        self._ci_runs(pr)
+
+    def _ci_runs(self, pr: PullRequest) -> None:
+        """Every suite on every push, from the pull request's own stream.
+
+        Runs that would start after ``now`` are drawn (so the rest stay the same) but not written.
+        """
+        rng = random.Random(f"{self.seed}:ci:{pr.number}")
+        push_gap = rng.uniform(1, 6)
+        for push in range(1 + pr.rework_commits):
+            push_at = _after(pr.created_at, push * push_gap)
+            fail_chance = 0.12 if push == 0 else 0.04
+            if pr.additions > 400:
+                fail_chance *= 1.5
+            for suite, seconds in CI_SUITES.items():
+                external_id = f"syn-ci-{pr.number}-{push}-{suite}"
+                duration = round(seconds * rng.uniform(0.8, 1.3))
+                flaky_chance = 0.08 if suite == FLAKY_SUITE else 0.01
+                if rng.random() < fail_chance:
+                    conclusion, flaky = "failure", False
+                elif rng.random() < flaky_chance:
+                    conclusion, flaky = "failure", True
+                else:
+                    conclusion, flaky = "success", False
+                self._ci_run(pr, external_id, suite, conclusion, flaky, push_at, duration)
+                if flaky:
+                    rerun_duration = round(seconds * rng.uniform(0.8, 1.3))
+                    self._ci_run(
+                        pr,
+                        f"{external_id}-rerun",
+                        suite,
+                        "success",
+                        False,
+                        push_at + CI_RERUN_DELAY,
+                        rerun_duration,
+                    )
+
+    def _ci_run(
+        self,
+        pr: PullRequest,
+        external_id: str,
+        suite: str,
+        conclusion: str,
+        flaky: bool,
+        started_at: datetime,
+        duration: int,
+    ) -> None:
+        if started_at > self.now:
+            return
         self.db.add(
-            PullRequest(
+            CIRun(
                 source=SOURCE,
-                external_id=f"syn-pr-{self.pr_number}",
-                number=self.pr_number,
-                title=title,
-                author_id=self.engineers[author.login].id,
-                issue_id=issue.id,
-                module=module.name,
-                files_changed=files_changed,
-                additions=additions,
-                deletions=deletions,
-                touches_migration=touches_migration,
-                test_files_changed=test_files,
-                docs_only=docs_only,
-                modules_touched=modules_touched,
-                review_count=(1 + rework // 2 + (additions > 400)) if reviewed else 0,
-                first_review_hours=first_review if reviewed else None,
-                rework_commits=rework,
-                state=state,
-                created_at=opened_at,
-                merged_at=finished_at if state == "merged" else None,
-                closed_at=finished_at if state != "open" else None,
+                external_id=external_id,
+                pull_request=pr,
+                suite=suite,
+                conclusion=conclusion,
+                flaky=flaky,
+                started_at=started_at,
+                duration_seconds=duration,
             )
         )
-        self.counts["pull_requests"] += 1
+        self.counts["ci_runs"] += 1
 
 
 def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, int]:
