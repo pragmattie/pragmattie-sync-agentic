@@ -1,9 +1,11 @@
+from collections.abc import Iterator
 from functools import lru_cache
 
+from fastapi import Depends
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Session
 
 from sdlc.config import get_settings
 
@@ -24,3 +26,8 @@ def database_is_reachable(engine: Engine) -> bool:
         return True
     except SQLAlchemyError:
         return False
+
+
+def get_session(engine: Engine = Depends(get_engine)) -> Iterator[Session]:
+    with Session(engine) as session:
+        yield session
