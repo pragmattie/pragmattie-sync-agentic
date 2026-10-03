@@ -16,6 +16,9 @@ Patterns built in on purpose, which the later models should rediscover:
 Merged work ships in near-daily releases of ``main``, and about 3% of merged pull requests (mostly
 the risky ones) cause a production incident after their release.
 
+Recent feature work belongs to four epics, and each epic still has unscheduled stories to do, so
+every epic has a pace and a remaining backlog.
+
 Determinism: the same ``seed`` and ``now`` always give the same rows. Sprints, issues and pull
 requests draw from a single ``random.Random(seed)``. CI runs, deploys, incidents and later kinds
 of history (epics) use their own streams, seeded from strings such as
@@ -54,6 +57,13 @@ class Coder:
     defect: float
     rework: float
     review_wait_hours: float
+
+
+@dataclass(frozen=True)
+class Epic:
+    name: str
+    module: str
+    backlog: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -132,6 +142,31 @@ CI_SUITES = {
 }
 FLAKY_SUITE = "integrations-e2e"
 CI_RERUN_DELAY = timedelta(minutes=12)
+
+EPICS = (
+    Epic(
+        "AI lead scoring", "leads",
+        ("score explanations", "scoring model retraining", "score history", "score thresholds"),
+    ),
+    Epic(
+        "Multi-currency forecasting", "forecasting",
+        ("currency conversion rates", "per-currency quota", "FX rollup math", "FX snapshots"),
+    ),
+    Epic(
+        "Salesforce import", "integrations",
+        ("Salesforce field mapping", "Salesforce OAuth", "import dry run", "import conflicts"),
+    ),
+    Epic(
+        "SOC 2 audit logging", "platform",
+        ("audit event schema", "audit log retention", "audit log export", "admin access logs"),
+    ),
+)  # fmt: skip
+EPIC_SPRINTS = 6
+EPIC_TAG_CHANCE = 0.8
+EPIC_BACKLOG_SIZE = (4, 8)
+EPIC_POINTS = (2, 3, 3, 5, 5, 8)
+EPIC_PRIORITY_WEIGHTS = (20, 60, 20)
+EPIC_CREATED_TIME = time(10)
 
 INCIDENT_SHARE = 0.03
 DEPLOY_CHANCE = 0.75
@@ -257,11 +292,13 @@ class _Builder:
         self.engineers = _engineers(db)
         self.issue_number = 0
         self.pr_number = 0
+        self.issues: list[Issue] = []
         self.merged: list[tuple[PullRequest, float]] = []
         self.counts = {
             "engineers": len(self.engineers),
             "sprints": 0,
             "issues": 0,
+            "epic_backlog": 0,
             "pull_requests": 0,
             "ci_runs": 0,
             "deployments": 0,
@@ -271,6 +308,8 @@ class _Builder:
     def build(self) -> dict[str, int]:
         for index, start in enumerate(sprint_starts(self.now)):
             self._sprint(index, start)
+        self.db.flush()
+        self._epics()
         self.db.flush()
         self._deploys_and_incidents()
         self.db.flush()
@@ -335,6 +374,7 @@ class _Builder:
         )
         self.db.add(issue)
         self.db.flush()
+        self.issues.append(issue)
         self.counts["issues"] += 1
         self._pull_requests(issue, module, author, work_day, actual_days)
         return points
@@ -494,6 +534,47 @@ class _Builder:
             )
         )
         self.counts["ci_runs"] += 1
+
+    def _epics(self) -> None:
+        """Tags recent feature work with its epic and adds each epic's unscheduled stories.
+
+        Draws from its own stream, so the epics never change any other row.
+        """
+        rng = random.Random(f"{self.seed}:epics")
+        window_start = datetime.combine(sprint_starts(self.now)[-EPIC_SPRINTS], time())
+        epics_by_module = {epic.module: epic for epic in EPICS}
+        for issue in self.issues:
+            epic = epics_by_module.get(issue.module)
+            if epic is None or issue.type != "feature" or issue.created_at < window_start:
+                continue
+            if rng.random() < EPIC_TAG_CHANCE:
+                issue.epic = epic.name
+        for epic in EPICS:
+            for _ in range(rng.randint(*EPIC_BACKLOG_SIZE)):
+                self._epic_story(epic, rng)
+
+    def _epic_story(self, epic: Epic, rng: random.Random) -> None:
+        title = f"{rng.choice(VERBS['feature'])} {rng.choice(epic.backlog)}"
+        points = rng.choice(EPIC_POINTS)
+        priority = _pick(rng, PRIORITIES, EPIC_PRIORITY_WEIGHTS)
+        created_on = self.now.date() - timedelta(days=rng.randint(3, 40))
+        self.issue_number += 1
+        self.db.add(
+            Issue(
+                source=SOURCE,
+                external_id=f"syn-issue-{self.issue_number}",
+                number=self.issue_number,
+                title=title,
+                module=epic.module,
+                type="feature",
+                priority=priority,
+                estimate_points=points,
+                state="open",
+                created_at=datetime.combine(created_on, EPIC_CREATED_TIME),
+                epic=epic.name,
+            )
+        )
+        self.counts["epic_backlog"] += 1
 
     def _deploys_and_incidents(self) -> None:
         self._pick_incident_causes()
