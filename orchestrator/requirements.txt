@@ -6,3 +6,4 @@ pydantic-settings>=2.7,<3.0
 pymysql[rsa]>=1.1,<1.2
 alembic>=1.13,<1.15
 httpx>=0.28,<0.29
+pyyaml>=6.0,<7.0
