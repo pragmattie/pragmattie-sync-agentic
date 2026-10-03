@@ -113,7 +113,10 @@ def test_every_row_is_synthetic_and_counts_match(session):
     assert counts == {
         "engineers": 6,
         "sprints": 13,
-        "issues": session.scalar(select(func.count(Issue.id))),
+        "issues": session.scalar(select(func.count(Issue.id)).where(Issue.sprint_id.is_not(None))),
+        "epic_backlog": session.scalar(
+            select(func.count(Issue.id)).where(Issue.sprint_id.is_(None))
+        ),
         "pull_requests": session.scalar(select(func.count(PullRequest.id))),
         "ci_runs": session.scalar(select(func.count(CIRun.id))),
         "deployments": session.scalar(select(func.count(Deployment.id))),
@@ -159,7 +162,10 @@ def test_issues_and_pull_requests_follow_the_spec_shapes(built):
         verb, _ = issue.title.split(" ", 1)
         assert verb in synth.VERBS[issue.type]
         assert issue.estimate_points in synth.POINTS[issue.type]
-        assert issue.assignee_id is not None and issue.sprint_id is not None
+        if issue.sprint_id is None:
+            assert issue.epic is not None and issue.assignee_id is None
+        else:
+            assert issue.assignee_id is not None
 
     pull_requests = session.scalars(select(PullRequest)).all()
     for pr in pull_requests:
@@ -509,6 +515,94 @@ def test_deploys_and_incidents_never_change_issues_prs_or_ci_runs(tmp_path):
                 ).order_by(CIRun.id)
             ).all()
             snapshots.append((_snapshot(session), ci_runs))
+        engine.dispose()
+
+    assert snapshots[0] == snapshots[1]
+
+
+def test_every_epic_has_open_unscheduled_stories_and_recent_closed_work(built):
+    session = built
+    today = EVEN_WEEK_NOW.date()
+    for epic in synth.EPICS:
+        issues = session.scalars(select(Issue).where(Issue.epic == epic.name)).all()
+        backlog = [issue for issue in issues if issue.sprint_id is None]
+        assert 4 <= len(backlog) <= 8
+        for story in backlog:
+            verb, work = story.title.split(" ", 1)
+            assert verb in synth.VERBS["feature"] and work in epic.backlog
+            assert story.module == epic.module and story.type == "feature"
+            assert story.state == "open" and story.closed_at is None
+            assert story.assignee_id is None and story.actual_days is None
+            assert story.estimate_points in synth.EPIC_POINTS
+            assert story.priority in synth.PRIORITIES
+            assert story.created_at.time() == synth.EPIC_CREATED_TIME
+            assert 3 <= (today - story.created_at.date()).days <= 40
+        assert any(issue.state == "closed" and issue.sprint_id for issue in issues)
+
+
+def test_only_recent_features_in_the_epic_module_are_tagged(built):
+    session = built
+    window_start = datetime.combine(synth.sprint_starts(EVEN_WEEK_NOW)[7], datetime.min.time())
+    epics = {epic.module: epic.name for epic in synth.EPICS}
+    eligible = tagged = 0
+    for issue in session.scalars(select(Issue).where(Issue.sprint_id.is_not(None))):
+        is_eligible = (
+            issue.module in epics and issue.type == "feature" and issue.created_at >= window_start
+        )
+        if issue.epic is not None:
+            assert is_eligible and issue.epic == epics[issue.module]
+            tagged += 1
+        eligible += is_eligible
+    assert 0.65 <= tagged / eligible <= 0.95
+
+
+def test_issue_numbers_stay_unique_with_the_epic_backlog(built):
+    numbers = built.scalars(select(Issue.number).order_by(Issue.id)).all()
+    assert numbers == list(range(1, len(numbers) + 1))
+    backlog = built.scalars(select(Issue.number).where(Issue.sprint_id.is_(None))).all()
+    assert min(backlog) > max(n for n in numbers if n not in backlog)
+
+
+def test_epics_never_change_any_other_row(tmp_path):
+    def rows(session, table, *columns):
+        return session.execute(select(*columns).order_by(table.id)).all()
+
+    snapshots = []
+    for name, with_epics in (("with", True), ("without", False)):
+        engine = create_engine(f"sqlite:///{tmp_path / f'{name}.db'}")
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            if with_epics:
+                synth.build(session, now=EVEN_WEEK_NOW)
+                assert session.scalar(select(func.count()).where(Issue.epic.is_not(None))) > 0
+            else:
+                with mock.patch.object(synth._Builder, "_epics"):
+                    synth.build(session, now=EVEN_WEEK_NOW)
+            sprints, issues, pull_requests = _snapshot(session)
+            scheduled = [
+                row
+                for row, sprint_id in zip(
+                    issues, rows(session, Issue, Issue.sprint_id), strict=True
+                )
+                if sprint_id[0] is not None
+            ]
+            snapshots.append(
+                (
+                    sprints,
+                    scheduled,
+                    pull_requests,
+                    rows(session, PullRequest, PullRequest.caused_incident, PullRequest.reverted),
+                    rows(session, CIRun, CIRun.external_id, CIRun.conclusion, CIRun.started_at),
+                    rows(
+                        session,
+                        Deployment,
+                        Deployment.version,
+                        Deployment.deployed_at,
+                        Deployment.status,
+                    ),
+                    rows(session, Incident, Incident.external_id, Incident.opened_at),
+                )
+            )
         engine.dispose()
 
     assert snapshots[0] == snapshots[1]
