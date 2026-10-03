@@ -125,6 +125,15 @@ export function moduleRows(modules) {
   }));
 }
 
+// Whether there is any engineering history to show at all.
+export function hasHistory({ sources, sprints, modules, ci }) {
+  const rows = Object.values(sources ?? {}).flatMap((counts) => Object.values(counts));
+  return (
+    rows.some((count) => count > 0) ||
+    Boolean(sprints?.length || modules?.length || ci?.by_suite?.length)
+  );
+}
+
 export function isFlaky(flakyRate) {
   return hasValue(flakyRate) && flakyRate >= FLAKY_THRESHOLD;
 }

@@ -1,6 +1,6 @@
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App.vue";
 import { vuetify } from "../plugins/vuetify";
 import { navItems, pageTitle, router } from "../router";
@@ -20,6 +20,15 @@ async function mountApp(path = "/signals") {
 }
 
 enableAutoUnmount(afterEach);
+
+// The signals page loads on mount; these tests only look at the shell around it.
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("App", () => {
   it("shows the mark and the Delivery Insights wordmark in the app bar", async () => {
@@ -62,11 +71,11 @@ describe("App", () => {
     );
   });
 
-  it("shows the signals placeholder", async () => {
+  it("shows the engineering signals page", async () => {
     const { wrapper } = await mountApp();
 
     expect(wrapper.find("h1").text()).toBe("Engineering signals");
-    expect(wrapper.text()).toContain("Engineering signals are coming soon.");
+    expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(true);
   });
 
   it("links nowhere in the CRM", async () => {

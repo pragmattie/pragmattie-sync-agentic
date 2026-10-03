@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-const SignalsView = () => import("../views/SignalsView.vue");
+const EngineeringSignalsView = () => import("../views/EngineeringSignalsView.vue");
 const NotFoundView = () => import("../views/NotFoundView.vue");
 
 export const appName = "Delivery Insights · PragMattie Sync";
@@ -19,7 +19,7 @@ export const router = createRouter({
     {
       path: "/signals",
       name: "signals",
-      component: SignalsView,
+      component: EngineeringSignalsView,
       meta: { title: "Engineering signals" },
     },
     {
