@@ -63,9 +63,9 @@ describe("App", () => {
     const { wrapper } = await mountApp();
 
     const footer = wrapper.find("footer");
-    expect(footer.find("[data-test='credit']").text()).toBe(
-      "PragMattie Sync is a fictional demo company created by PragMattie Growth Partners, LLC.",
-    );
+    const credit = footer.find("[data-test='credit']");
+    expect(credit.text()).toBe("PragMattie Sync is a fictional demo company created by");
+    expect(credit.find("img").attributes("alt")).toBe("PragMattie Growth Partners, LLC");
     expect(footer.find("[data-test='simulated-note']").text()).toBe(
       "Some data here is simulated; each page says how much.",
     );
