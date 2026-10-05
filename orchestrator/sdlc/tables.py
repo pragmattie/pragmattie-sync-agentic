@@ -8,6 +8,7 @@ which is unique within its source.
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -18,7 +19,6 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
 )
-from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from sdlc.db import Base
