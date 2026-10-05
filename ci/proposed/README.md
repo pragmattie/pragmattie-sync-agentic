@@ -7,7 +7,10 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`tiers.yaml`** (4.1): the governance policy. Agents cannot edit `orchestrator/policies/`, so
+  move it to `orchestrator/policies/tiers.yaml` (the loader's default, `sdlc.tiers.POLICY`).
+  Until then `orchestrator/tests/test_tiers.py` checks this copy; once moved, it checks the moved
+  file, and this copy should be deleted.
 
 ## Applied
 
