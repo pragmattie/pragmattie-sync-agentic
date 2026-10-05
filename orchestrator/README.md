@@ -16,6 +16,11 @@ Real work (issues, pull requests with their files and reviews, and CI jobs, ever
 `source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_TOKEN` and `GITHUB_REPO`
 in `.env`, then run `python -m sdlc.signals.github`. Re-running updates rows in place.
 
+The risk score is graded against history by `sdlc/calibration.py`. `python -m sdlc.risk explain
+<pr>` shows one pull request's signals, score, tier and reasons (add `--source` when the number
+exists in both sources); `python -m sdlc.risk calibrate` grades this database's history, and
+`calibrate --generated N` grades N generated histories, pooled. Both are read-only.
+
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.
