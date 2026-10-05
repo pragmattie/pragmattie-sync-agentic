@@ -206,10 +206,7 @@ def author_ratio(
 def compute_features(db: Session, pr: PullRequest, now: datetime | None = None) -> Features:
     reference = pr.created_at
     rates, team_rate = module_rates(db, reference)
-    if pr.module is None:
-        module_rate = 0.0
-    else:
-        module_rate = rates.get(pr.module, team_rate)
+    module_rate = rates.get(pr.module, team_rate)
     failures = db.scalar(
         select(func.count(CIRun.id)).where(
             CIRun.pull_request_id == pr.id,

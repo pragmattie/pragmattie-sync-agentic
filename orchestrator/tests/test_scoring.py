@@ -307,10 +307,19 @@ def test_compute_features_reads_the_pr(session):
     assert score == scoring.score_features(features)
 
 
-def test_compute_features_module_rate_is_zero_without_a_module(session):
+def test_compute_features_module_rate_is_the_team_rate_without_a_module(session):
     _history(session, "billing_auth", merged=10, incidents=4)
+    _history(session, "leads", merged=10, incidents=0)
     pr = _pr(session, REFERENCE)
-    assert scoring.compute_features(session, pr).module_rate == 0.0
+    assert scoring.compute_features(session, pr).module_rate == pytest.approx(0.2)
+
+
+def test_compute_features_module_rate_is_the_team_rate_for_a_module_with_no_history(session):
+    _history(session, "billing_auth", merged=10, incidents=4)
+    _history(session, "leads", merged=10, incidents=0)
+    _pr(session, REFERENCE - timedelta(days=2), REFERENCE + timedelta(hours=1), module="pipeline")
+    pr = _pr(session, REFERENCE, module="pipeline")
+    assert scoring.compute_features(session, pr).module_rate == pytest.approx(0.2)
 
 
 def test_at_falls_back_from_merged_to_now_to_created(session):
