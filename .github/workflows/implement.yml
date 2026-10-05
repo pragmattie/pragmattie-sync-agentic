@@ -299,6 +299,9 @@ jobs:
           # An auto-merge (by the builder app, a bot) starts the next item. Who may start a run is
           # already decided above: write access, or a merge that passed main's required checks.
           allowed_bots: "*"
+          # No attribution lines in commits or PR text (CLAUDE.md). `attribution` is the current
+          # setting; `includeCoAuthoredBy` is its older name, kept for older Claude Code versions.
+          settings: '{"attribution": {"commit": "", "pr": ""}, "includeCoAuthoredBy": false}'
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: >-
             --model ${{ steps.route.outputs.model }}
