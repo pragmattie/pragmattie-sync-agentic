@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from sdlc import audit
+from sdlc import agent_runs, audit
 from sdlc.audit import (
     TRIAL,
     count_decisions,
@@ -192,7 +192,8 @@ def test_serialize_decision_gives_every_column_json_safe(db):
     assert json.loads(json.dumps(data)) == data
 
 
-def test_the_module_never_updates_or_deletes_a_row():
-    source = inspect.getsource(audit)
+@pytest.mark.parametrize("module", [audit, agent_runs])
+def test_the_module_never_updates_or_deletes_a_row(module):
+    source = inspect.getsource(module)
 
     assert not re.search(r"\b(update|delete)\(", source, re.I)
