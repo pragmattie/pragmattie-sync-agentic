@@ -397,11 +397,20 @@ jobs:
           TIER: ${{ steps.route.outputs.tier }}
           MODEL: ${{ steps.route.outputs.model }}
           OUTCOME: ${{ steps.agent.outcome }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
           FILE: ${{ steps.agent.outputs.execution_file }}
           RESULT: ${{ steps.agent.outputs.structured_output }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -uo pipefail
+          # The agent may finish while its push fails: most often someone pushed to the same
+          # branch during the run (a /revise posted just before a push). Nothing was saved then,
+          # so the run counts as a failure and says so, never "pushed".
+          pushfail=""
+          if [ "${PUSH_OUTCOME:-}" = "failure" ]; then
+            OUTCOME=failure
+            pushfail="its changes could not be pushed (the branch changed during the run, or the push was refused), so nothing from this run was saved"
+          fi
           r='{}'
           if [ -n "${FILE:-}" ] && [ -f "$FILE" ]; then
             r=$(jq -c 'if type == "array" then ([.[] | select(.type == "result")] | last // {}) else {} end' "$FILE" 2>/dev/null || echo '{}')
@@ -415,6 +424,7 @@ jobs:
           if [ "$OUTCOME" != "success" ]; then
             why=$(echo "$r" | jq -r 'if .is_error then ((.result // .subtype // "") | tostring) else "" end' 2>/dev/null || true)
             [ -z "$why" ] && [ "$r" = "{}" ] && why="the agent did not start: no result was recorded"
+            [ -n "$pushfail" ] && why="$pushfail"
             why=$(printf '%s' "$why" | tr '\n\r{}"' '  ()'"'" | sed 's/--/-/g' | cut -c1-240)
           fi
           record=$(jq -nc --argjson r "$r" \
@@ -446,7 +456,9 @@ jobs:
           # A revision also says on its pull request when it is finished, so the person deciding
           # whether to merge doesn't have to look for the record on the issue.
           if [ "$ACTION" = "revise" ] && [ -n "$PR" ]; then
-            if [ "$OUTCOME" = "success" ] && [ "$tests" != "false" ]; then
+            if [ -n "$pushfail" ]; then
+              note="**Revision not saved.** The branch changed while the agent was working (or the push was refused), so none of this run's changes are on the pull request ($turns turns, \$$cost). Comment \`/revise\` again with the same request to redo it, and avoid pushing to the branch while it runs."
+            elif [ "$OUTCOME" = "success" ] && [ "$tests" != "false" ]; then
               note="**Revision finished.** The agent's changes are pushed to this pull request ($turns turns, \$$cost). Merge once CI is green and you're happy with them."
             elif [ "$OUTCOME" = "success" ]; then
               note="**Revision finished, but the agent reports failing tests** ($turns turns, \$$cost). Check CI before merging, or comment \`/revise\` with what to fix."
