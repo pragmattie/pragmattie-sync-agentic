@@ -1,8 +1,6 @@
 # Governance policy: tiers, score bands, floors, caps, the objection window and the build model.
 # People edit this file; the orchestrator's loader (orchestrator/sdlc/tiers.py) checks it and
 # refuses a bad one, so no pull request is ever gated on a broken policy.
-#
-# Proposed copy: a person moves it to orchestrator/policies/tiers.yaml.
 
 # Score bands: a 0-100 risk score lands in the highest band whose `min` it reaches.
 score_bands:
