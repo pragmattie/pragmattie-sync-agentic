@@ -92,13 +92,18 @@ def test_calibrate_counts_per_tier_and_overall(session):
     }
 
 
-def test_top_decile_takes_ceil_n_over_ten_and_breaks_ties_by_number(session):
-    # PRs 2, 5 and 9 all score 40; the decile of two takes 2 and 5, so incident PR 9 misses it.
-    _build(session, HISTORY)
+def test_top_decile_takes_ceil_n_over_ten_and_breaks_ties_by_number():
+    # PRs 2, 5 and 9 all score 40 and only 2 is an incident. The decile of two must take 2 and 5;
+    # any other tie-break (by input order, or by number descending) takes 9 or misses 2.
+    rows = [(number, 5, "T0", False) for number in (1, 4, 7, 8, 11, 12)]
+    rows += [(2, 40, "T1", True), (5, 40, "T1", False), (9, 40, "T1", False)]
+    rows += [(3, 20, "T3", True), (6, 5, "T0", True), (10, 20, "T1", False)]
+    tied_first = [(9, 40, "T1", False), (5, 40, "T1", False)]
+    shuffled = tied_first + [row for row in rows if row not in tied_first][::-1]
 
-    report = calibration.calibrate(session, load_policy())
+    report = calibration.summarize(shuffled)
 
-    assert report["top_decile"] == {"size": 2, "incidents": 1, "capture": 0.25}
+    assert report["top_decile"] == {"size": 2, "incidents": 1, "capture": 1 / 3}
 
 
 def test_thresholds_give_precision_and_recall_at_each_tier_or_above(session):
