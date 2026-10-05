@@ -15,10 +15,6 @@ from sdlc.tiers import (
     load_policy,
 )
 
-# Until a person moves the proposed copy into orchestrator/policies/, test that one.
-PROPOSED = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "tiers.yaml"
-COMMITTED = POLICY if POLICY.exists() else PROPOSED
-
 VALID = {
     "score_bands": [
         {"tier": "T0", "min": 0},
@@ -60,7 +56,7 @@ def _write(tmp_path, data) -> Path:
 
 
 def test_committed_policy_values():
-    policy = load_policy(COMMITTED)
+    policy = load_policy(POLICY)
 
     assert policy.bands == ((0, "T0"), (20, "T1"), (50, "T2"), (80, "T3"))
     assert policy.floors == (
@@ -100,7 +96,7 @@ def test_committed_policy_values():
 
 
 def test_committed_window_excludes_t2_t3():
-    window = load_policy(COMMITTED).objection_window
+    window = load_policy(POLICY).objection_window
 
     assert window is not None
     assert not {"T2", "T3"} & set(window.tiers)
@@ -197,3 +193,16 @@ def test_bad_policy_is_refused_naming_its_section(tmp_path, section, change):
 
     with pytest.raises(PolicyError, match=rf"^{section}:"):
         load_policy(_write(tmp_path, data))
+
+
+def test_missing_file_is_refused(tmp_path):
+    with pytest.raises(PolicyError, match=r"^policy: "):
+        load_policy(tmp_path / "absent.yaml")
+
+
+def test_unparseable_yaml_is_refused(tmp_path):
+    path = tmp_path / "tiers.yaml"
+    path.write_text("score_bands: [unclosed\n", encoding="utf-8")
+
+    with pytest.raises(PolicyError, match=r"^policy: "):
+        load_policy(path)

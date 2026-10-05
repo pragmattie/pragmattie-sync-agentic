@@ -68,8 +68,13 @@ class Policy:
 
 
 def load_policy(path: Path = POLICY) -> Policy:
-    with open(path, encoding="utf-8") as file:
-        data = yaml.safe_load(file)
+    try:
+        with open(path, encoding="utf-8") as file:
+            data = yaml.safe_load(file)
+    except FileNotFoundError as error:
+        raise PolicyError(f"policy: no policy file at {path}") from error
+    except yaml.YAMLError as error:
+        raise PolicyError(f"policy: {path} is not valid YAML: {error}") from error
     if not isinstance(data, dict):
         raise PolicyError("policy: the file must be a mapping of sections")
     return Policy(
