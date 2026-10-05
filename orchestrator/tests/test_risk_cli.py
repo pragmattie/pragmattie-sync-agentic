@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from sdlc.db import Base
 from sdlc.risk import main
-from sdlc.tables import Incident, PullRequest
+from sdlc.tables import AgentDecision, Incident, PullRequest
 
 THURSDAY = datetime(2026, 10, 1, 10, 0)
 FRIDAY = datetime(2026, 10, 2, 10, 0)
@@ -49,7 +49,8 @@ def _signals(out):
 def _counts(engine):
     with Session(engine) as db:
         return tuple(
-            db.scalar(select(func.count()).select_from(table)) for table in (PullRequest, Incident)
+            db.scalar(select(func.count()).select_from(table))
+            for table in (PullRequest, Incident, AgentDecision)
         )
 
 
@@ -130,3 +131,54 @@ def test_calibrate_generated_pools_generated_histories(engine, unchanged, capsys
 def test_calibrate_generated_needs_at_least_one(engine, unchanged):
     with pytest.raises(SystemExit):
         main(["calibrate", "--generated", "0"], engine=engine)
+
+
+def _decisions(engine):
+    with Session(engine) as db:
+        return db.scalars(select(AgentDecision).order_by(AgentDecision.id)).all()
+
+
+def test_explain_record_appends_exactly_one_decision(engine, capsys):
+    assert main(["explain", "11", "--record"], engine=engine) == 0
+
+    out = capsys.readouterr().out
+    assert "Tier: T3" in out
+    [row] = _decisions(engine)
+    assert f"Recorded as decision {row.id}." in out
+    assert row.agent == "pr_risk_rubric"
+    assert row.trigger == "manual"
+    assert (row.subject_type, row.subject_source, row.subject_id) == ("pr", "synthetic", 11)
+    assert row.head_sha is None
+    assert row.attempt == 1
+    assert row.raw_score == row.final_score == 25
+    assert row.tier == "T3"
+    assert row.status == "ok"
+    assert row.signals["schema_migration"] == 15
+    assert row.signals["timing"] == 5
+    assert row.inputs_digest["touches_migration"] is True
+    assert "Floor 'schema_migration' sets a minimum of T3." in row.output["reasons"]
+    assert row.output["floors"] == ["schema_migration"]
+
+
+def test_explain_record_again_is_the_next_attempt(engine, capsys):
+    main(["explain", "11", "--record"], engine=engine)
+    main(["explain", "11", "--record"], engine=engine)
+    main(["explain", "1", "--source", "github", "--record"], engine=engine)
+
+    rows = _decisions(engine)
+    assert [(row.subject_source, row.subject_id, row.attempt) for row in rows] == [
+        ("synthetic", 11, 1),
+        ("synthetic", 11, 2),
+        ("github", 1, 1),
+    ]
+
+
+def test_explain_without_record_writes_nothing(engine, unchanged, capsys):
+    assert main(["explain", "11"], engine=engine) == 0
+
+    assert "Recorded" not in capsys.readouterr().out
+    assert _decisions(engine) == []
+
+
+def test_explain_record_of_an_unknown_number_writes_nothing(engine, unchanged, capsys):
+    assert main(["explain", "99", "--record"], engine=engine) == 1
