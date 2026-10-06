@@ -25,8 +25,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from sdlc import agent_runs, gate_status
-from sdlc.agents import pr_risk
-from sdlc.agents.comment import Meta, comment_head, refresh, render
+from sdlc.agents import overrides, pr_risk
+from sdlc.agents.comment import Meta, comment_head, refresh, render, retier
 from sdlc.agents.gate import Approvals, Gate, evaluate
 from sdlc.agents.github_effects import Effects
 from sdlc.agents.signoff import (
@@ -187,11 +187,21 @@ class Runner:
             **_subject(pr),
             **pr_risk.to_decision_fields(assessment),
         )
-        tier = assessment.assignment.tier
+        rulings = _rulings(db, pr)
+        floor = overrides.floor_of(self.policy, pr)
+        # a raise made on an earlier commit sticks
+        tier = overrides.effective_tier(assessment.assignment.tier, floor, rulings, sha)
         approvals = Approvals()  # a new commit starts with nothing signed off
         gate = self._evaluate(tier, assessment.ok, approvals)
+        meta = Meta(row.id, self.mode, APPROVER_NAME, sha)
         body = render(
-            assessment, gate, approvals, self.policy, Meta(row.id, self.mode, APPROVER_NAME, sha)
+            assessment,
+            gate,
+            approvals,
+            self.policy,
+            meta,
+            tier=tier,
+            override_lines=_lines(rulings),
         )
         row.action_taken = {
             "comment": self.effects.upsert_comment(pr.number, COMMENT_MARKER, body),
@@ -214,12 +224,19 @@ class Runner:
 
         A missing or wrong ``tier:`` label, and a risk comment missing for this commit, are put
         right too: a write that failed on the first poll is repaired on a later one.
+
+        New ``/tier`` commands are ruled on first, so the tier in force is the one gated on.
         """
-        tier = decision.tier
+        comments = self.effects.read_comments(pr.number)
+        rulings = _rulings(db, pr)
+        floor = overrides.floor_of(self.policy, pr)
+        before = overrides.effective_tier(decision.tier, floor, rulings, sha)
+        new = self._rule_new(db, pr, sha, decision.tier, floor, rulings, comments, now)
+        rulings += new
+        tier = overrides.effective_tier(decision.tier, floor, rulings, sha)
         labels = [label["name"] for label in item.get("labels") or []]
         if [name for name in labels if name.startswith("tier:")] != [f"tier:{tier}"]:
             self.effects.set_tier_label(pr.number, tier)
-        comments = self.effects.read_comments(pr.number)
         risk_comment = self.effects.find_comment(pr.number, COMMENT_MARKER, comments)
         boxed, qa_done = ticked(risk_comment.get("body") if risk_comment else None, sha)
         human = approved_on_github(self.effects.read_reviews(pr.number), sha)
@@ -240,15 +257,66 @@ class Runner:
         self._post_status(pr.number, sha, gate)
         body = (risk_comment.get("body") or "") if risk_comment else ""
         if risk_comment and comment_head(body) == sha:
-            refreshed = refresh(body, gate, approvals.simulated_approved)
+            refreshed = body
+            # every new ruling, accepted or rejected, is shown in the overrides block
+            if tier != before or new:
+                refreshed = retier(
+                    body,
+                    self.policy,
+                    tier=tier,
+                    agent_tier=decision.tier,
+                    approvals=approvals,
+                    approver_name=APPROVER_NAME,
+                    override_lines=_lines(rulings),
+                )
+            refreshed = refresh(refreshed, gate, approvals.simulated_approved)
             if refreshed != body:
                 self.effects.upsert_comment(pr.number, COMMENT_MARKER, refreshed, comments)
         else:
             assessment = pr_risk.from_decision(db, pr, decision)
             meta = Meta(decision.id, self.mode, APPROVER_NAME, sha)
-            body = render(assessment, gate, approvals, self.policy, meta)
+            lines = _lines(rulings)
+            body = render(
+                assessment, gate, approvals, self.policy, meta, tier=tier, override_lines=lines
+            )
             self.effects.upsert_comment(pr.number, COMMENT_MARKER, body, comments)
         gate_status.upsert(db, pr, gate, tier=tier, mode=self.mode, now=now)
+
+    def _rule_new(
+        self,
+        db: Session,
+        pr: PullRequest,
+        sha: str,
+        agent_tier: str,
+        floor: str,
+        rulings: list[overrides.Ruling],
+        comments: list[dict],
+        now: datetime,
+    ) -> list[overrides.Ruling]:
+        """Rule on each command not ruled on before, in order, and record each as an audit row."""
+        ruled = {ruling.comment_id for ruling in rulings}
+        new: list[overrides.Ruling] = []
+        for command in overrides.parse_commands(comments, [COMMENT_MARKER]):
+            if command.comment_id in ruled:
+                continue
+            current = overrides.effective_tier(agent_tier, floor, [*rulings, *new], sha)
+            ruling = overrides.rule(command, current=current, floor=floor, head_sha=sha)
+            record_decision(
+                db,
+                agent=overrides.AGENT,
+                agent_version=overrides.AGENT_VERSION,
+                trigger="human",
+                now=now,
+                head_sha=f"comment-{command.comment_id}"[:40],
+                tier=ruling.to_tier if ruling.accepted else None,
+                human_override=ruling.as_record(),
+                output={"url": command.url, "floor": floor},
+                status="ok" if ruling.accepted else "rejected",
+                **_subject(pr),
+            )
+            ruled.add(command.comment_id)
+            new.append(ruling)
+        return new
 
     def _record_window(
         self,
@@ -299,6 +367,23 @@ def _reviewer_rows(db: Session, pr: PullRequest) -> list[AgentDecision]:
         AgentDecision.subject_id == pr.number,
     )
     return list(db.scalars(query))
+
+
+def _rulings(db: Session, pr: PullRequest) -> list[overrides.Ruling]:
+    """The ``/tier`` rulings on this PR, oldest first, read back from their audit rows."""
+    query = select(AgentDecision).where(
+        AgentDecision.agent == overrides.AGENT,
+        AgentDecision.subject_type == "pr",
+        AgentDecision.subject_source == pr.source,
+        AgentDecision.subject_id == pr.number,
+        AgentDecision.trigger != TRIAL,
+    )
+    rows = db.scalars(query.order_by(AgentDecision.created_at, AgentDecision.id))
+    return [overrides.Ruling.from_record(row.human_override) for row in rows]
+
+
+def _lines(rulings: list[overrides.Ruling]) -> list[str]:
+    return [overrides.describe(ruling) for ruling in rulings]
 
 
 def run(

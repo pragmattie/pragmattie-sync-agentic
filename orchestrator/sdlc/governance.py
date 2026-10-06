@@ -50,7 +50,7 @@ def _matches(rule: Rule, facts: Facts) -> bool:
     return True
 
 
-def _matching(rules: tuple[Rule, ...], facts: Facts) -> list[Rule]:
+def matching(rules: tuple[Rule, ...], facts: Facts) -> list[Rule]:
     return [rule for rule in rules if _matches(rule, facts)]
 
 
@@ -71,14 +71,14 @@ def assign_tier(policy: Policy, score: int, facts: Facts) -> Assignment:
     score_tier = band_for(policy, score)
     tier = score_tier
     reasons = [f"Risk score {score} is in the {score_tier} band."]
-    floors = _matching(policy.floors, facts)
+    floors = matching(policy.floors, facts)
     for floor in floors:
         reasons.append(_floor_reason(floor))
         if _rank(floor.tier) > _rank(tier):
             tier = floor.tier
     capped_by = None
     if not floors:
-        caps = _matching(policy.caps, facts)
+        caps = matching(policy.caps, facts)
         if caps:
             cap = min(caps, key=lambda rule: _rank(rule.tier))
             if _rank(cap.tier) < _rank(tier):
@@ -96,7 +96,7 @@ def assign_tier(policy: Policy, score: int, facts: Facts) -> Assignment:
 
 def fallback_assignment(policy: Policy, facts: Facts, why: str) -> Assignment:
     """No score: the highest matching floor, else the policy's fallback tier."""
-    floors = _matching(policy.floors, facts)
+    floors = matching(policy.floors, facts)
     tier = max((floor.tier for floor in floors), key=_rank, default=policy.fallback_tier)
     return Assignment(
         tier=tier,
