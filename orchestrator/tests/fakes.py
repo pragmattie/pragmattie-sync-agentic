@@ -1,8 +1,8 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``) over in-memory pull requests, comments, reviews, statuses and labels, and logs every
-request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
+``paginate``) over in-memory pull requests, issues, comments, reviews, statuses and labels, and
+logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re
@@ -26,6 +26,7 @@ class FakeGitHub:
     def __init__(self):
         self.repo = REPO
         self.prs: dict[int, dict] = {}
+        self.issues: dict[int, dict] = {}
         self.files: dict[int, list[dict]] = {}
         self.reviews: dict[int, list[dict]] = {}
         self.comments: list[dict] = []  # each carries its issue "number"
@@ -75,6 +76,28 @@ class FakeGitHub:
         self.reviews.setdefault(number, [])
         self.diffs[number] = "".join(f"diff --git a/{name} b/{name}\n+change\n" for name in files)
         return self.prs[number]
+
+    def add_issue(
+        self,
+        number: int,
+        title: str = "Import leads from a CSV file",
+        body: str | None = "Sales reps want to upload a spreadsheet of leads.",
+        *,
+        labels=(),
+        created_at=datetime(2026, 10, 1, 9, 0),
+    ) -> dict:
+        self.issues[number] = {
+            "number": number,
+            "title": title,
+            "body": body,
+            "state": "open",
+            "user": dict(PERSON),
+            "assignee": None,
+            "created_at": iso(created_at),
+            "closed_at": None,
+        }
+        self.issue_labels[number] = list(labels)
+        return self.issues[number]
 
     def push(self, number: int, sha: str) -> None:
         self.prs[number]["head"]["sha"] = sha
@@ -130,7 +153,8 @@ class FakeGitHub:
         if match := re.fullmatch(r"/pulls/(\d+)", path):
             return self._pr(int(match.group(1)))
         if match := re.fullmatch(r"/issues/(\d+)", path):
-            return self._pr(int(match.group(1)))
+            number = int(match.group(1))
+            return self._issue(number) if number in self.issues else self._pr(number)
         raise GitHubError(f"GitHub 404 on {path}: Not Found")
 
     def get_text(self, path: str, accept: str = "application/vnd.github.diff") -> str:
@@ -147,6 +171,11 @@ class FakeGitHub:
                 for number, pr in self.prs.items()
                 if state == "all" or pr["state"] == state
             ]
+        if path == "/issues":  # GitHub lists pull requests as issues too
+            state = params.get("state", "open")
+            prs = [{**self._pr(n), "pull_request": {}} for n in self.prs]
+            issues = [self._issue(number) for number in self.issues]
+            return [item for item in issues + prs if state == "all" or item["state"] == state]
         if path == "/labels":
             return [{"name": name, "color": colour} for name, colour in self.repo_labels.items()]
         if path == "/issues/comments":
@@ -188,6 +217,10 @@ class FakeGitHub:
         path = self._log("DELETE", path)
         match = re.fullmatch(r"/issues/(\d+)/labels/(.+)", path)
         self.issue_labels[int(match.group(1))].remove(unquote(match.group(2)))
+
+    def _issue(self, number: int) -> dict:
+        labels = [{"name": name} for name in self.issue_labels.get(number, [])]
+        return {**self.issues[number], "labels": labels}
 
     def _pr(self, number: int) -> dict:
         if number not in self.prs:

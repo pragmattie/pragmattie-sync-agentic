@@ -116,7 +116,7 @@ def _signal_table(signals: dict[str, int]) -> str:
     )
 
 
-def _footer(assessment: Assessment, decision_id: int | None) -> str:
+def footer(assessment: Assessment, decision_id: int | None) -> str:
     parts = [f"decision {decision_id}" if decision_id is not None else "decision not recorded"]
     if assessment.llm is not None:
         tokens = assessment.llm.input_tokens + assessment.llm.output_tokens
@@ -162,7 +162,7 @@ def render(
     sections.append(overrides_block(override_lines))
     sections.append("\n".join(needs_lines(policy, tier, approvals, meta.approver_name)))
     sections.append(_signal_table(assessment.signals))
-    sections.append(_footer(assessment, meta.decision_id))
+    sections.append(footer(assessment, meta.decision_id))
     return "\n\n".join(sections) + "\n"
 
 

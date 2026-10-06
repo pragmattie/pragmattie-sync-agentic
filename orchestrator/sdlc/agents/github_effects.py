@@ -105,11 +105,11 @@ class Effects:
         return self._write(f"{key}:{value}", lambda: self._set_prefixed(number, key, value, colour))
 
     def add_label_if_absent(
-        self, number: int, name: str, colour: str = DIMENSION_COLOUR
+        self, number: int, name: str, colour: str = DIMENSION_COLOUR, description: str | None = None
     ) -> dict[str, str]:
         def action() -> None:
             if name not in self.read_labels(number):
-                self._add(number, name, colour)
+                self._add(number, name, colour, description)
 
         return self._write(f"add {name}", action)
 
@@ -129,10 +129,13 @@ class Effects:
         if wanted not in current:
             self._add(number, wanted, colour)
 
-    def _add(self, number: int, name: str, colour: str) -> None:
+    def _add(self, number: int, name: str, colour: str, description: str | None = None) -> None:
         existing = {label["name"] for label in self.gh.paginate("/repos/{repo}/labels")}
         if name not in existing:
-            self.gh.post("/repos/{repo}/labels", {"name": name, "color": colour})
+            label = {"name": name, "color": colour}
+            if description:
+                label["description"] = description
+            self.gh.post("/repos/{repo}/labels", label)
         self.gh.post(f"/repos/{{repo}}/issues/{number}/labels", {"labels": [name]})
 
     def _remove(self, number: int, name: str) -> None:

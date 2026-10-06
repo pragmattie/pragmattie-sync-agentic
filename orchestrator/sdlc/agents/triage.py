@@ -9,14 +9,16 @@ The agent only proposes: it writes nothing to GitHub or the database. ``to_decis
 the caller what it needs to record the decision.
 """
 
+import json
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
-from sdlc.agents.llm import LLMError, LLMResult, StructuredLLM
-from sdlc.agents.pr_risk import prompt_hash
+from sdlc.agents.llm import LLMError, LLMResult, StructuredLLM, cost_of
+from sdlc.agents.pr_risk import CHARS_PER_TOKEN, prompt_hash
 from sdlc.config import get_settings
 from sdlc.modules import MODULE_DESCRIPTIONS
 from sdlc.similarity import SimilarIssue, similar_issues
@@ -203,6 +205,40 @@ def assess(
         llm=result,
         model=result.model,
     )
+
+
+def failure(llm: StructuredLLM, message: str) -> Assessment:
+    """A failed run (status ``error``) for an exception raised around ``assess``."""
+    return _failed(llm, None, [], "error", message)
+
+
+def dry_run(
+    db: Session,
+    *,
+    llm: StructuredLLM,
+    title: str,
+    body: str | None,
+    labels: list[str],
+    number: int | None = None,
+    candidate_source: str | None = None,
+) -> dict[str, Any]:
+    """The exact request ``assess`` would send and its cost ceiling, without calling anything."""
+    similar = similar_issues(
+        db,
+        title,
+        body,
+        exclude_number=number,
+        limit=SIMILAR_ISSUES_SHOWN,
+        source=candidate_source,
+    )
+    user = build_prompt(title, body, labels, similar)
+    request = llm.request_kwargs(SYSTEM_PROMPT, user, SCHEMA, None)
+    prompt_chars = len(SYSTEM_PROMPT) + len(user) + len(json.dumps(SCHEMA))
+    prompt_tokens = math.ceil(prompt_chars / CHARS_PER_TOKEN)
+    return {
+        "request": request,
+        "max_cost_usd": cost_of(llm.model, prompt_tokens, llm.max_tokens, 0, 0),
+    }
 
 
 def _failed(

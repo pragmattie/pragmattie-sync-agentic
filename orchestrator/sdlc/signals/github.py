@@ -103,28 +103,30 @@ class Collector:
     def collect_issues(self) -> int:
         count = 0
         for item in self.client.paginate("/repos/{repo}/issues", state="all"):
-            labels = labels_of(item)
-            if "pull_request" in item or "incident" in labels:
+            if "pull_request" in item or "incident" in labels_of(item):
                 continue
-            assignee = self._engineer(item.get("assignee"))
-            issue = self._row(Issue, f"issue-{item['number']}")
-            issue.number = item["number"]
-            issue.title = item["title"][:300]
-            issue.module = labels.get("module")
-            issue.type = labels.get("type", "feature")
-            issue.priority = labels.get("priority")
-            issue.epic = labels.get("epic")
-            issue.estimate_points = _points(labels.get("points"))
-            issue.state = item["state"]
-            issue.created_at = parse_time(item["created_at"])
-            issue.closed_at = parse_time(item.get("closed_at"))
-            issue.actual_days = (
-                _days(issue.created_at, issue.closed_at) if issue.closed_at else None
-            )
-            issue.assignee = assignee
+            self.collect_issue(item)
             count += 1
         self.db.flush()
         return count
+
+    def collect_issue(self, item: dict) -> Issue:
+        """Store or update one issue from its list entry, with its current dimension labels."""
+        labels = labels_of(item)
+        issue = self._row(Issue, f"issue-{item['number']}")
+        issue.number = item["number"]
+        issue.title = item["title"][:300]
+        issue.module = labels.get("module")
+        issue.type = labels.get("type", "feature")
+        issue.priority = labels.get("priority")
+        issue.epic = labels.get("epic")
+        issue.estimate_points = _points(labels.get("points"))
+        issue.state = item["state"]
+        issue.created_at = parse_time(item["created_at"])
+        issue.closed_at = parse_time(item.get("closed_at"))
+        issue.actual_days = _days(issue.created_at, issue.closed_at) if issue.closed_at else None
+        issue.assignee = self._engineer(item.get("assignee"))
+        return issue
 
     def collect_pull_requests(self) -> int:
         count = 0

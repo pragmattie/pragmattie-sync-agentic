@@ -1,5 +1,7 @@
 """The shared poll loop: score each new commit once, then keep the ``risk-gate`` in step.
 
+The triage agent (``sdlc.issue_runner``) runs in the same loop, after it, in the same mode.
+
 ``ORCHESTRATOR_MODE`` switches all of it. ``off`` does nothing at all, not even a read. ``shadow``
 does everything, but the status always passes and says what it would be. ``enforce`` makes the
 gate real. It fails closed: an exception on one pull request leaves that PR as it was (gated),
@@ -25,7 +27,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from sdlc import agent_runs, gate_status
-from sdlc.agents import overrides, pr_risk
+from sdlc.agents import overrides, pr_risk, triage_comment
 from sdlc.agents.comment import Meta, comment_head, refresh, render, retier
 from sdlc.agents.gate import Approvals, Gate, evaluate
 from sdlc.agents.github_effects import Effects
@@ -93,13 +95,13 @@ class Runner:
         summary = {"mode": self.mode, "prs": 0, "assessed": 0, "failed": 0, "errors": 0}
         with Session(self.engine or get_engine()) as db:
             collector = Collector(db, self.gh)
-            self._guarded(db, summary, "run records", lambda: self._record_runs(db, now))
+            guarded(db, summary, "run records", lambda: self._record_runs(db, now))
             listed = self.gh.paginate("/repos/{repo}/pulls", state="open")
             for item in listed:
                 if item.get("draft"):
                     continue
                 summary["prs"] += 1
-                self._guarded(
+                guarded(
                     db,
                     summary,
                     f"PR #{item['number']}",
@@ -108,7 +110,7 @@ class Runner:
             numbers = {item["number"] for item in listed}
             for number in sorted((self._open or set()) - numbers):
                 self._posted.pop(number, None)
-                self._guarded(
+                guarded(
                     db,
                     summary,
                     f"PR #{number} (left the open list)",
@@ -116,16 +118,6 @@ class Runner:
                 )
             self._open = numbers
         return summary
-
-    def _guarded(self, db: Session, summary: dict, what: str, step: Callable[[], Any]) -> None:
-        """Run one step and commit it; an exception is logged, counted and rolled back."""
-        try:
-            step()
-            db.commit()
-        except Exception:
-            db.rollback()
-            summary["errors"] += 1
-            log.exception("%s failed; it is left as it was", what)
 
     def _record_runs(self, db: Session, now: datetime) -> None:
         """Record the implementer's and reviewer's runs from the workflow bot's new comments."""
@@ -152,7 +144,7 @@ class Runner:
         pr = collector.collect_pull_request(item)
         rows = decisions_for(db, pr_risk.AGENT, head_sha=sha, **_subject(pr))
         decision = next((row for row in reversed(rows) if row.status == "ok"), None)
-        if decision is None and _may_attempt(rows, now):
+        if decision is None and may_attempt(rows, now):
             assessment = self._assess_commit(db, pr, item, sha, len(rows) + 1, now)
             summary["assessed"] += 1
             summary["failed"] += 0 if assessment.ok else 1
@@ -310,7 +302,7 @@ class Runner:
         """Rule on each command not ruled on before, in order, and record each as an audit row."""
         ruled = {ruling.comment_id for ruling in rulings}
         new: list[overrides.Ruling] = []
-        for command in overrides.parse_commands(comments, [COMMENT_MARKER]):
+        for command in overrides.parse_commands(comments, [COMMENT_MARKER, triage_comment.MARKER]):
             if command.comment_id in ruled:
                 continue
             current = overrides.effective_tier(agent_tier, floor, [*rulings, *new], sha)
@@ -380,7 +372,18 @@ def _subject(pr: PullRequest) -> dict[str, Any]:
     return {"subject_type": "pr", "subject_source": pr.source, "subject_id": pr.number}
 
 
-def _may_attempt(rows: list[AgentDecision], now: datetime) -> bool:
+def guarded(db: Session, summary: dict, what: str, step: Callable[[], Any]) -> None:
+    """Run one step and commit it; an exception is logged, counted and rolled back."""
+    try:
+        step()
+        db.commit()
+    except Exception:
+        db.rollback()
+        summary["errors"] += 1
+        log.exception("%s failed; it is left as it was", what)
+
+
+def may_attempt(rows: list[AgentDecision], now: datetime) -> bool:
     """None tried yet, or fewer than the limit and the last at least five minutes ago."""
     if not rows:
         return True
@@ -428,8 +431,12 @@ def run(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     polls: int | None = None,
+    issue_runner: Any = None,
 ) -> None:
-    """Poll every ``poll_seconds``, forever unless ``polls`` is given. Nothing stops the loop."""
+    """Poll every ``poll_seconds``, forever unless ``polls`` is given. Nothing stops the loop.
+
+    The triage agent's ``issue_runner``, when given, polls after the PR risk agent each time.
+    """
     stats_at = clock()
     limited_logged = None
     done = 0
@@ -446,6 +453,11 @@ def run(
                 log.info("Poll: %s", runner.poll_once())
             except Exception:
                 log.exception("The poll failed; the next one runs as usual")
+            if issue_runner is not None:
+                try:
+                    log.info("Issue poll: %s", issue_runner.poll_once())
+                except Exception:
+                    log.exception("The issue poll failed; the next one runs as usual")
         if clock() - stats_at >= STATS_EVERY_SECONDS:
             stats_at = clock()
             log.info(
@@ -561,7 +573,10 @@ def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
     if args.command == "run":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         log.info("Polling every %ss in %s mode", settings.poll_seconds, runner.mode)
-        run(runner, settings.poll_seconds)
+        from sdlc import issue_runner
+
+        issues = issue_runner.build(runner.mode, gh=runner.gh, engine=runner.engine)
+        run(runner, settings.poll_seconds, issue_runner=issues)
         return 0
     if args.command == "once":
         print(json.dumps(runner.poll_once()))
