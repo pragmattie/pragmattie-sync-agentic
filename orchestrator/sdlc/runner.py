@@ -349,7 +349,7 @@ def _dry_run(runner: Runner, db: Session, number: int) -> int:
 def _try(runner: Runner, db: Session, number: int) -> int:
     item = runner.effects.read_pr(number)
     sha = item["head"]["sha"]
-    pr = _stored_pr(db, Collector(db, runner.gh), item)
+    pr = Collector(db, runner.gh).collect_pull_request(item)  # fresh, even when stored
     assessment = runner._assess(db, pr, item, utcnow())
     highest = db.scalar(
         select(func.max(AgentDecision.attempt)).where(

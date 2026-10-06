@@ -4,13 +4,14 @@ from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sdlc import runner as runner_module
 from sdlc.config import Settings
 from sdlc.db import Base
 from sdlc.runner import Runner, main, run
+from sdlc.signals.github import Collector
 from sdlc.tables import AgentDecision, PullRequest
 from sdlc.tiers import load_policy
 from tests.fakes import FakeGitHub, FakeLLM
@@ -106,6 +107,39 @@ def test_try_yes_makes_one_call_records_one_trial_row_and_writes_nothing_to_gith
     runner.poll_once(datetime(2026, 10, 6, 12, 0))
     assert len(llm.calls) == 2
     assert [(r.trigger, r.attempt) for r in _decisions(engine)] == [("trial", 4), ("poll", 1)]
+
+
+def _counts(engine):
+    with Session(engine) as db:
+        return {
+            table.name: db.scalar(select(func.count()).select_from(table))
+            for table in Base.metadata.sorted_tables
+        }
+
+
+def test_try_collects_a_stored_pr_afresh_and_writes_only_it_and_one_trial_row(
+    runner, gh, llm, engine, capsys
+):
+    with Session(engine) as db:
+        Collector(db, gh).collect_pull_request({"number": 1})
+        db.commit()
+    gh.files[1] = [{"filename": "apps/api/app/routers/pipeline.py"}]  # changed since it was stored
+    gh.prs[1]["additions"] = 40
+    before = _counts(engine)
+    gh.requests.clear()
+
+    assert main(["try", "1", "--yes"], runner=runner) == 0
+    assert "Tier: T2" in capsys.readouterr().out  # scored from what GitHub has now
+    assert gh.writes() == []
+    after = _counts(engine)
+    assert {name: after[name] - before[name] for name in after if after[name] != before[name]} == {
+        "sdlc_agent_decisions": 1
+    }
+    [row] = _decisions(engine)
+    assert (row.trigger, row.tier) == ("trial", "T2")
+    with Session(engine) as db:
+        [pr] = db.scalars(select(PullRequest))
+        assert (pr.number, pr.additions, pr.module) == (1, 40, "pipeline")
 
 
 def test_try_twice_records_two_trial_rows(runner, engine):
