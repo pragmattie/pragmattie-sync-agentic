@@ -5,8 +5,9 @@ printed, logged or put in an error message.
 
 Every GET is conditional: the client remembers each response's ``ETag`` per accept header, URL
 and query, sends it back as ``If-None-Match``, and on a ``304`` returns the remembered body. A 304
-doesn't count against GitHub's rate limit. When GitHub says the limit is spent, the client raises
-``RateLimited`` and refuses every request itself, without calling GitHub, until the limit resets.
+doesn't count against GitHub's rate limit. When a response says no requests are left, the client
+keeps its body and refuses every later request itself, without calling GitHub, until the limit
+resets. A 403 or 429 that says the limit is spent raises ``RateLimited``.
 """
 
 from collections.abc import Callable
@@ -93,8 +94,9 @@ class GitHubClient:
             raise RateLimited(self.limited_until)
         response = self._http.request(method, path, **kwargs)
         self.sent += 1
-        if _limit_spent(response):
+        if response.headers.get("x-ratelimit-remaining") == "0" or _limit_spent(response):
             self.limited_until = self._reset_time(response)
+        if _limit_spent(response):
             raise RateLimited(self.limited_until)
         if response.is_error:
             raise GitHubError(f"GitHub {response.status_code} on {path}: {_message(response)}")
@@ -166,12 +168,12 @@ class GitHubClient:
 
 
 def _limit_spent(response: httpx.Response) -> bool:
-    """Whether the response says the rate limit is spent: none left, or a 403/429 saying so."""
-    if response.headers.get("x-ratelimit-remaining") == "0":
-        return True
+    """Whether a 403 or 429 refused the request because the rate limit is spent."""
     if response.status_code not in (403, 429):
         return False
-    return response.status_code == 429 or "rate limit" in _message(response).lower()
+    if response.status_code == 429 or response.headers.get("x-ratelimit-remaining") == "0":
+        return True
+    return "rate limit" in _message(response).lower()
 
 
 def _message(response: httpx.Response) -> str:

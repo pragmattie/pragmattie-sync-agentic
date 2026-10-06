@@ -208,13 +208,41 @@ NOON = datetime(2026, 10, 6, 12, 0)
 RESET = int(datetime(2026, 10, 6, 12, 30, tzinfo=github_client.UTC).timestamp())
 
 
+def test_a_success_with_none_left_keeps_its_body_and_later_calls_are_refused_locally():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"n": len(calls)},
+            headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)},
+        )
+
+    clock = Clock(NOON)
+    client = _client(handler, now=clock)
+    assert client.get("/x") == {"n": 1}
+    assert client.limited_until == datetime(2026, 10, 6, 12, 30)
+    with pytest.raises(github_client.RateLimited) as raised:
+        client.post("/y", {})
+    assert raised.value.until == datetime(2026, 10, 6, 12, 30)
+    assert calls == ["/x"]
+    assert client.sent == 1
+
+    clock.moment = datetime(2026, 10, 6, 12, 30)
+    assert client.get("/x") == {"n": 2}  # the reset has passed, so GitHub is asked again
+    assert calls == ["/x", "/x"]
+
+
 def test_a_spent_limit_raises_and_later_calls_are_refused_locally_until_the_reset():
     calls = []
 
     def handler(request):
         calls.append(request.url.path)
         return httpx.Response(
-            200, json={}, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)}
+            403,
+            json={"message": "API rate limit exceeded for installation."},
+            headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)},
         )
 
     clock = Clock(NOON)
@@ -222,7 +250,6 @@ def test_a_spent_limit_raises_and_later_calls_are_refused_locally_until_the_rese
     with pytest.raises(github_client.RateLimited) as raised:
         client.get("/x")
     assert raised.value.until == datetime(2026, 10, 6, 12, 30)
-    assert client.limited_until == datetime(2026, 10, 6, 12, 30)
     with pytest.raises(github_client.RateLimited):
         client.post("/y", {})
     assert calls == ["/x"]
@@ -232,6 +259,21 @@ def test_a_spent_limit_raises_and_later_calls_are_refused_locally_until_the_rese
     with pytest.raises(github_client.RateLimited):  # the limit is still spent at GitHub
         client.get("/x")
     assert calls == ["/x", "/x"]
+
+
+def test_an_error_with_none_left_is_an_ordinary_error_that_still_sets_the_limit():
+    def handler(request):
+        return httpx.Response(
+            404,
+            json={"message": "Not Found"},
+            headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)},
+        )
+
+    client = _client(handler, now=Clock(NOON))
+    with pytest.raises(GitHubError) as raised:
+        client.get("/x")
+    assert not isinstance(raised.value, github_client.RateLimited)
+    assert client.limited_until == datetime(2026, 10, 6, 12, 30)
 
 
 def test_a_403_saying_the_limit_is_spent_raises_rate_limited():
