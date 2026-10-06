@@ -289,6 +289,21 @@ def _fallback(
     )
 
 
+def failure(
+    db: Session,
+    pr: PullRequest,
+    *,
+    llm: StructuredLLM,
+    policy: Policy,
+    message: str,
+    now: datetime | None = None,
+) -> Assessment:
+    """A failed run (status ``error``) for an exception ``assess`` didn't turn into a fallback."""
+    features = compute_features(db, pr, now)
+    score = score_features(features)
+    return _fallback(policy, pr, score, features, llm, None, "error", message)
+
+
 def to_decision_fields(assessment: Assessment) -> dict[str, Any]:
     """The keyword arguments ``record_decision`` needs for this assessment, besides the subject."""
     a = assessment
