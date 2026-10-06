@@ -134,3 +134,142 @@ def test_parse_time():
     assert parse_time("2026-09-01T12:15:00+02:00") == datetime(2026, 9, 1, 10, 15)
     assert parse_time(None) is None
     assert parse_time("") is None
+
+
+def test_delete_and_get_text_send_the_right_method_and_accept_header():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, request.headers["Accept"]))
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, text="diff --git a/x b/x\n")
+
+    client = _client(handler)
+    assert client.get_text("/repos/{repo}/pulls/3") == "diff --git a/x b/x\n"
+    assert client.delete("/repos/{repo}/issues/3/labels/tier:T1") is None
+    assert seen == [
+        ("GET", "/repos/acme/widgets/pulls/3", "application/vnd.github.diff"),
+        ("DELETE", "/repos/acme/widgets/issues/3/labels/tier:T1", "application/vnd.github+json"),
+    ]
+
+
+def test_an_etag_is_sent_back_and_a_304_returns_the_cached_body():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("If-None-Match"))
+        if request.headers.get("If-None-Match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, json={"n": 1}, headers={"ETag": '"v1"'})
+
+    client = _client(handler)
+    assert client.get("/repos/{repo}/pulls", state="open", sort="created") == {"n": 1}
+    assert client.get("/repos/{repo}/pulls", sort="created", state="open") == {"n": 1}
+    assert seen == [None, '"v1"']
+    assert (client.sent, client.not_modified) == (2, 1)
+
+
+def test_the_etag_cache_keeps_queries_and_accept_headers_apart():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("If-None-Match"))
+        return httpx.Response(200, json=[], headers={"ETag": '"v1"'})
+
+    client = _client(handler)
+    client.get("/x", state="open")
+    client.get("/x", state="closed")
+    client.get_text("/x")
+    assert seen == [None, None, None]
+
+
+def test_each_page_of_paginate_is_conditional():
+    def handler(request):
+        if request.headers.get("If-None-Match"):
+            return httpx.Response(304)
+        return httpx.Response(200, json=[{"n": 1}], headers={"ETag": '"p1"'})
+
+    client = _client(handler)
+    assert client.paginate("/x") == [{"n": 1}]
+    assert client.paginate("/x") == [{"n": 1}]
+    assert client.not_modified == 1
+
+
+class Clock:
+    def __init__(self, moment):
+        self.moment = moment
+
+    def __call__(self):
+        return self.moment
+
+
+NOON = datetime(2026, 10, 6, 12, 0)
+RESET = int(datetime(2026, 10, 6, 12, 30, tzinfo=github_client.UTC).timestamp())
+
+
+def test_a_spent_limit_raises_and_later_calls_are_refused_locally_until_the_reset():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(
+            200, json={}, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)}
+        )
+
+    clock = Clock(NOON)
+    client = _client(handler, now=clock)
+    with pytest.raises(github_client.RateLimited) as raised:
+        client.get("/x")
+    assert raised.value.until == datetime(2026, 10, 6, 12, 30)
+    assert client.limited_until == datetime(2026, 10, 6, 12, 30)
+    with pytest.raises(github_client.RateLimited):
+        client.post("/y", {})
+    assert calls == ["/x"]
+    assert client.sent == 1
+
+    clock.moment = datetime(2026, 10, 6, 12, 30)
+    with pytest.raises(github_client.RateLimited):  # the limit is still spent at GitHub
+        client.get("/x")
+    assert calls == ["/x", "/x"]
+
+
+def test_a_403_saying_the_limit_is_spent_raises_rate_limited():
+    def handler(request):
+        return httpx.Response(
+            403,
+            json={"message": "API rate limit exceeded for installation."},
+            headers={"x-ratelimit-reset": str(RESET)},
+        )
+
+    client = _client(handler, now=Clock(NOON))
+    with pytest.raises(github_client.RateLimited):
+        client.get("/x")
+    assert client.limited_until == datetime(2026, 10, 6, 12, 30)
+
+
+def test_a_secondary_limit_uses_retry_after_and_a_missing_reset_waits_a_minute():
+    responses = [
+        httpx.Response(429, json={"message": "slow down"}, headers={"retry-after": "120"}),
+        httpx.Response(403, json={"message": "You have exceeded a secondary rate limit."}),
+    ]
+    client = _client(lambda request: responses.pop(0), now=Clock(NOON))
+    with pytest.raises(github_client.RateLimited):
+        client.get("/x")
+    assert client.limited_until == datetime(2026, 10, 6, 12, 2)
+
+    client.limited_until = None
+    with pytest.raises(github_client.RateLimited):
+        client.get("/x")
+    assert client.limited_until == datetime(2026, 10, 6, 12, 1)
+
+
+def test_a_plain_403_is_an_ordinary_error():
+    def handler(request):
+        return httpx.Response(403, json={"message": "Resource not accessible by integration"})
+
+    client = _client(handler)
+    with pytest.raises(GitHubError) as raised:
+        client.get("/x")
+    assert not isinstance(raised.value, github_client.RateLimited)
+    assert client.limited_until is None

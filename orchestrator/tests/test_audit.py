@@ -197,3 +197,27 @@ def test_the_module_never_updates_or_deletes_a_row(module):
     source = inspect.getsource(module)
 
     assert not re.search(r"\b(update|delete)\(", source, re.I)
+
+
+def test_record_decisions_default_time_is_utc_whatever_the_local_zone(db, monkeypatch):
+    import time
+    from datetime import UTC
+
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        row = record_decision(
+            db,
+            agent="pr_risk",
+            agent_version="v1",
+            subject_type="pr",
+            subject_source="github",
+            subject_id=1,
+            trigger="poll",
+        )
+        utc = datetime.now(UTC).replace(tzinfo=None)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    assert abs(row.created_at - utc) < timedelta(seconds=2)
+    assert row.created_at.microsecond == 0

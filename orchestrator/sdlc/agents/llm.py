@@ -10,7 +10,8 @@ What it enforces:
 - SDK timeouts, rate limits and other API or connection errors become ``LLMError`` with the
   kinds ``timeout``, ``rate_limited`` and ``error``. The SDK client retries twice by itself first.
 - Every result carries its tokens, cache use, latency, request id and cost, so each call can be
-  audited and its cost reported.
+  audited and its cost reported. After a retry, ``latency_ms`` is the last attempt's alone, while
+  the tokens and the cost cover every attempt.
 
 No sampling parameter (``temperature``, ``top_p``, ``top_k``) is ever sent: Sonnet 5 rejects them
 with a 400, and the schema, not sampling, is what keeps the answers consistent.
