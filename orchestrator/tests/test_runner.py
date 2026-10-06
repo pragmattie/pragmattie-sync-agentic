@@ -444,7 +444,7 @@ def test_a_tier_t3_comment_on_a_t1_pr_raises_label_gate_and_comment(gh, engine, 
     assert "raised from T1 by a person" in gh.risk_comment(1)["body"]
 
 
-def test_a_rejected_lowering_is_an_audit_row_and_changes_nothing_else(gh, engine, policy):
+def test_a_rejected_lowering_is_shown_in_the_comment_and_keeps_the_tier(gh, engine, policy):
     gh.add_pr(1, SHA, files=PIPELINE)
     runner = _runner(gh, engine, policy)
     runner.poll_once(NOON)
@@ -457,10 +457,22 @@ def test_a_rejected_lowering_is_an_audit_row_and_changes_nothing_else(gh, engine
     assert (row.status, row.tier) == ("rejected", None)
     assert row.human_override["why"].startswith("Rejected: a policy floor keeps this PR at T2")
     assert row.output["floor"] == "T2"
-    assert gh.writes() == []
     assert gh.issue_labels[1] == ["tier:T2"]
-    assert gh.risk_comment(1)["body"] == body
     assert _gate(engine, 1).tier == "T2"
+    # only the comment changes: the ruling is shown, the tier is not
+    [write] = gh.writes()
+    assert write[0] == "PATCH"
+    after = gh.risk_comment(1)["body"]
+    assert after != body
+    assert "## Risk review: T2" in after and "by a person" not in after
+    assert (
+        '- `/tier T0` by @pat "it is a really small change, honestly": Rejected: a policy floor '
+        "keeps this PR at T2 or above." in after
+    )
+
+    gh.requests.clear()  # a ruling already shown is not written again
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.writes() == []
 
 
 def test_a_lowering_covers_only_its_commit(gh, engine, policy):

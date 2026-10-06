@@ -231,7 +231,8 @@ class Runner:
         rulings = _rulings(db, pr)
         floor = overrides.floor_of(self.policy, pr)
         before = overrides.effective_tier(decision.tier, floor, rulings, sha)
-        rulings += self._rule_new(db, pr, sha, decision.tier, floor, rulings, comments, now)
+        new = self._rule_new(db, pr, sha, decision.tier, floor, rulings, comments, now)
+        rulings += new
         tier = overrides.effective_tier(decision.tier, floor, rulings, sha)
         labels = [label["name"] for label in item.get("labels") or []]
         if [name for name in labels if name.startswith("tier:")] != [f"tier:{tier}"]:
@@ -257,7 +258,8 @@ class Runner:
         body = (risk_comment.get("body") or "") if risk_comment else ""
         if risk_comment and comment_head(body) == sha:
             refreshed = body
-            if tier != before:
+            # every new ruling, accepted or rejected, is shown in the overrides block
+            if tier != before or new:
                 refreshed = retier(
                     body,
                     self.policy,
