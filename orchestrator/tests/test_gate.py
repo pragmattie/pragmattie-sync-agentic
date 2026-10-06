@@ -129,7 +129,7 @@ def test_a_failed_risk_agent_passes_in_shadow_mode_saying_it_would_fail():
 
 
 def test_descriptions_are_cut_to_the_status_limit():
-    tier = "T3-with-a-long-enough-name-to-need-the-cut"
+    tier = "T3-with-a-name-long-enough-to-need-the-cut-here"
     policy = replace(POLICY, tiers={**POLICY.tiers, tier: POLICY.tiers["T3"]})
 
     gate = evaluate(policy, tier, ok=True, approvals=Approvals(), mode="shadow")
