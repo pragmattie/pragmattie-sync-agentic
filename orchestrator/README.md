@@ -28,6 +28,12 @@ reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer
 workflows leave in their comments (`<!-- pragmattie-run {...} -->` and
 `<!-- pragmattie-review {...} -->`) and records each run once.
 
+T3 needs two people, so a simulated second approver (`policies/approvers.yaml`, `sdlc/approver.py`)
+fills the second seat. The runner asks it once for each pull request whose tier it covers, and
+never approves anything itself: `python -m sdlc.approver pending` lists what is waiting, and the
+repository owner runs `python -m sdlc.approver approve <pr> [--note ...]` to approve one. Every
+row in `sdlc_approvals` is simulated and is never shown as a person's approval.
+
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.

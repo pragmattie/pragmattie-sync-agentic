@@ -36,8 +36,8 @@ MODULES = (
 SOURCES = ("synthetic", "github")
 
 
-def _source(*, index: bool = False) -> Mapped[str]:
-    return mapped_column(String(20), default="synthetic", server_default="synthetic", index=index)
+def _source(*, index: bool = False, default: str = "synthetic") -> Mapped[str]:
+    return mapped_column(String(20), default=default, server_default=default, index=index)
 
 
 def _flag() -> Mapped[bool]:
@@ -252,5 +252,35 @@ class GateStatus(Base):
     description: Mapped[str] = mapped_column(String(140))
     mode: Mapped[str] = mapped_column(String(10))
     updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+    pull_request: Mapped[PullRequest] = relationship()
+
+
+class Approval(Base):
+    """A request for the simulated second approver to approve a pull request, and its answer.
+
+    ``source`` is always "simulated": the approver is not a person, it approves only when the
+    repository owner tells it to, and its approval must never be shown as a human approval.
+    """
+
+    __tablename__ = "sdlc_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "pull_request_id", "approver_id", name="uq_sdlc_approvals_pull_request_approver"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = _source(default="simulated")
+    pull_request_id: Mapped[int] = mapped_column(ForeignKey("sdlc_pull_requests.id"), index=True)
+    approver_id: Mapped[str] = mapped_column(String(60))
+    tier: Mapped[str] = mapped_column(String(2))
+    status: Mapped[str] = mapped_column(
+        String(10), default="pending", server_default="pending", index=True
+    )
+    reason: Mapped[str | None] = mapped_column(String(300))
+    note: Mapped[str | None] = mapped_column(String(300))
+    requested_at: Mapped[datetime] = mapped_column(DateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     pull_request: Mapped[PullRequest] = relationship()

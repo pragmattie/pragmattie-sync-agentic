@@ -1,15 +1,19 @@
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sdlc import approver as approver_module
+from sdlc import runner as runner_module
 from sdlc.agents.llm import LLMError
 from sdlc.agents.signoff import WINDOW_AGENT
+from sdlc.approver import load_approvers
 from sdlc.db import Base
 from sdlc.runner import Runner
-from sdlc.tables import AgentDecision, GateStatus, PullRequest
+from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
 from sdlc.tiers import load_policy
 from tests.fakes import WORKFLOW_BOT, FakeGitHub, FakeLLM
 
@@ -18,6 +22,9 @@ SHA = "a" * 40
 NEW_SHA = "b" * 40
 T1_SIZE = 200  # additions that land the default fake PR in T1
 PIPELINE = ("apps/api/app/routers/pipeline.py",)  # floored at T2
+MIGRATION = ("orchestrator/migrations/versions/0009_more.py",)  # floored at T3
+# Read only through an explicit path until a person moves it to orchestrator/policies/.
+APPROVERS = Path(__file__).resolve().parents[1] / "policies" / "approvers.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -36,8 +43,14 @@ def gh():
     return FakeGitHub()
 
 
-def _runner(gh, engine, policy, mode="enforce", llm=None):
-    return Runner(gh, llm or FakeLLM(), policy, mode, engine=engine)
+@pytest.fixture(scope="module")
+def approver():
+    [simulated] = load_approvers(APPROVERS)
+    return simulated
+
+
+def _runner(gh, engine, policy, mode="enforce", llm=None, approver=None):
+    return Runner(gh, llm or FakeLLM(), policy, mode, engine=engine, approver=approver)
 
 
 def _rows(engine, agent="pr_risk"):
@@ -507,3 +520,80 @@ def test_each_comment_is_ruled_on_once_across_polls(gh, engine, policy):
     runner.poll_once(NOON + timedelta(minutes=4))
     assert len(_overrides(engine)) == 3
     assert gh.issue_labels[1] == ["tier:T3"]
+
+
+def _approvals(engine):
+    with Session(engine) as db:
+        rows = db.scalars(select(Approval).order_by(Approval.id))
+        return [(row.pull_request.number, row.tier, row.status, row.decided_at) for row in rows]
+
+
+def test_a_t3_pr_gets_one_request_across_polls_and_commits(gh, engine, policy, approver):
+    gh.add_pr(1, SHA, files=MIGRATION)
+    gh.add_pr(2, NEW_SHA, files=PIPELINE)  # T2: not covered
+    runner = _runner(gh, engine, policy, approver=approver)
+    runner.poll_once(NOON)
+    assert gh.issue_labels[1] == ["tier:T3"]
+    for minute in (1, 2):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    gh.push(1, "c" * 40)
+    runner.poll_once(NOON + timedelta(minutes=3))
+    assert _approvals(engine) == [(1, "T3", "pending", None)]
+    body = gh.risk_comment(1)["body"]
+    assert "- Simulated second approval: **waiting** (Simulated second approver," in body
+
+
+def test_a_tier_t3_raise_on_a_t1_pr_creates_one_request(gh, engine, policy, approver):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy, approver=approver)
+    runner.poll_once(NOON)
+    assert _approvals(engine) == []
+    gh.comment(1, "/tier T3 this touches the forecast maths")
+    for minute in (1, 2):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    assert _approvals(engine) == [(1, "T3", "pending", None)]
+    assert (
+        "Simulated second approval: **waiting** (Simulated second approver,"
+        in (gh.risk_comment(1)["body"])
+    )
+
+
+def test_enforce_passes_t3_only_with_signoff_qa_and_the_simulated_approval(
+    gh, engine, policy, approver
+):
+    gh.add_pr(1, SHA, files=MIGRATION)
+    runner = _runner(gh, engine, policy, approver=approver)
+    runner.poll_once(NOON)
+    assert gh.statuses[-1]["description"] == (
+        "T3: waiting for human sign-off, manual QA, simulated second approval"
+    )
+    with Session(engine) as db:  # the owner's explicit instruction, as the CLI would carry out
+        pr = db.scalar(select(PullRequest).where(PullRequest.number == 1))
+        approver_module.approve(db, pr, approver, now=NOON + timedelta(minutes=1))
+        db.commit()
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.statuses[-1]["description"] == "T3: waiting for human sign-off, manual QA"
+    assert "- Simulated second approval: **approved**" in gh.risk_comment(1)["body"]
+
+    _tick(gh, 1)
+    runner.poll_once(NOON + timedelta(minutes=3))
+    assert gh.statuses[-1]["description"] == "T3: waiting for manual QA"
+    comment = gh.risk_comment(1)
+    comment["body"] = comment["body"].replace("- [ ] **Manual QA done", "- [x] **Manual QA done")
+    runner.poll_once(NOON + timedelta(minutes=4))
+    assert gh.statuses[-1]["state"] == "success"
+    assert _gate(engine, 1).state == "success"
+
+
+def test_nothing_in_the_runner_ever_approves(gh, engine, policy, approver):
+    assert not hasattr(runner_module, "approve")
+    gh.add_pr(1, SHA, files=MIGRATION)
+    runner = _runner(gh, engine, policy, approver=approver)
+    _review_comment(gh, 1, SHA)
+    for minute in (0, 1, 61, 120):
+        if minute == 1:
+            _tick(gh, 1)
+            gh.review(1, SHA)
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    assert _approvals(engine) == [(1, "T3", "pending", None)]
+    assert gh.statuses[-1]["description"].endswith("simulated second approval")

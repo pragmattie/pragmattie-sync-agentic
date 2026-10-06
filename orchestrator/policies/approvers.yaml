@@ -1,0 +1,11 @@
+# Approvers: who can fill a seat a tier needs when there is no second person to fill it.
+#
+# T3 needs two people and the project has one, so a simulated approver fills the second seat and
+# T3 work is not locked out. It is manual only: it approves nothing by itself, only when the
+# repository owner (`controlled_by`) runs `python -m sdlc.approver approve <pr>`. Every approval it
+# gives is stored and shown as simulated, never as a real person's.
+approvers:
+  - id: simulated-second-human
+    name: Simulated second approver
+    controlled_by: geoff
+    applies_to_tiers: [T3]

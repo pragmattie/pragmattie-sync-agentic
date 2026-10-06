@@ -10,6 +10,7 @@ from sdlc.db import Base
 from sdlc.tables import (
     MODULES,
     SOURCES,
+    Approval,
     CIRun,
     Deployment,
     Engineer,
@@ -196,6 +197,25 @@ def test_engineer_login_is_unique_within_a_source(session):
     session.commit()
 
     session.add(Engineer(login="ada", name="Ada"))
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_an_approval_is_simulated_and_unique_for_a_pr_and_approver(session):
+    pr = PullRequest(source="github", external_id="pr-1", title="Migration", created_at=OPENED)
+    session.add(pr)
+    session.flush()
+    first = Approval(pull_request_id=pr.id, approver_id="a", tier="T3", requested_at=OPENED)
+    session.add_all(
+        [
+            first,
+            Approval(pull_request_id=pr.id, approver_id="b", tier="T3", requested_at=OPENED),
+        ]
+    )
+    session.commit()
+    assert (first.source, first.status) == ("simulated", "pending")
+
+    session.add(Approval(pull_request_id=pr.id, approver_id="a", tier="T3", requested_at=OPENED))
     with pytest.raises(IntegrityError):
         session.commit()
 
