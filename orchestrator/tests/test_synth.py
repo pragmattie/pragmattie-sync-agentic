@@ -66,6 +66,25 @@ def _snapshot(session):
     )
 
 
+def test_builds_default_time_is_utc_whatever_the_local_zone(session, monkeypatch):
+    import time
+    from datetime import UTC
+
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        with mock.patch.object(synth, "_Builder") as builder:
+            synth.build(session)
+        utc = datetime.now(UTC).replace(tzinfo=None)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    now = builder.call_args.args[1]
+    assert abs(now - utc) < timedelta(seconds=2)
+    assert now.tzinfo is None
+    assert now.microsecond == 0
+
+
 @pytest.mark.parametrize("now", [EVEN_WEEK_NOW, ODD_WEEK_NOW], ids=["even-week", "odd-week"])
 def test_thirteen_sprints_start_on_even_week_mondays_and_the_last_contains_now(session, now):
     assert now.isocalendar().week % 2 == (0 if now is EVEN_WEEK_NOW else 1)
