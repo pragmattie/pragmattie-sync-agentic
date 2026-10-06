@@ -98,8 +98,16 @@ def _record(
 
 def record_run(db: Session, record: dict, comment: Mapping, source: str) -> bool:
     """Append an implementer run once; return whether a row was added. The caller commits."""
-    ok = record.get("outcome") == "success" and record.get("tests_passed") != "false"
-    error = None if ok else (record.get("error") or f"Outcome {record.get('outcome')!r}.")
+    outcome = record.get("outcome")
+    ok = outcome == "success" and record.get("tests_passed") != "false"
+    if ok:
+        error = None
+    elif record.get("error"):
+        error = record["error"]
+    elif outcome == "success":
+        error = "Tests failed."
+    else:
+        error = f"Outcome {outcome!r}."
     tier = record.get("tier")
     return _record(
         db,

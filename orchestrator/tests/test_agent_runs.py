@@ -204,6 +204,16 @@ def test_record_run_with_failing_tests_is_an_error(db):
     assert row.error == "3 tests failed in tests/test_audit.py"
 
 
+def test_record_run_with_failing_tests_and_no_error_text_says_tests_failed(db):
+    body = RUN_COMMENT.replace('"tests_passed":"true"', '"tests_passed":"false"')
+
+    record_run(db, parse_run(body), _comment(RUN_URL), "github")
+
+    [row] = list_decisions(db)
+    assert row.status == "error"
+    assert row.error == "Tests failed."
+
+
 def test_record_run_with_a_failed_outcome_is_an_error(db):
     body = RUN_COMMENT.replace('"outcome":"success"', '"outcome":"failure"')
 
