@@ -35,17 +35,14 @@ LLM_ERROR_KINDS = ("timeout", "rate_limited", "refused", "invalid_output", "erro
 OUTPUT_ATTEMPTS = 2
 
 # USD per million tokens: input, output, cache write (5-minute ephemeral), cache read.
-# Dated 2026-10-06. The claude-api skill could not be loaded when this was built, so these
-# figures were NOT checked against it: confirm them before relying on reported costs.
+# First-party rates, checked 2026-10-06 against Anthropic's model table.
+_SONNET_5 = {"input": 2.00, "output": 10.00, "cache_write": 2.50, "cache_read": 0.20}
+_HAIKU_4_5 = {"input": 1.00, "output": 5.00, "cache_write": 1.25, "cache_read": 0.10}
 PRICES_PER_MILLION: dict[str, dict[str, float]] = {
-    "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-sonnet-5-5": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-haiku-4-5-20251001": {
-        "input": 1.00,
-        "output": 5.00,
-        "cache_write": 1.25,
-        "cache_read": 0.10,
-    },
+    "claude-sonnet-5": _SONNET_5,
+    "claude-sonnet-5-5": _SONNET_5,
+    "claude-haiku-4-5-20251001": _HAIKU_4_5,
+    "claude-haiku-4-5": _HAIKU_4_5,
 }
 
 
@@ -126,15 +123,18 @@ class StructuredLLM:
         client = self._get_client()
         kwargs = self.request_kwargs(system, user, schema, effort)
         problem = ""
+        # Tokens from every attempt, so a retried answer reports all it cost.
+        spent = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         for _ in range(OUTPUT_ATTEMPTS):
             started = time.monotonic()
             response = self._create(client, kwargs)
             latency_ms = int((time.monotonic() - started) * 1000)
             if response.stop_reason == "refusal":
                 raise LLMError("refused", "The model refused to answer.")
+            _add_usage(spent, response.usage)
             data, problem = _parse(response)
             if data is not None:
-                return _result(response, data, self.model, latency_ms)
+                return _result(response, data, self.model, latency_ms, spent)
         raise LLMError("invalid_output", problem)
 
     @staticmethod
@@ -166,20 +166,26 @@ def _parse(response: Any) -> tuple[dict[str, Any] | None, str]:
     return data, ""
 
 
-def _result(response: Any, data: dict[str, Any], model: str, latency_ms: int) -> LLMResult:
-    usage = response.usage
-    input_tokens = usage.input_tokens or 0
-    output_tokens = usage.output_tokens or 0
-    cache_read = getattr(usage, "cache_read_input_tokens", None) or 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", None) or 0
+def _add_usage(spent: dict[str, int], usage: Any) -> None:
+    spent["input"] += usage.input_tokens or 0
+    spent["output"] += usage.output_tokens or 0
+    spent["cache_read"] += getattr(usage, "cache_read_input_tokens", None) or 0
+    spent["cache_write"] += getattr(usage, "cache_creation_input_tokens", None) or 0
+
+
+def _result(
+    response: Any, data: dict[str, Any], model: str, latency_ms: int, spent: dict[str, int]
+) -> LLMResult:
     return LLMResult(
         data=data,
         model=model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read,
-        cache_write_tokens=cache_write,
+        input_tokens=spent["input"],
+        output_tokens=spent["output"],
+        cache_read_tokens=spent["cache_read"],
+        cache_write_tokens=spent["cache_write"],
         latency_ms=latency_ms,
         request_id=getattr(response, "_request_id", None),
-        cost_usd=cost_of(model, input_tokens, output_tokens, cache_read, cache_write),
+        cost_usd=cost_of(
+            model, spent["input"], spent["output"], spent["cache_read"], spent["cache_write"]
+        ),
     )

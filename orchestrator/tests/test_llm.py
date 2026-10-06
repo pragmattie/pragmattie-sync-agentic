@@ -77,7 +77,7 @@ def test_good_answer_returns_data_tokens_and_cost():
     assert result.request_id == "req_123"
     assert result.latency_ms >= 0
     assert result.cost_usd == cost_of(MODEL, 1000, 200, 5000, 800)
-    assert result.cost_usd == 0.0105
+    assert result.cost_usd == 0.007
     assert len(client.requests) == 1
 
 
@@ -86,6 +86,16 @@ def test_bad_json_then_good_json_succeeds_on_retry():
 
     assert _call(llm).data == {"score": 3}
     assert len(client.requests) == 2
+
+
+def test_retry_reports_both_attempts_tokens_and_cost():
+    llm, _ = _llm(_response("not json"), _response('{"score": 3}'))
+
+    result = _call(llm)
+
+    assert (result.input_tokens, result.output_tokens) == (2000, 400)
+    assert (result.cache_read_tokens, result.cache_write_tokens) == (10000, 1600)
+    assert result.cost_usd == 0.014
 
 
 def test_bad_json_twice_raises_invalid_output():
@@ -282,10 +292,36 @@ def test_cost_of_each_priced_model(model):
     assert cost_of(model, 123, 45, 6789, 10) == expected
 
 
-def test_priced_models_include_the_configured_defaults():
-    assert {"claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"} <= set(
-        PRICES_PER_MILLION
-    )
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("claude-sonnet-5", 0.012),
+        ("claude-sonnet-5-5", 0.012),
+        ("claude-haiku-4-5-20251001", 0.006),
+        ("claude-haiku-4-5", 0.006),
+    ],
+)
+def test_cost_of_matches_the_official_rates(model, expected):
+    # 1,000 input + 1,000 output tokens, hard-coded so a wrong price fails.
+    assert cost_of(model, 1000, 1000, 0, 0) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("claude-sonnet-5", 0.0027), ("claude-haiku-4-5-20251001", 0.00135)],
+)
+def test_cost_of_cache_rates(model, expected):
+    # 1,000 cache-write + 1,000 cache-read tokens.
+    assert cost_of(model, 0, 0, 1000, 1000) == expected
+
+
+def test_priced_models_are_exactly_the_checked_ones():
+    assert set(PRICES_PER_MILLION) == {
+        "claude-sonnet-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5",
+    }
 
 
 def test_cost_of_unknown_model_is_none():
