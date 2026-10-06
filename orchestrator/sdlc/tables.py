@@ -213,7 +213,7 @@ class AgentDecision(Base):
     subject_type: Mapped[str] = mapped_column(String(10))
     subject_source: Mapped[str] = mapped_column(String(20))
     subject_id: Mapped[int] = mapped_column(Integer, index=True)
-    head_sha: Mapped[str | None] = mapped_column(String(40))
+    head_sha: Mapped[str | None] = mapped_column(String(64))  # a commit, or e.g. window-{sha}
     attempt: Mapped[int] = _count(1)
     trigger: Mapped[str] = mapped_column(String(20))
     inputs_digest: Mapped[dict | None] = mapped_column(JSON)
