@@ -19,7 +19,14 @@ in `.env`, then run `python -m sdlc.signals.github`. Re-running updates rows in 
 The risk score is graded against history by `sdlc/calibration.py`. `python -m sdlc.risk explain
 <pr>` shows one pull request's signals, score, tier and reasons (add `--source` when the number
 exists in both sources); `python -m sdlc.risk calibrate` grades this database's history, and
-`calibrate --generated N` grades N generated histories, pooled. Both are read-only.
+`calibrate --generated N` grades N generated histories, pooled. Both are read-only, except that
+`explain <pr> --record` appends the explained decision to the audit trail.
+
+Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
+from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
+reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer
+workflows leave in their comments (`<!-- pragmattie-run {...} -->` and
+`<!-- pragmattie-review {...} -->`) and records each run once.
 
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add

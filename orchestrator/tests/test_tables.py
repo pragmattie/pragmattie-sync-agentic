@@ -200,20 +200,23 @@ def test_engineer_login_is_unique_within_a_source(session):
         session.commit()
 
 
-def test_every_table_is_prefixed_and_defaults_to_synthetic():
-    tables = Base.metadata.tables.values()
-    assert {table.name for table in tables} >= {
-        "sdlc_engineers",
-        "sdlc_sprints",
-        "sdlc_issues",
-        "sdlc_pull_requests",
-        "sdlc_ci_runs",
-        "sdlc_deployments",
-        "sdlc_incidents",
-    }
-    for table in tables:
-        assert table.name.startswith("sdlc_")
-        source = table.columns["source"]
+ENGINEERING_TABLES = {
+    "sdlc_engineers",
+    "sdlc_sprints",
+    "sdlc_issues",
+    "sdlc_pull_requests",
+    "sdlc_ci_runs",
+    "sdlc_deployments",
+    "sdlc_incidents",
+}
+
+
+def test_every_table_is_prefixed_and_engineering_rows_default_to_synthetic():
+    tables = Base.metadata.tables
+    assert set(tables) >= ENGINEERING_TABLES
+    assert all(name.startswith("sdlc_") for name in tables)
+    for name in ENGINEERING_TABLES:
+        source = tables[name].columns["source"]
         assert source.default.arg == "synthetic"
         assert source.server_default.arg == "synthetic"
         assert source.default.arg in SOURCES

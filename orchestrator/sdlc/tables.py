@@ -8,11 +8,13 @@ which is unique within its source.
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
     false,
@@ -179,3 +181,53 @@ class Incident(Base):
 
     caused_by_pr: Mapped[PullRequest | None] = relationship()
     deployment: Mapped[Deployment | None] = relationship()
+
+
+class AgentDecision(Base):
+    """One decision by one agent: what it saw, what it decided, what it did and what it cost.
+
+    The table is append-only. Rows are never updated or deleted: a correction is a new row whose
+    ``supersedes_id`` points at the row it replaces.
+    """
+
+    __tablename__ = "sdlc_agent_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent",
+            "subject_type",
+            "subject_source",
+            "subject_id",
+            "head_sha",
+            "attempt",
+            name="uq_sdlc_agent_decisions_attempt",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    agent: Mapped[str] = mapped_column(String(40), index=True)
+    agent_version: Mapped[str] = mapped_column(String(20))
+    model_id: Mapped[str | None] = mapped_column(String(80))
+    prompt_version: Mapped[str | None] = mapped_column(String(20))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    subject_type: Mapped[str] = mapped_column(String(10))
+    subject_source: Mapped[str] = mapped_column(String(20))
+    subject_id: Mapped[int] = mapped_column(Integer, index=True)
+    head_sha: Mapped[str | None] = mapped_column(String(40))
+    attempt: Mapped[int] = _count(1)
+    trigger: Mapped[str] = mapped_column(String(20))
+    inputs_digest: Mapped[dict | None] = mapped_column(JSON)
+    signals: Mapped[dict | None] = mapped_column(JSON)
+    output: Mapped[dict | None] = mapped_column(JSON)
+    action_taken: Mapped[dict | None] = mapped_column(JSON)
+    human_override: Mapped[dict | None] = mapped_column(JSON)
+    raw_score: Mapped[int | None]
+    adjustment: Mapped[int | None]
+    final_score: Mapped[int | None]
+    tier: Mapped[str | None] = mapped_column(String(2))
+    status: Mapped[str] = mapped_column(String(20), default="ok", server_default="ok", index=True)
+    error: Mapped[str | None] = mapped_column(String(500))
+    latency_ms: Mapped[int | None]
+    input_tokens: Mapped[int | None]
+    output_tokens: Mapped[int | None]
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("sdlc_agent_decisions.id"))
