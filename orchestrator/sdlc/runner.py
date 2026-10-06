@@ -39,12 +39,19 @@ from sdlc.agents.signoff import (
     ticked,
     window_signoff_fields,
 )
+from sdlc.approver import (
+    Approver,
+    ApproverError,
+    load_approvers,
+    request_approval,
+    resolve_approver,
+)
 from sdlc.audit import TRIAL, decisions_for, record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
 from sdlc.signals.github import Collector
-from sdlc.tables import AgentDecision, PullRequest
+from sdlc.tables import AgentDecision, Approval, PullRequest
 from sdlc.tiers import Policy, load_policy
 
 log = logging.getLogger("sdlc.runner")
@@ -53,7 +60,6 @@ MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=5)
 FIRST_LOOKBACK = timedelta(days=30)
 STATS_EVERY_SECONDS = 3600
-APPROVER_NAME = "Simulated approver"
 
 
 class Runner:
@@ -66,6 +72,7 @@ class Runner:
         *,
         engine: Engine | None = None,
         diff_char_limit: int = 60000,
+        approver: Approver | None = None,
     ):
         self.gh = gh
         self.llm = llm
@@ -74,6 +81,7 @@ class Runner:
         self.effects = Effects(gh, mode)
         self.engine = engine
         self.diff_char_limit = diff_char_limit
+        self.approver = approver
         self._posted: dict[int, tuple[str, str, str]] = {}  # the last status posted, per PR
         self._open: set[int] | None = None  # the open PRs at the last poll
         self._comments_since: datetime | None = None
@@ -191,9 +199,11 @@ class Runner:
         floor = overrides.floor_of(self.policy, pr)
         # a raise made on an earlier commit sticks
         tier = overrides.effective_tier(assessment.assignment.tier, floor, rulings, sha)
-        approvals = Approvals()  # a new commit starts with nothing signed off
+        self._request_if_covered(db, pr, tier, now)
+        # a new commit starts with nothing signed off; the simulated approval is the PR's
+        approvals = Approvals(simulated_approved=_simulated_approved(db, pr))
         gate = self._evaluate(tier, assessment.ok, approvals)
-        meta = Meta(row.id, self.mode, APPROVER_NAME, sha)
+        meta = Meta(row.id, self.mode, self._approver_name(), sha)
         body = render(
             assessment,
             gate,
@@ -234,6 +244,7 @@ class Runner:
         new = self._rule_new(db, pr, sha, decision.tier, floor, rulings, comments, now)
         rulings += new
         tier = overrides.effective_tier(decision.tier, floor, rulings, sha)
+        self._request_if_covered(db, pr, tier, now)  # a /tier raise can bring a PR into cover
         labels = [label["name"] for label in item.get("labels") or []]
         if [name for name in labels if name.startswith("tier:")] != [f"tier:{tier}"]:
             self.effects.set_tier_label(pr.number, tier)
@@ -242,7 +253,10 @@ class Runner:
         human = approved_on_github(self.effects.read_reviews(pr.number), sha)
         approval = ai_approval(_reviewer_rows(db, pr), sha)
         approvals = Approvals(
-            signoff=boxed or human, qa_done=qa_done, ai_review=approval is not None
+            signoff=boxed or human,
+            qa_done=qa_done,
+            simulated_approved=_simulated_approved(db, pr),
+            ai_review=approval is not None,
         )
         merges_at = None
         if approval is not None and not approvals.signoff:
@@ -266,7 +280,7 @@ class Runner:
                     tier=tier,
                     agent_tier=decision.tier,
                     approvals=approvals,
-                    approver_name=APPROVER_NAME,
+                    approver_name=self._approver_name(),
                     override_lines=_lines(rulings),
                 )
             refreshed = refresh(refreshed, gate, approvals.simulated_approved)
@@ -274,7 +288,7 @@ class Runner:
                 self.effects.upsert_comment(pr.number, COMMENT_MARKER, refreshed, comments)
         else:
             assessment = pr_risk.from_decision(db, pr, decision)
-            meta = Meta(decision.id, self.mode, APPROVER_NAME, sha)
+            meta = Meta(decision.id, self.mode, self._approver_name(), sha)
             lines = _lines(rulings)
             body = render(
                 assessment, gate, approvals, self.policy, meta, tier=tier, override_lines=lines
@@ -317,6 +331,20 @@ class Runner:
             ruled.add(command.comment_id)
             new.append(ruling)
         return new
+
+    def _request_if_covered(self, db: Session, pr: PullRequest, tier: str, now: datetime) -> None:
+        """Ask the approver once for a PR whose tier in force it covers. It never approves."""
+        if self.approver is None or tier not in self.approver.applies_to_tiers:
+            return
+        try:
+            request_approval(
+                db, pr, self.approver, tier, reason=f"The tier in force is {tier}.", now=now
+            )
+        except ApproverError:
+            pass  # asked already
+
+    def _approver_name(self) -> str:
+        return self.approver.name if self.approver else "no simulated approver configured"
 
     def _record_window(
         self,
@@ -367,6 +395,13 @@ def _reviewer_rows(db: Session, pr: PullRequest) -> list[AgentDecision]:
         AgentDecision.subject_id == pr.number,
     )
     return list(db.scalars(query))
+
+
+def _simulated_approved(db: Session, pr: PullRequest) -> bool:
+    query = select(Approval.id).where(
+        Approval.pull_request_id == pr.id, Approval.status == "approved"
+    )
+    return db.scalar(query.limit(1)) is not None
 
 
 def _rulings(db: Session, pr: PullRequest) -> list[overrides.Ruling]:
@@ -500,6 +535,7 @@ def _build(mode: str) -> Runner:
         load_policy(),
         mode,
         diff_char_limit=settings.diff_char_limit,
+        approver=resolve_approver(load_approvers()),
     )
 
 
