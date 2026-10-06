@@ -40,6 +40,7 @@ from sqlalchemy import delete, exists, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from sdlc.clock import utcnow
 from sdlc.db import get_engine
 from sdlc.tables import CIRun, Deployment, Engineer, Incident, Issue, PullRequest, Sprint
 
@@ -671,7 +672,7 @@ class _Builder:
 
 def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, int]:
     """Generates the history up to ``now`` and returns how many rows of each kind it wrote."""
-    now = (now or datetime.now()).replace(microsecond=0)
+    now = (now or utcnow()).replace(microsecond=0)
     return _Builder(db, now, seed).build()
 
 

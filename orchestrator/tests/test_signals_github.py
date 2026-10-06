@@ -425,3 +425,21 @@ def test_cli_exits_with_a_github_error(sqlite_engine):
     with pytest.raises(SystemExit) as raised:
         github.main(engine=sqlite_engine, client=failing)
     assert raised.value.code == f"GitHub 404 on {API}/issues: Nope"
+
+
+def test_collect_pull_request_stores_one_pr_and_updates_it_in_place(session, client):
+    collector = Collector(session, client)
+    pr = collector.collect_pull_request({"number": 21})
+    assert pr.external_id == "pr-21"
+    assert pr.state == "open"
+    assert session.scalar(select(func.count()).select_from(PullRequest)) == 1
+
+    original = dict(PULLS[21])
+    PULLS[21].update(state="closed", closed_at="2026-09-06T10:00:00Z")
+    try:
+        again = collector.collect_pull_request({"number": 21})
+    finally:
+        PULLS[21] = original
+    assert again.id == pr.id
+    assert again.state == "closed"
+    assert session.scalar(select(func.count()).select_from(PullRequest)) == 1

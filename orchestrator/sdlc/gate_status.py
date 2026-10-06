@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from sdlc.agents.gate import Gate
+from sdlc.clock import utcnow
 from sdlc.tables import GateStatus, PullRequest
 
 
@@ -32,6 +33,6 @@ def upsert(
     row.missing = list(gate.missing)
     row.description = gate.description
     row.mode = mode
-    row.updated_at = (now or datetime.now()).replace(microsecond=0)
+    row.updated_at = (now or utcnow()).replace(microsecond=0)
     db.flush()
     return row

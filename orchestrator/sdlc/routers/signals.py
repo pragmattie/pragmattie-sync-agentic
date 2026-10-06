@@ -7,14 +7,15 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from sdlc import metrics
+from sdlc.clock import utcnow
 from sdlc.db import get_session
 
 router = APIRouter(prefix="/api/v1/signals", tags=["signals"])
 
 
 def get_now() -> datetime:
-    """The current time without microseconds; tests override it to fix "now"."""
-    return datetime.now().replace(microsecond=0)
+    """The current UTC time without microseconds; tests override it to fix "now"."""
+    return utcnow()
 
 
 @router.get("/summary")

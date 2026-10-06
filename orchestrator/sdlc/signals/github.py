@@ -129,16 +129,22 @@ class Collector:
     def collect_pull_requests(self) -> int:
         count = 0
         for item in self.client.paginate("/repos/{repo}/pulls", state="all"):
-            number = item["number"]
-            detail = self.client.get(f"/repos/{{repo}}/pulls/{number}")
-            files = self.client.paginate(f"/repos/{{repo}}/pulls/{number}/files")
-            reviews = self.client.paginate(f"/repos/{{repo}}/pulls/{number}/reviews")
-            self._pull_request(detail, files, reviews)
+            self.collect_pull_request(item)
             count += 1
         self.db.flush()
         return count
 
-    def _pull_request(self, detail: dict, files: list[dict], reviews: list[dict]) -> None:
+    def collect_pull_request(self, item: dict) -> PullRequest:
+        """Store or update one pull request from its list entry, with its files and reviews."""
+        number = item["number"]
+        detail = self.client.get(f"/repos/{{repo}}/pulls/{number}")
+        files = self.client.paginate(f"/repos/{{repo}}/pulls/{number}/files")
+        reviews = self.client.paginate(f"/repos/{{repo}}/pulls/{number}/reviews")
+        pr = self._pull_request(detail, files, reviews)
+        self.db.flush()
+        return pr
+
+    def _pull_request(self, detail: dict, files: list[dict], reviews: list[dict]) -> PullRequest:
         labels = labels_of(detail)
         paths = [file["filename"] for file in files]
         facts = classify_files(paths)
@@ -186,6 +192,7 @@ class Collector:
         pr.closed_at = parse_time(detail.get("closed_at"))
         pr.caused_incident = "caused-incident" in labels
         pr.reverted = detail["title"].lower().startswith("revert")
+        return pr
 
     def collect_ci(self) -> int:
         count = 0

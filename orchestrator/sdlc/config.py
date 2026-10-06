@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,9 @@ class Settings(BaseSettings):
     triage_model: str = "claude-haiku-4-5-20251001"
     risk_max_output_tokens: int = 1500
     agent_timeout_seconds: float = 60
+    orchestrator_mode: Literal["off", "shadow", "enforce"] = "off"
+    poll_seconds: float = 30
+    diff_char_limit: int = 60000
 
     @property
     def cors_origin_list(self) -> list[str]:

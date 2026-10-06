@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from sdlc.clock import utcnow
 from sdlc.tables import AgentDecision
 
 TRIAL = "trial"
@@ -29,7 +30,7 @@ def record_decision(
     **fields: Any,
 ) -> AgentDecision:
     row = AgentDecision(
-        created_at=(now or datetime.now()).replace(microsecond=0),
+        created_at=(now or utcnow()).replace(microsecond=0),
         agent=agent,
         agent_version=agent_version,
         subject_type=subject_type,
