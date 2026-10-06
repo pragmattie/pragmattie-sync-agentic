@@ -50,6 +50,7 @@ class FakeGitHub:
         files=("apps/crm-web/src/App.vue",),
         draft=False,
         body="Adds a field.",
+        additions=10,
         created_at=datetime(2026, 10, 1, 10, 0),
     ) -> dict:
         self.prs[number] = {
@@ -66,7 +67,7 @@ class FakeGitHub:
             "closed_at": None,
             "merge_commit_sha": None,
             "changed_files": len(files),
-            "additions": 10,
+            "additions": additions,
             "deletions": 2,
             "commits": 1,
         }
