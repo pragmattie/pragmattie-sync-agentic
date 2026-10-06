@@ -26,7 +26,9 @@ WINDOW_AGENT_VERSION = "v1"
 
 
 def _is_person(item: Mapping) -> bool:
-    return (item.get("user") or {}).get("type") != "Bot"
+    """A person wrote it: not a bot, and not a deleted account (GitHub sends ``user`` null)."""
+    user = item.get("user")
+    return bool(user) and user.get("type") != "Bot"
 
 
 def ticked(comment_body: str | None, sha: str) -> tuple[bool, bool]:
@@ -101,7 +103,7 @@ def window_signoff_fields(
         "subject_source": pr.source,
         "subject_id": pr.number,
         "trigger": "schedule",
-        "head_sha": f"window-{sha}",
+        "head_sha": f"window-{sha}"[:40],  # fits the audit column, as v1 does
         "tier": tier,
         "output": {
             "commit": sha,

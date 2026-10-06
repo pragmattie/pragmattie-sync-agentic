@@ -1,8 +1,7 @@
 """gate status
 
 The current risk-gate state of each pull request, one row a PR, so pages can show what each PR
-is waiting for without asking GitHub. Also widens the audit trail's head_sha so an objection-window
-sign-off row (head_sha window-{sha}) fits.
+is waiting for without asking GitHub.
 
 Revision ID: 0004_gate_status
 Revises: 0003_agent_decisions
@@ -21,13 +20,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("sdlc_agent_decisions") as batch:  # SQLite rebuilds the table
-        batch.alter_column(
-            "head_sha",
-            existing_type=sa.String(length=40),
-            type_=sa.String(length=64),
-            existing_nullable=True,
-        )
     op.create_table(
         "sdlc_gate_status",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -52,10 +44,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("sdlc_gate_status")
-    with op.batch_alter_table("sdlc_agent_decisions") as batch:  # SQLite rebuilds the table
-        batch.alter_column(
-            "head_sha",
-            existing_type=sa.String(length=64),
-            type_=sa.String(length=40),
-            existing_nullable=True,
-        )

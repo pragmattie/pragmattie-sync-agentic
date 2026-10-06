@@ -98,6 +98,13 @@ def test_a_comment_after_an_approval_doesnt_cancel_it(state):
     assert approved_on_github([_review("APPROVED"), _review(state)], SHA) is True
 
 
+def test_a_review_with_no_user_isnt_a_persons_approval():
+    ghost = {"user": None, "state": "APPROVED", "commit_id": SHA}
+
+    assert approved_on_github([ghost], SHA) is False
+    assert approved_on_github([ghost, _review("APPROVED")], SHA) is True
+
+
 def test_another_persons_changes_requested_leaves_an_approval_standing():
     reviews = [_review("APPROVED"), _review("CHANGES_REQUESTED", login="sam")]
 
@@ -166,6 +173,14 @@ def test_a_bots_hold_doesnt_stop_the_window():
     assert merges_at == APPROVED_AT + timedelta(minutes=60)
 
 
+def test_a_hold_with_no_user_doesnt_stop_the_window():
+    comments = [{"user": None, "body": "/hold"}]
+
+    merges_at = objection_window(POLICY, "T1", ["apps/crm-web/a.vue"], APPROVED_AT, comments)
+
+    assert merges_at == APPROVED_AT + timedelta(minutes=60)
+
+
 def test_no_window_without_an_approval_changes_or_a_policy_window():
     assert objection_window(POLICY, "T1", ["apps/crm-web/a.vue"], None, []) is None
     assert objection_window(POLICY, "T1", [], APPROVED_AT, []) is None
@@ -186,7 +201,7 @@ def test_window_signoff_fields_shape():
         "subject_source": "github",
         "subject_id": 170,
         "trigger": "schedule",
-        "head_sha": f"window-{SHA}",
+        "head_sha": f"window-{SHA}"[:40],
         "tier": "T1",
         "output": {
             "commit": SHA,
@@ -197,7 +212,7 @@ def test_window_signoff_fields_shape():
         },
         "action_taken": {"signoff": "objection window passed with no /hold"},
     }
-    assert len(fields["head_sha"]) <= AgentDecision.__table__.c.head_sha.type.length
+    assert len(fields["head_sha"]) == AgentDecision.__table__.c.head_sha.type.length == 40
 
 
 def test_describe_window_appends_the_merge_time_to_a_pending_description():
