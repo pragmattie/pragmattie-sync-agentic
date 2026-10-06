@@ -231,3 +231,26 @@ class AgentDecision(Base):
     input_tokens: Mapped[int | None]
     output_tokens: Mapped[int | None]
     supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("sdlc_agent_decisions.id"))
+
+
+class GateStatus(Base):
+    """The current ``risk-gate`` state of each pull request: one row a PR, replaced on change.
+
+    A read model for pages, not history; the decisions behind it are in the audit trail.
+    """
+
+    __tablename__ = "sdlc_gate_status"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pull_request_id: Mapped[int] = mapped_column(
+        ForeignKey("sdlc_pull_requests.id"), unique=True, index=True
+    )
+    tier: Mapped[str] = mapped_column(String(2))
+    state: Mapped[str] = mapped_column(String(10))
+    would_be: Mapped[str] = mapped_column(String(10))
+    missing: Mapped[list] = mapped_column(JSON)
+    description: Mapped[str] = mapped_column(String(140))
+    mode: Mapped[str] = mapped_column(String(10))
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+    pull_request: Mapped[PullRequest] = relationship()
