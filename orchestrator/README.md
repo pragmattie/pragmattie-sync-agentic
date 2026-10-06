@@ -34,6 +34,11 @@ never approves anything itself: `python -m sdlc.approver pending` lists what is 
 repository owner runs `python -m sdlc.approver approve <pr> [--note ...]` to approve one. Every
 row in `sdlc_approvals` is simulated and is never shown as a person's approval.
 
+The triage agent (`sdlc/agents/triage.py`, on `TRIAGE_MODEL`) proposes a new issue's module,
+type, priority and points, a possible duplicate and any open questions. Similar past issues come
+from word overlap on titles in code (`sdlc/similarity.py`), and a duplicate is kept only if it was
+one of those shown. It only proposes: it writes nothing to GitHub or the database.
+
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.
