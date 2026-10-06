@@ -19,6 +19,7 @@ SDLC_TABLES = (
     "sdlc_incidents",
     "sdlc_agent_decisions",
     "sdlc_gate_status",
+    "sdlc_approvals",
 )
 
 SERVICE_ROOT = Path(__file__).resolve().parent.parent
@@ -56,7 +57,8 @@ def _alembic_config() -> Config:
 def test_history_has_a_single_head():
     script = ScriptDirectory.from_config(_alembic_config())
 
-    assert script.get_heads() == ["0004_gate_status"]
+    assert script.get_heads() == ["0005_approvals"]
+    assert script.get_revision("0005_approvals").down_revision == "0004_gate_status"
     assert script.get_revision("0004_gate_status").down_revision == "0003_agent_decisions"
     assert script.get_revision("0003_agent_decisions").down_revision == "0002_engineering_tables"
     assert script.get_revision("0002_engineering_tables").down_revision == "0001_initial"

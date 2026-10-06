@@ -8,7 +8,10 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`approvers.yaml`** (4.11): the simulated second approver. Move it to
+  `orchestrator/policies/approvers.yaml` (the loader's default, `sdlc.approver.POLICY`) on the
+  pull request's branch before merging, and delete this copy. Until it is moved, the runner and
+  `python -m sdlc.approver` refuse to start, on purpose: there is no fallback to this folder.
 
 ## Applied
 
