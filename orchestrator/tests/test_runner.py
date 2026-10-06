@@ -24,7 +24,7 @@ T1_SIZE = 200  # additions that land the default fake PR in T1
 PIPELINE = ("apps/api/app/routers/pipeline.py",)  # floored at T2
 MIGRATION = ("orchestrator/migrations/versions/0009_more.py",)  # floored at T3
 # Read only through an explicit path until a person moves it to orchestrator/policies/.
-APPROVERS = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "approvers.yaml"
+APPROVERS = Path(__file__).resolve().parents[1] / "policies" / "approvers.yaml"
 
 
 @pytest.fixture(scope="module")

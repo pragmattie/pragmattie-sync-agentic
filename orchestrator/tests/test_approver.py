@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -22,7 +21,6 @@ from sdlc.db import Base
 from sdlc.tables import Approval, PullRequest
 
 # Read only through an explicit path until a person moves it to orchestrator/policies/.
-PROPOSED = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "approvers.yaml"
 NOON = datetime(2026, 10, 6, 12, 0)
 SIMULATED = Approver(
     id="simulated-second-human",
@@ -64,8 +62,8 @@ def _write(tmp_path, text):
     return path
 
 
-def test_the_proposed_file_loads_the_simulated_approver():
-    assert load_approvers(PROPOSED) == (SIMULATED,)
+def test_the_committed_policy_loads_the_simulated_approver():
+    assert load_approvers(POLICY) == (SIMULATED,)
 
 
 def test_the_default_path_is_the_policies_folder():
@@ -180,7 +178,7 @@ def test_describe_pending_says_it_is_simulated(db):
 
 
 def _cli(engine, *argv):
-    return main(list(argv), engine=engine, policy=PROPOSED)
+    return main(list(argv), engine=engine, policy=POLICY)
 
 
 def _approvals(engine):

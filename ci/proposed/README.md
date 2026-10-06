@@ -8,10 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`approvers.yaml`** (4.11): the simulated second approver. Move it to
-  `orchestrator/policies/approvers.yaml` (the loader's default, `sdlc.approver.POLICY`) on the
-  pull request's branch before merging, and delete this copy. Until it is moved, the runner and
-  `python -m sdlc.approver` refuse to start, on purpose: there is no fallback to this folder.
+Nothing pending.
 
 ## Applied
 
@@ -23,6 +20,9 @@ Nothing in this folder runs automatically.
   copy deleted; the job is a required check in the `main` ruleset.
 - **`tiers.yaml`** (4.1): the governance policy. Moved to `orchestrator/policies/tiers.yaml`
   (the loader's default, `sdlc.tiers.POLICY`) and the copy deleted.
+- **`approvers.yaml`** (4.11): the simulated second approver. Moved to
+  `orchestrator/policies/approvers.yaml` (the loader's default, `sdlc.approver.POLICY`) and the
+  copy deleted.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
