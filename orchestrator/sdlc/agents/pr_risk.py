@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sdlc.agents.llm import LLMError, LLMResult, StructuredLLM, cost_of
 from sdlc.governance import Assignment, assign_tier, facts_of, fallback_assignment
 from sdlc.scoring import MAX_POINTS, Features, compute_features, features_digest, score_features
-from sdlc.tables import PullRequest
+from sdlc.tables import AgentDecision, PullRequest
 from sdlc.tiers import Policy
 
 AGENT = "pr_risk"
@@ -334,6 +334,46 @@ def to_decision_fields(assessment: Assessment) -> dict[str, Any]:
         "input_tokens": a.llm.input_tokens if a.llm else None,
         "output_tokens": a.llm.output_tokens if a.llm else None,
     }
+
+
+def from_decision(db: Session, pr: PullRequest, row: AgentDecision) -> Assessment:
+    """The assessment a recorded decision stands for, to render its comment again."""
+    output = row.output or {}
+    llm = None
+    if row.input_tokens is not None:
+        llm = LLMResult(
+            data=output.get("answer") or {},
+            model=row.model_id or "",
+            input_tokens=row.input_tokens,
+            output_tokens=row.output_tokens or 0,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            latency_ms=row.latency_ms or 0,
+            request_id=None,
+            cost_usd=output.get("cost_usd"),
+        )
+    return Assessment(
+        raw_score=row.raw_score or 0,
+        signals=row.signals or {},
+        adjustment=row.adjustment,
+        clamped=bool(output.get("clamped")),
+        final_score=row.final_score or 0,
+        assignment=Assignment(
+            tier=row.tier,
+            score_tier=None,
+            floors=tuple(output.get("floors") or ()),
+            capped_by=None,
+            reasons=tuple(output.get("reasons") or ()),
+        ),
+        status=row.status,
+        error=row.error,
+        justification=output.get("justification"),
+        top_reasons=list(output.get("top_reasons") or []),
+        test_gaps=list(output.get("test_gaps") or []),
+        llm=llm,
+        features=compute_features(db, pr, row.created_at),
+        model=row.model_id or "",
+    )
 
 
 def dry_run(

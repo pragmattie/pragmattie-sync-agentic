@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from sdlc import agent_runs, gate_status
 from sdlc.agents import pr_risk
-from sdlc.agents.comment import Meta, refresh, render
+from sdlc.agents.comment import Meta, comment_head, refresh, render
 from sdlc.agents.gate import Approvals, Gate, evaluate
 from sdlc.agents.github_effects import Effects
 from sdlc.agents.signoff import (
@@ -74,7 +74,7 @@ class Runner:
         self.effects = Effects(gh, mode)
         self.engine = engine
         self.diff_char_limit = diff_char_limit
-        self._posted: dict[int, tuple[str, str]] = {}  # the last status posted, per PR
+        self._posted: dict[int, tuple[str, str, str]] = {}  # the last status posted, per PR
         self._open: set[int] | None = None  # the open PRs at the last poll
         self._comments_since: datetime | None = None
 
@@ -149,7 +149,7 @@ class Runner:
             summary["assessed"] += 1
             summary["failed"] += 0 if assessment.ok else 1
         else:
-            self._recheck(db, pr, sha, decision or rows[-1], now)
+            self._recheck(db, pr, item, sha, decision or rows[-1], now)
 
     def _assess(self, db: Session, pr: PullRequest, item: dict, now: datetime):
         diff = self.effects.read_diff(pr.number)
@@ -202,10 +202,23 @@ class Runner:
         return assessment
 
     def _recheck(
-        self, db: Session, pr: PullRequest, sha: str, decision: AgentDecision, now: datetime
+        self,
+        db: Session,
+        pr: PullRequest,
+        item: dict,
+        sha: str,
+        decision: AgentDecision,
+        now: datetime,
     ) -> None:
-        """Recompute the gate for a commit already assessed, from what people and agents did."""
+        """Recompute the gate for a commit already assessed, from what people and agents did.
+
+        A missing or wrong ``tier:`` label, and a risk comment missing for this commit, are put
+        right too: a write that failed on the first poll is repaired on a later one.
+        """
         tier = decision.tier
+        labels = [label["name"] for label in item.get("labels") or []]
+        if [name for name in labels if name.startswith("tier:")] != [f"tier:{tier}"]:
+            self.effects.set_tier_label(pr.number, tier)
         comments = self.effects.read_comments(pr.number)
         risk_comment = self.effects.find_comment(pr.number, COMMENT_MARKER, comments)
         boxed, qa_done = ticked(risk_comment.get("body") if risk_comment else None, sha)
@@ -225,11 +238,16 @@ class Runner:
         if merges_at is not None and now < merges_at:
             gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
         self._post_status(pr.number, sha, gate)
-        if risk_comment:
-            body = risk_comment.get("body") or ""
+        body = (risk_comment.get("body") or "") if risk_comment else ""
+        if risk_comment and comment_head(body) == sha:
             refreshed = refresh(body, gate, approvals.simulated_approved)
             if refreshed != body:
                 self.effects.upsert_comment(pr.number, COMMENT_MARKER, refreshed, comments)
+        else:
+            assessment = pr_risk.from_decision(db, pr, decision)
+            meta = Meta(decision.id, self.mode, APPROVER_NAME, sha)
+            body = render(assessment, gate, approvals, self.policy, meta)
+            self.effects.upsert_comment(pr.number, COMMENT_MARKER, body, comments)
         gate_status.upsert(db, pr, gate, tier=tier, mode=self.mode, now=now)
 
     def _record_window(
@@ -252,8 +270,8 @@ class Runner:
         )
 
     def _post_status(self, number: int, sha: str, gate: Gate, force: bool = False) -> dict:
-        """Post the status unless the same state and description were the last posted."""
-        posted = (gate.state, gate.description)
+        """Post the status unless the same commit, state and description were the last posted."""
+        posted = (sha, gate.state, gate.description)
         if not force and self._posted.get(number) == posted:
             return {"skipped": "unchanged"}
         result = self.effects.set_status(sha, gate.state, gate.description)

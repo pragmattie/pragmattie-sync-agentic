@@ -329,3 +329,75 @@ def test_the_reviewers_comment_time_is_kept_as_utc(gh, engine, policy):
     _runner(gh, engine, policy).poll_once(NOON)
     [review] = _rows(engine, "reviewer")
     assert review.created_at == NOON - timedelta(hours=1)
+
+
+def test_a_risk_comment_and_tier_label_that_failed_to_post_are_repaired_next_poll(
+    gh, engine, policy
+):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy)
+    gh.fail_writes = {"POST"}
+    runner.poll_once(NOON)
+    assert gh.risk_comment(1) is None
+    assert gh.issue_labels.get(1) is None
+    gh.fail_writes = set()
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+    [row] = _rows(engine)
+    body = gh.risk_comment(1)["body"]
+    assert f"<!-- head:{SHA} -->" in body
+    assert "## Risk review: T2" in body
+    assert "- [ ] **Human sign-off" in body
+    assert f"decision {row.id}" in body
+    assert gh.issue_labels[1] == ["tier:T2"]
+    assert gh.statuses[-1]["state"] == "pending"
+
+    gh.requests.clear()
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.writes() == []  # once repaired, nothing is written again
+
+
+def test_a_risk_comment_left_on_an_older_commit_is_rewritten_for_this_one(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    _tick(gh, 1)
+    gh.push(1, NEW_SHA)
+    gh.fail_writes = {"POST", "PATCH"}
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert f"<!-- head:{SHA} -->" in gh.risk_comment(1)["body"]
+    gh.fail_writes = set()
+
+    runner.poll_once(NOON + timedelta(minutes=2))
+    body = gh.risk_comment(1)["body"]
+    assert f"<!-- head:{NEW_SHA} -->" in body
+    assert "- [ ] **Human sign-off" in body  # the older commit's tick doesn't carry over
+    assert f"decision {_rows(engine)[-1].id}" in body
+    assert len([c for c in gh.comments if c["user"]["type"] == "Bot"]) == 1  # edited in place
+    assert gh.statuses[-1] == {
+        "sha": NEW_SHA,
+        "state": "pending",
+        "description": "T2: waiting for human sign-off",
+        "context": "risk-gate",
+    }
+
+
+def test_a_wrong_or_missing_tier_label_is_put_right_on_a_later_poll(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    gh.issue_labels[1] = ["tier:T0", "bug"]
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert gh.issue_labels[1] == ["bug", "tier:T2"]
+
+    gh.issue_labels[1] = ["bug"]
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.issue_labels[1] == ["bug", "tier:T2"]
+
+    gh.issue_labels[1] = ["tier:T2", "tier:T3"]
+    runner.poll_once(NOON + timedelta(minutes=3))
+    assert gh.issue_labels[1] == ["tier:T2"]
+
+    gh.requests.clear()
+    runner.poll_once(NOON + timedelta(minutes=4))
+    assert gh.writes() == []

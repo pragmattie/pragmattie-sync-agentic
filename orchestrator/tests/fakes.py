@@ -142,7 +142,11 @@ class FakeGitHub:
         path = self._log("GET", path)
         if path == "/pulls":
             state = params.get("state", "open")
-            return [dict(pr) for pr in self.prs.values() if state == "all" or pr["state"] == state]
+            return [
+                self._pr(number)
+                for number, pr in self.prs.items()
+                if state == "all" or pr["state"] == state
+            ]
         if path == "/labels":
             return [{"name": name, "color": colour} for name, colour in self.repo_labels.items()]
         if path == "/issues/comments":
@@ -188,7 +192,8 @@ class FakeGitHub:
     def _pr(self, number: int) -> dict:
         if number not in self.prs:
             raise GitHubError(f"GitHub 404 on /pulls/{number}: Not Found")
-        return dict(self.prs[number])
+        labels = [{"name": name} for name in self.issue_labels.get(number, [])]
+        return {**self.prs[number], "labels": labels}
 
 
 def answer(adjustment: int = 0) -> dict:
