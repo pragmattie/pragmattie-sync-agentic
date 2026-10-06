@@ -401,3 +401,97 @@ def test_a_wrong_or_missing_tier_label_is_put_right_on_a_later_poll(gh, engine, 
     gh.requests.clear()
     runner.poll_once(NOON + timedelta(minutes=4))
     assert gh.writes() == []
+
+
+def _overrides(engine):
+    return _rows(engine, "tier_override")
+
+
+def test_a_tier_t3_comment_on_a_t1_pr_raises_label_gate_and_comment(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    assert gh.issue_labels[1] == ["tier:T1"]
+    assert gh.statuses[-1]["description"] == "T1: waiting for human sign-off"
+    command = gh.comment(1, "/tier T3 this touches the forecast maths")
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert gh.issue_labels[1] == ["tier:T3"]
+    assert gh.statuses[-1]["description"] == (
+        "T3: waiting for human sign-off, manual QA, simulated second approval"
+    )
+    assert _gate(engine, 1).tier == "T3"
+    body = gh.risk_comment(1)["body"]
+    assert "## Risk review: T3 (Critical), raised from T1 by a person" in body
+    assert '- `/tier T3` by @pat "this touches the forecast maths": Raised from T1 to T3.' in body
+    assert "- [ ] **Manual QA done" in body
+    [row] = _overrides(engine)
+    assert (row.trigger, row.head_sha, row.tier, row.status) == (
+        "human",
+        f"comment-{command['id']}",
+        "T3",
+        "ok",
+    )
+    assert row.human_override["direction"] == "raise"
+    assert row.human_override["head_sha"] == SHA
+    assert row.output == {"url": command["html_url"], "floor": "T0"}
+    assert _rows(engine)[-1].tier == "T1"  # the agent's own row keeps its tier
+
+    gh.push(1, NEW_SHA)  # the raise sticks on a later commit
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.issue_labels[1] == ["tier:T3"]
+    assert gh.statuses[-1]["description"].startswith("T3: waiting for human sign-off")
+    assert "raised from T1 by a person" in gh.risk_comment(1)["body"]
+
+
+def test_a_rejected_lowering_is_an_audit_row_and_changes_nothing_else(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    body = gh.risk_comment(1)["body"]
+    gh.comment(1, "/tier T0 - it is a really small change, honestly")
+    gh.requests.clear()
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+    [row] = _overrides(engine)
+    assert (row.status, row.tier) == ("rejected", None)
+    assert row.human_override["why"].startswith("Rejected: a policy floor keeps this PR at T2")
+    assert row.output["floor"] == "T2"
+    assert gh.writes() == []
+    assert gh.issue_labels[1] == ["tier:T2"]
+    assert gh.risk_comment(1)["body"] == body
+    assert _gate(engine, 1).tier == "T2"
+
+
+def test_a_lowering_covers_only_its_commit(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    gh.comment(1, "/tier T0: only a label's wording changes")
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert gh.issue_labels[1] == ["tier:T0"]
+    assert "lowered from T1 by a person" in gh.risk_comment(1)["body"]
+
+    gh.push(1, NEW_SHA)
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.issue_labels[1] == ["tier:T1"]
+    assert "## Risk review: T1 (Light)\n" in gh.risk_comment(1)["body"]
+
+
+def test_each_comment_is_ruled_on_once_across_polls(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    gh.comment(1, "/tier T2")
+    gh.comment(1, "/tier T0 no")
+    for minute in (1, 2, 3):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    rows = _overrides(engine)
+    assert [(row.status, row.human_override["from_tier"]) for row in rows] == [
+        ("ok", "T1"),
+        ("rejected", "T2"),  # ruled against the tier in force after the raise
+    ]
+    gh.comment(1, "/tier T3")
+    runner.poll_once(NOON + timedelta(minutes=4))
+    assert len(_overrides(engine)) == 3
+    assert gh.issue_labels[1] == ["tier:T3"]
