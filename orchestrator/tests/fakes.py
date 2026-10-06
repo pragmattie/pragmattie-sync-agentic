@@ -1,8 +1,8 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``) over in-memory pull requests, issues, comments, reviews, statuses and labels, and logs every
-request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
+``paginate``) over in-memory pull requests, issues, comments, reviews, statuses and labels, and
+logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re

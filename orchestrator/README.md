@@ -39,6 +39,14 @@ type, priority and points, a possible duplicate and any open questions. Similar 
 from word overlap on titles in code (`sdlc/similarity.py`), and a duplicate is kept only if it was
 one of those shown. It only proposes: it writes nothing to GitHub or the database.
 
+`sdlc/issue_runner.py` runs it in the same poll loop and mode as the PR risk agent. It triages each
+open issue once per version of its title and body (incidents and pull requests are skipped), sets
+the `module:`, `type:`, `priority:` and `points:` labels, adds `needs-info` or
+`possible-duplicate` when they apply, and keeps one comment explaining why
+(`sdlc/agents/triage_comment.py`). A label a person has changed since the last run is left alone.
+A `retriage` label runs it again and is then removed. It never closes, assigns or edits an issue.
+`python -m sdlc.issue_runner once | dry-run <n> | try <n> --yes` work as the PR runner's do.
+
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.

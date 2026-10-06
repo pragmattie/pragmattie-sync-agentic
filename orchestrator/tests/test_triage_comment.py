@@ -98,8 +98,9 @@ def test_a_full_run_shows_the_classification_duplicate_questions_and_similar_iss
     assert "**Estimate 3 points**, confidence 82%." in body
     assert "Lead import change, sized like past import work." in body
     assert "Possibly a duplicate of #12 — linked, not closed." in body
-    assert "**Before this is ready to work on:**\n- Which file formats?\n- Roughly how many rows?" in (
-        body
+    assert (
+        "**Before this is ready to work on:**\n- Which file formats?\n- Roughly how many rows?"
+        in (body)
     )
     assert "<details><summary>Similar past issues</summary>" in body
     assert "- #14 Lead import 14 (closed)" in body
