@@ -1,0 +1,53 @@
+# Keeps the delivery board current (4.16). Proposed by an agent: a person moves it to
+# .github/workflows/board.yml; see ci/proposed/README.md.
+#
+# Every run recomputes every issue's card from GitHub alone (labels, the pull requests that close
+# the issue, their risk-gate status and risk comment) and sets each value that differs. It needs
+# no database and no API key, and makes no Claude call. The builder app needs
+# Organization → Projects: read and write.
+
+name: Delivery board
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: board
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: pragmattie  # covers the organization's project, not only this repository
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Sync the board
+        env:
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: python -m sdlc.board sync
