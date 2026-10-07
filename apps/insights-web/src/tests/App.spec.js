@@ -1,4 +1,4 @@
-import { enableAutoUnmount, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App.vue";
@@ -42,11 +42,14 @@ describe("App", () => {
   it("lists the pages in the drawer", async () => {
     const { wrapper } = await mountApp();
 
-    expect(navItems).toEqual([{ title: "Engineering signals", to: "/signals", name: "signals" }]);
+    expect(navItems).toEqual([
+      { title: "Engineering signals", to: "/signals", name: "signals" },
+      { title: "Decision log", to: "/decisions", name: "decisions" },
+    ]);
     const drawer = wrapper.find("[data-test='nav-drawer']");
     const links = drawer.findAll("a");
-    expect(links.map((link) => link.text())).toEqual(["Engineering signals"]);
-    expect(links[0].attributes("href")).toBe("/signals");
+    expect(links.map((link) => link.text())).toEqual(["Engineering signals", "Decision log"]);
+    expect(links.map((link) => link.attributes("href"))).toEqual(["/signals", "/decisions"]);
   });
 
   it("toggles the drawer from the menu button", async () => {
@@ -76,6 +79,14 @@ describe("App", () => {
 
     expect(wrapper.find("h1").text()).toBe("Engineering signals");
     expect(wrapper.find("[data-test='loading-bar']").exists()).toBe(true);
+  });
+
+  it("shows the decision log page", async () => {
+    const { wrapper } = await mountApp("/decisions");
+    await flushPromises();
+
+    expect(wrapper.find("h1").text()).toBe("Decision log");
+    expect(document.title).toBe("Decision log · Delivery Insights · PragMattie Sync");
   });
 
   it("links nowhere in the CRM", async () => {
