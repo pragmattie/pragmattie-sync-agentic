@@ -61,4 +61,21 @@ The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.ya
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.
 
+The delivery board is the existing GitHub Projects board "PragMattie Sync delivery"
+(`BOARD_OWNER`, default `pragmattie`, and `BOARD_NUMBER`, default `1`); `sdlc/board.py` adopts it
+and never creates a new one. `python -m sdlc.board setup` checks it has the Status options Backlog,
+Triaged, In progress, In review, Gated, Merged and Production, in that order, and the fields
+Points (number), Module (single select, one option per module), Forecast tier and Tier (single
+select, T0-T3) and Risk (number), and changes nothing. `setup --apply` also creates the missing
+fields, with their options. It never deletes or renames a field or an option, deletes an item, or
+replaces an existing field's options (GitHub gives replaced options new ids, which would clear
+every card's status): a missing or misordered Status option, a missing option or a field of the
+wrong type is reported with where to fix it in the project's settings, `setup` exits 1, and
+`--apply` creates nothing until it is fixed. The token needs **Organization → Projects: read and
+write**.
+
+Views can't be set through GitHub's API, so set this one by hand: a view named "Delivery", Board
+layout, columns by Status, swimlanes by Milestone, with the fields Points, Module, Forecast tier,
+Tier and Risk shown. `setup` prints the same layout as a reminder.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
