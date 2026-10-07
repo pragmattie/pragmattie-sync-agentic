@@ -1,0 +1,162 @@
+{
+  "8006": {
+    "title": "Score leads with a model instead of a manual slider",
+    "body": "**Epic:** AI lead scoring\n\n## Acceptance criteria\n- [ ] Score is computed from source, title seniority, company size and engagement\n- [ ] Reps can see the top three reasons behind each score\n- [ ] Manual override is kept and logged"
+  },
+  "8007": {
+    "title": "Explain lead score on the lead row",
+    "body": "**Epic:** AI lead scoring\n\n## Acceptance criteria\n- [ ] Hovering the score shows the reasons"
+  },
+  "8008": {
+    "title": "Auto-assign new leads by region and rep capacity",
+    "body": "## Acceptance criteria\n- [ ] New leads route to the rep with the lowest open-lead count in their region\n- [ ] Assignment rules are editable by an admin"
+  },
+  "8009": {
+    "title": "Detect duplicate leads by email domain and name",
+    "body": "## Acceptance criteria\n- [ ] Possible duplicates are flagged on create\n- [ ] Reps can merge two leads"
+  },
+  "8010": {
+    "title": "Lead search ignores accents in names",
+    "body": "## Acceptance criteria\n- [ ] Searching \"Jose\" finds \"José\""
+  },
+  "8011": {
+    "title": "Bulk-change lead owner from the leads table",
+    "body": ""
+  },
+  "8012": {
+    "title": "Add, edit and remove contacts from the account page",
+    "body": "## Acceptance criteria\n- [ ] Inline form with validation\n- [ ] Removing a contact asks for confirmation"
+  },
+  "8013": {
+    "title": "Account activity timeline",
+    "body": "## Acceptance criteria\n- [ ] Shows deals, stage changes and contact changes in date order"
+  },
+  "8014": {
+    "title": "Parent and child accounts",
+    "body": ""
+  },
+  "8015": {
+    "title": "Account open-pipeline total double-counts reopened deals",
+    "body": ""
+  },
+  "8016": {
+    "title": "Drag and drop deals between pipeline stages",
+    "body": "## Acceptance criteria\n- [ ] Dragging a card changes its stage and probability\n- [ ] Keyboard alternative is available"
+  },
+  "8017": {
+    "title": "Record stage history for every opportunity",
+    "body": "## Acceptance criteria\n- [ ] Each stage change stores who, when, from and to\n- [ ] History is visible on the opportunity"
+  },
+  "8018": {
+    "title": "Warn when a deal's close date has passed",
+    "body": ""
+  },
+  "8019": {
+    "title": "Create and edit opportunities from the account page",
+    "body": ""
+  },
+  "8020": {
+    "title": "Pipeline board totals ignore the owner filter",
+    "body": ""
+  },
+  "8021": {
+    "title": "Forecast in multiple currencies with a reporting currency",
+    "body": "**Epic:** Multi-currency forecasting\n\n## Acceptance criteria\n- [ ] Opportunities store a currency\n- [ ] Forecast converts at the rate on the close date"
+  },
+  "8022": {
+    "title": "Store daily exchange rates",
+    "body": "**Epic:** Multi-currency forecasting"
+  },
+  "8023": {
+    "title": "Weekly forecast snapshots to show forecast movement",
+    "body": "## Acceptance criteria\n- [ ] A snapshot is saved every Monday\n- [ ] The forecast page shows change since last week"
+  },
+  "8024": {
+    "title": "Rep can submit a manual commit number",
+    "body": ""
+  },
+  "8025": {
+    "title": "Forecast rounding differs between tiles and table",
+    "body": ""
+  },
+  "8026": {
+    "title": "Import accounts, contacts and opportunities from a Salesforce export",
+    "body": "**Epic:** Salesforce import\n\n## Acceptance criteria\n- [ ] Accepts the standard Salesforce CSV exports\n- [ ] Shows a preview with errors before importing"
+  },
+  "8027": {
+    "title": "Map Salesforce stages to PragMattie Sync stages",
+    "body": "**Epic:** Salesforce import"
+  },
+  "8028": {
+    "title": "Two-way email sync with Gmail and Outlook",
+    "body": ""
+  },
+  "8029": {
+    "title": "Outbound webhooks for deal stage changes",
+    "body": ""
+  },
+  "8030": {
+    "title": "Webhook retries give up after one failure",
+    "body": ""
+  },
+  "8031": {
+    "title": "Sign in with Google and Microsoft (SSO)",
+    "body": "## Acceptance criteria\n- [ ] OIDC login for Google Workspace and Microsoft Entra\n- [ ] Admins can require SSO for their company"
+  },
+  "8032": {
+    "title": "Roles and permissions (admin, manager, rep)",
+    "body": ""
+  },
+  "8033": {
+    "title": "Seat-based billing with plan upgrades",
+    "body": ""
+  },
+  "8034": {
+    "title": "Audit log of sign-ins and permission changes",
+    "body": "**Epic:** SOC 2 audit logging"
+  },
+  "8035": {
+    "title": "Session does not expire after password change",
+    "body": ""
+  },
+  "8036": {
+    "title": "Audit log for all record changes",
+    "body": "**Epic:** SOC 2 audit logging\n\n## Acceptance criteria\n- [ ] Every create, update and delete stores who, when and the change\n- [ ] Logs are retained for 12 months"
+  },
+  "8037": {
+    "title": "Cursor pagination for large list endpoints",
+    "body": ""
+  },
+  "8038": {
+    "title": "Structured JSON logging with request IDs",
+    "body": ""
+  },
+  "8039": {
+    "title": "Upgrade to Python 3.13 in the API image",
+    "body": ""
+  },
+  "8040": {
+    "title": "Triage agent labels and estimates new issues",
+    "body": "## Acceptance criteria\n- [ ] Runs when an issue is opened or edited\n- [ ] Adds module, type and points labels with a short rationale comment"
+  },
+  "8041": {
+    "title": "PR risk model trained on merged pull requests",
+    "body": "## Acceptance criteria\n- [ ] Predicts the chance a PR causes an incident within 14 days\n- [ ] Reports precision and recall on held-out PRs"
+  },
+  "8042": {
+    "title": "PR risk agent comments a score and reasons on each PR",
+    "body": ""
+  },
+  "8043": {
+    "title": "Governance tiers as a YAML policy with a risk-gate status check",
+    "body": ""
+  },
+  "8044": {
+    "title": "Collect GitHub signals on a schedule",
+    "body": ""
+  },
+  "8045": {
+    "title": "Sprint forecaster with P50 and P85 completion dates",
+    "body": ""
+  }
+}

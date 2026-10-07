@@ -47,6 +47,16 @@ the `module:`, `type:`, `priority:` and `points:` labels, adds `needs-info` or
 A `retriage` label runs it again and is then removed. It never closes, assigns or edits an issue.
 `python -m sdlc.issue_runner once | dry-run <n> | try <n> --yes` work as the PR runner's do.
 
+`sdlc/eval.py` grades the triage agent against a person's own labels, with bars fixed before the
+first run: module 85%, type 90%, points within one step 70% (priority is reported, never gated).
+Both sets are v1's issues, not this repository's (the backlog is v1's #6-#45 renumbered
+8006-8045, the holdout 9001-9020), so there are no stored decisions to grade and both always run
+fresh. `python -m sdlc.eval [--set backlog|holdout]` shows what a blind re-run would send and
+cost; `--yes` runs it with no labels shown and similar issues from simulated history only,
+recording trial rows as simulated and writing nothing to GitHub, then grades those answers.
+`--fresh` is accepted and changes nothing, and `--json` prints the report. The labelled sets and
+their issue texts live in `eval/` and are added by a person.
+
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.

@@ -1,0 +1,5 @@
+[
+  {"number": 101, "module": "leads", "type": "feature", "points": 3, "priority": "p2"},
+  {"number": 102, "module": "pipeline", "type": "bug", "points": 2, "note": "regression"},
+  {"number": 103, "module": "forecasting", "type": "chore", "points": 5, "priority": "p3"}
+]
