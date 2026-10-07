@@ -8,7 +8,15 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`board.yml`** (4.16): keeps the delivery board current every 10 minutes
+  (`python -m sdlc.board sync`, no API key, no Claude call). To apply it:
+  1. check the builder app has **Organization → Projects: read and write**;
+  2. run `python -m sdlc.board setup --apply` once from `orchestrator/` (4.15), and fix anything it
+     reports;
+  3. move `ci/proposed/board.yml` to `.github/workflows/board.yml`;
+  4. run it once by hand (Actions → Delivery board → Run workflow) and check its log.
+
+  GitHub's built-in project workflows can stay on: the sync sets the same values or corrects them.
 
 ## Applied
 
