@@ -1,0 +1,82 @@
+{
+  "9001": {
+    "title": "Bulk reassign leads when a rep leaves",
+    "body": "When a rep leaves, a manager has to open each of their leads to change the owner. Let managers select many leads and reassign them in one step."
+  },
+  "9002": {
+    "title": "Lead import stops at 5,000 rows",
+    "body": "Importing a CSV with more than 5,000 leads finishes without an error, but only the first 5,000 leads appear."
+  },
+  "9003": {
+    "title": "Rebuild the search index nightly",
+    "body": "Search results drift out of date after bulk edits. Rebuild the search index each night so results match the database."
+  },
+  "9004": {
+    "title": "Show open deals on the account page",
+    "body": "Account pages list contacts but not the account's open deals. Add a section listing each open deal with its stage and amount."
+  },
+  "9005": {
+    "title": "Merging contacts keeps the older phone number",
+    "body": "When two duplicate contacts are merged, the surviving record keeps the older phone number even when the other record was updated more recently."
+  },
+  "9006": {
+    "title": "Move account timeline events into their own table",
+    "body": "The account timeline query scans the whole activity table and takes several seconds on large accounts. Store timeline events in a table of their own."
+  },
+  "9007": {
+    "title": "Admins can rename pipeline stages",
+    "body": "Customer admins want their own stage names (for example Discovery instead of Qualify), set in settings, without losing any deal's stage history."
+  },
+  "9008": {
+    "title": "Dragging a deal to a new stage sometimes doesn't save",
+    "body": "On the pipeline board, a deal dragged to another column snaps back after a page refresh about one time in ten."
+  },
+  "9009": {
+    "title": "Backfill stage history for older deals",
+    "body": "Deals created before stage history was recorded have no history rows. Write a one-off job that fills them in from the record-change audit log."
+  },
+  "9010": {
+    "title": "Forecast shows last quarter's quota after the quarter rolls over",
+    "body": "On the first days of a new quarter, the forecast page still compares reps against the previous quarter's quota until someone edits a deal."
+  },
+  "9011": {
+    "title": "Managers can override a rep's forecast category",
+    "body": "Managers want to move a deal between Commit, Best case and Pipeline in their own roll-up without changing the rep's call, with both numbers shown."
+  },
+  "9012": {
+    "title": "Cache weighted forecast totals",
+    "body": "The forecast page recalculates every open deal on each load. Keep the totals and refresh them only when a deal changes."
+  },
+  "9013": {
+    "title": "Rate-limit the public API per customer",
+    "body": "One customer's script can slow the API down for everyone. Limit each customer to a set number of API requests per minute."
+  },
+  "9014": {
+    "title": "Admins connect calendars for the whole team",
+    "body": "Let a customer admin connect Google or Microsoft calendars for all of their reps at once from settings, instead of each rep doing it."
+  },
+  "9015": {
+    "title": "Retry failed webhook deliveries",
+    "body": "If a customer's endpoint is down, webhook events are lost. Retry failed deliveries with a growing delay for up to 24 hours."
+  },
+  "9016": {
+    "title": "Admins can require SSO for everyone",
+    "body": "Customer admins want a setting that forces every user in their workspace to sign in through SSO instead of a password."
+  },
+  "9017": {
+    "title": "Invoices count one more seat than there are active users",
+    "body": "Monthly invoices charge for one seat more than the number of active users shown on the billing page."
+  },
+  "9018": {
+    "title": "Rotate the key that signs session tokens",
+    "body": "Session tokens are signed with a key that has never been changed. Add a way to rotate it without signing everyone out."
+  },
+  "9019": {
+    "title": "Show each PR's risk tier on its delivery board card",
+    "body": "Delivery board cards show a PR's number and title but not its tier. Add the tier so engineers can see it at a glance."
+  },
+  "9020": {
+    "title": "Keep a daily total of agent token use",
+    "body": "Keep a running daily total of the tokens each agent uses, so cost can be reported without scanning the whole audit table."
+  }
+}
