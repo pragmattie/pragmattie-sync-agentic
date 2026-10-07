@@ -221,18 +221,28 @@ def test_cors_ignores_an_unknown_origin(api):
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_openapi_lists_the_six_endpoints_with_their_queries(api):
+def test_openapi_lists_the_signal_and_decision_endpoints_with_their_queries(api):
     paths = api.get("/openapi.json").json()["paths"]
 
     def queries(endpoint):
         operation = paths[f"/api/v1/signals/{endpoint}"]["get"]
         return {p["name"] for p in operation.get("parameters", []) if p["in"] == "query"}
 
+    decisions = ["decisions", "decisions/agents", "decisions/{decision_id}"]
     assert {path for path in paths if path.startswith("/api/v1/signals/")} == {
-        f"/api/v1/signals/{endpoint}" for endpoint in ENDPOINTS
+        f"/api/v1/signals/{endpoint}" for endpoint in ENDPOINTS + decisions
     }
     assert queries("summary") == {"days"}
     assert queries("cycle-time") == {"bucket", "weeks"}
     assert queries("ci") == {"weeks"}
     assert queries("sprints") == queries("modules") == queries("sources") == set()
+    assert queries("decisions") == {
+        "agent",
+        "subject_type",
+        "subject_source",
+        "status",
+        "tier",
+        "limit",
+        "offset",
+    }
     assert "/api/v1/health" in paths
