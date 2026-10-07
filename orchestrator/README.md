@@ -26,7 +26,10 @@ Every agent decision is appended to `sdlc_agent_decisions`, which is never updat
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
 reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer
 workflows leave in their comments (`<!-- pragmattie-run {...} -->` and
-`<!-- pragmattie-review {...} -->`) and records each run once.
+`<!-- pragmattie-review {...} -->`) and records each run once. The decision log reads them back
+at `GET /api/v1/signals/decisions` (newest first, filterable by agent, subject, status and tier,
+paginated, with run, token and cost totals over the whole filtered set, trial rows included),
+`/decisions/agents` and `/decisions/{id}`.
 
 T3 needs two people, so a simulated second approver (`policies/approvers.yaml`, `sdlc/approver.py`)
 fills the second seat. The runner asks it once for each pull request whose tier it covers, and

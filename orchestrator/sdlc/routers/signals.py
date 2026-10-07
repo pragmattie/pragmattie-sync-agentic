@@ -1,14 +1,15 @@
-"""Read-only engineering signals for Delivery Insights, straight from ``sdlc.metrics``."""
+"""Read-only engineering signals for Delivery Insights, from ``sdlc.metrics`` and ``sdlc.audit``."""
 
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from sdlc import metrics
+from sdlc import audit, metrics
 from sdlc.clock import utcnow
 from sdlc.db import get_session
+from sdlc.tables import AgentDecision
 
 router = APIRouter(prefix="/api/v1/signals", tags=["signals"])
 
@@ -61,3 +62,45 @@ def modules(db: Session = Depends(get_session)) -> list[dict]:
 @router.get("/sources")
 def sources(db: Session = Depends(get_session)) -> dict[str, dict[str, int]]:
     return metrics.sources(db)
+
+
+@router.get("/decisions")
+def decisions(
+    agent: str | None = None,
+    subject_type: Literal["pr", "issue", "sprint", "epic", "release"] | None = None,
+    subject_source: Literal["synthetic", "github"] | None = None,
+    status: str | None = None,
+    tier: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_session),
+) -> dict:
+    """The audit trail newest first, one page of it, with totals over every matching row."""
+    filters = {
+        "agent": agent,
+        "subject_type": subject_type,
+        "subject_source": subject_source,
+        "status": status,
+        "tier": tier,
+    }
+    rows = audit.list_decisions(db, limit=limit, offset=offset, **filters)
+    return {
+        "total": audit.count_decisions(db, **filters),
+        "limit": limit,
+        "offset": offset,
+        "decisions": [audit.serialize_decision(row) for row in rows],
+        "totals": audit.totals(db, **filters),
+    }
+
+
+@router.get("/decisions/agents")
+def decision_agents(db: Session = Depends(get_session)) -> list[dict]:
+    return audit.agents(db)
+
+
+@router.get("/decisions/{decision_id}")
+def decision(decision_id: int, db: Session = Depends(get_session)) -> dict:
+    row = db.get(AgentDecision, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No decision {decision_id}.")
+    return audit.serialize_decision(row)
