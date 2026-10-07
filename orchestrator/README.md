@@ -78,4 +78,32 @@ Views can't be set through GitHub's API, so set this one by hand: a view named "
 layout, columns by Status, swimlanes by Milestone, with the fields Points, Module, Forecast tier,
 Tier and Risk shown. `setup` prints the same layout as a reminder.
 
+**The board is computed, not edited by people.** `python -m sdlc.board sync` recomputes every
+issue's card from GitHub alone and sets each value that differs, so a card dragged by hand is moved
+back on the next run. To move work, change what is true on GitHub: labels, pull requests,
+approvals, `/hold`. It reads the board's items and the open issues plus issues closed in the last
+14 days, with their labels, comments and the pull requests that close them (each one's head
+`risk-gate` status, `tier:` label and risk comment), all through GraphQL. The most advanced
+matching column wins:
+
+- an issue closed as not planned (or as a duplicate) is left alone;
+- **Merged**: the issue is closed as completed, or a pull request that closes it has merged
+  (Production arrives with the release runner in M6);
+- **Gated**: an open pull request whose `risk-gate` is pending or failing;
+- **In review**: an open, ready pull request whose `risk-gate` passed;
+- **In progress**: a draft pull request, an open one not scored yet, or an issue labelled
+  `agent-ready` with no open pull request, unless it is labelled `plan-proposed` and no person
+  (not a bot) has commented `/approve-plan` since the latest `## Plan` comment: that waits in
+  **Triaged** until the person acts;
+- **Backlog**: labelled `spec-draft` or `needs-info`, or missing a `module:` or `points:` label;
+- **Triaged** otherwise.
+
+Points, Module and Forecast tier come from the issue's `points:`, `module:` and `forecast:` labels.
+Tier and Risk come from the deciding (most advanced) pull request: its `tier:` label and the score
+in its risk comment (the one marked `<!-- pragmattie-risk-gate -->`); either is cleared when there
+is none. It adds open issues that aren't on the board, and never removes or archives an item,
+touches a pull-request item or edits an issue. `sync --dry-run` prints every change and sends
+nothing. It writes no audit rows and needs only `GITHUB_TOKEN` and `GITHUB_REPO`, not the database.
+It runs every 10 minutes as a GitHub Actions workflow, proposed in `ci/proposed/board.yml`.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.

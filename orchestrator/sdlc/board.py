@@ -1,4 +1,4 @@
-"""Check the delivery board (a GitHub Projects board) has every status and field the agents keep.
+"""The delivery board (a GitHub Projects board): check its statuses and fields, and keep it current.
 
 The board already exists: this adopts it and never creates a new one. ``python -m sdlc.board
 setup`` lists what is missing or wrong and changes nothing; ``setup --apply`` also creates the
@@ -7,13 +7,24 @@ an item, or replaces an existing field's options: GitHub gives replaced options 
 would clear the status of every card on the board. A problem with an existing field is reported
 with where to fix it in GitHub, and ``setup`` exits 1.
 
+``python -m sdlc.board sync`` keeps every issue's card current. The board is computed, not edited
+by people: each run works out every card's Status, Points, Module, Forecast tier, Tier and Risk
+from GitHub alone (labels, the pull requests that close the issue, their ``risk-gate`` status and
+risk comment) and sets each value that differs, so a card dragged by hand is moved back on the
+next run. It adds open issues that aren't on the board, and never removes or archives an item,
+touches a pull-request item or edits an issue. It writes no audit rows and needs no database.
+
 The token needs Organization → Projects: read and write.
 """
 
 import argparse
+import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import timedelta
 
+from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.github_client import GitHubClient, GitHubError
 from sdlc.tables import MODULES
@@ -230,19 +241,385 @@ def setup(gh: GitHubClient, *, apply: bool = False) -> list[str]:
     return for_person
 
 
+# Keeping the board current (sync)
+
+GATE_CONTEXT = "risk-gate"
+RISK_MARKER = "<!-- pragmattie-risk-gate -->"
+RISK_SCORE = re.compile(r"\*\*Score (\d+)/100\*\*")
+PLAN_HEADING = re.compile(r"^## Plan\b", re.MULTILINE)
+APPROVE_PLAN = "/approve-plan"
+RECENTLY_CLOSED_DAYS = 14
+LABEL_FIELDS = {"points:": "Points", "module:": "Module", "forecast:": "Forecast tier"}
+
+ITEMS_QUERY = """
+query($owner: String!, $number: Int!, $after: String) {
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          content { __typename ... on Issue { id number } }
+          fieldValues(first: 30) {
+            nodes {
+              ... on ProjectV2ItemFieldNumberValue {
+                number
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+ISSUES_QUERY = """
+query($q: String!, $after: String) {
+  search(type: ISSUE, query: $q, first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on Issue {
+        id
+        number
+        state
+        stateReason
+        labels(first: 50) { nodes { name } }
+        comments(last: 50) { nodes { body author { login __typename } } }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+          nodes {
+            number
+            state
+            isDraft
+            merged
+            labels(first: 50) { nodes { name } }
+            comments(last: 50) { nodes { body } }
+            commits(last: 1) {
+              nodes {
+                commit {
+                  statusCheckRollup {
+                    contexts(first: 100) {
+                      nodes {
+                        __typename
+                        ... on StatusContext { context state }
+                        ... on CheckRun { name status conclusion }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+ADD_ITEM = """
+mutation($project: ID!, $content: ID!) {
+  addProjectV2ItemById(input: {projectId: $project, contentId: $content}) { item { id } }
+}
+"""
+
+UPDATE_VALUE = """
+mutation($project: ID!, $item: ID!, $field: ID!, $value: ProjectV2FieldValue!) {
+  updateProjectV2ItemFieldValue(
+    input: {projectId: $project, itemId: $item, fieldId: $field, value: $value}
+  ) { projectV2Item { id } }
+}
+"""
+
+CLEAR_VALUE = """
+mutation($project: ID!, $item: ID!, $field: ID!) {
+  clearProjectV2ItemFieldValue(
+    input: {projectId: $project, itemId: $item, fieldId: $field}
+  ) { projectV2Item { id } }
+}
+"""
+
+
+def _label_value(labels: list[str], prefix: str) -> str | None:
+    for label in labels:
+        if label.startswith(prefix):
+            return label[len(prefix) :].strip() or None
+    return None
+
+
+def awaiting_plan_approval(issue: dict) -> bool:
+    """Labelled ``plan-proposed`` with no person's ``/approve-plan`` after the latest plan."""
+    if "plan-proposed" not in issue["labels"]:
+        return False
+    comments = issue.get("comments", [])
+    latest_plan = max(
+        (index for index, c in enumerate(comments) if PLAN_HEADING.search(c["body"])), default=-1
+    )
+    return not any(
+        c["body"].lstrip().startswith(APPROVE_PLAN) and not c.get("bot")
+        for c in comments[latest_plan + 1 :]
+    )
+
+
+def pr_column(pr: dict) -> str | None:
+    """The column one pull request puts its issue in; ``None`` for a closed, unmerged one."""
+    if pr["merged"]:
+        return "Merged"
+    if pr["state"] != "OPEN":
+        return None
+    if pr["draft"]:
+        return "In progress"
+    if pr.get("gate") in ("pending", "failure"):
+        return "Gated"
+    if pr.get("gate") == "success":
+        return "In review"
+    return "In progress"  # not scored yet
+
+
+def deciding_pr(prs: list[dict]) -> dict | None:
+    """The most advanced pull request: merged, then gated, in review, then in progress."""
+    ranked = [(STATUSES.index(column), pr) for pr in prs if (column := pr_column(pr))]
+    return max(ranked, key=lambda pair: pair[0])[1] if ranked else None
+
+
+def column_for(issue: dict, prs: list[dict]) -> str | None:
+    """The Status column for an issue; ``None`` leaves its card alone."""
+    if issue["state"] == "CLOSED" and issue.get("state_reason") in ("NOT_PLANNED", "DUPLICATE"):
+        return None
+    if issue["state"] == "CLOSED":
+        return "Merged"
+    pr = deciding_pr(prs)
+    if pr is not None:
+        return pr_column(pr)
+    labels = issue["labels"]
+    if "agent-ready" in labels:  # an agent is planning or building, unless a person must act
+        return "Triaged" if awaiting_plan_approval(issue) else "In progress"
+    if "spec-draft" in labels or "needs-info" in labels:
+        return "Backlog"
+    if _label_value(labels, "module:") is None or _label_value(labels, "points:") is None:
+        return "Backlog"
+    return "Triaged"
+
+
+def risk_score(pr: dict) -> int | None:
+    """The score in the pull request's latest risk comment, or ``None``."""
+    for body in reversed(pr.get("comments", [])):
+        if RISK_MARKER in body:
+            match = RISK_SCORE.search(body)
+            return int(match.group(1)) if match else None
+    return None
+
+
+def fields_for(issue: dict, prs: list[dict]) -> dict:
+    """Every field but Status, by name; ``None`` means the field should be empty."""
+    values: dict = {}
+    for prefix, name in LABEL_FIELDS.items():
+        values[name] = _label_value(issue["labels"], prefix)
+    if values["Points"] is not None:
+        try:
+            values["Points"] = float(values["Points"])
+        except ValueError:
+            values["Points"] = None
+    pr = deciding_pr(prs)
+    values["Tier"] = _label_value(pr["labels"], "tier:") if pr else None
+    values["Risk"] = risk_score(pr) if pr else None
+    return values
+
+
+def _gate_state(contexts: list[dict]) -> str | None:
+    """The head commit's ``risk-gate`` as ``success``, ``pending`` or ``failure``."""
+    for node in contexts:
+        if node.get("__typename") == "StatusContext" and node.get("context") == GATE_CONTEXT:
+            state = node.get("state")
+            if state == "SUCCESS":
+                return "success"
+            return "pending" if state in ("PENDING", "EXPECTED") else "failure"
+        if node.get("__typename") == "CheckRun" and node.get("name") == GATE_CONTEXT:
+            if node.get("status") != "COMPLETED":
+                return "pending"
+            return "success" if node.get("conclusion") == "SUCCESS" else "failure"
+    return None
+
+
+def _names(connection: dict | None) -> list[str]:
+    return [node["name"] for node in (connection or {}).get("nodes") or []]
+
+
+def _parse_pr(node: dict) -> dict:
+    commits = (node.get("commits") or {}).get("nodes") or []
+    rollup = (commits[-1]["commit"].get("statusCheckRollup") or {}) if commits else {}
+    contexts = (rollup.get("contexts") or {}).get("nodes") or []
+    return {
+        "number": node["number"],
+        "state": node["state"],
+        "draft": node.get("isDraft", False),
+        "merged": node.get("merged", False),
+        "gate": _gate_state(contexts),
+        "labels": _names(node.get("labels")),
+        "comments": [c["body"] for c in (node.get("comments") or {}).get("nodes") or []],
+    }
+
+
+def _parse_issue(node: dict) -> tuple[dict, list[dict]]:
+    comments = []
+    for comment in (node.get("comments") or {}).get("nodes") or []:
+        author = comment.get("author") or {}
+        comments.append({"body": comment["body"], "bot": author.get("__typename") == "Bot"})
+    issue = {
+        "id": node["id"],
+        "number": node["number"],
+        "state": node["state"],
+        "state_reason": node.get("stateReason"),
+        "labels": _names(node.get("labels")),
+        "comments": comments,
+    }
+    refs = (node.get("closedByPullRequestsReferences") or {}).get("nodes") or []
+    return issue, [_parse_pr(pr) for pr in refs if pr]
+
+
+def _paginate(gh: GitHubClient, query: str, path: tuple[str, ...], **variables) -> list[dict]:
+    nodes: list[dict] = []
+    after = None
+    while True:
+        data = gh.graphql(query, after=after, **variables)
+        for key in path:
+            data = (data or {}).get(key) or {}
+        nodes.extend(node for node in data.get("nodes") or [] if node)
+        page = data.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return nodes
+        after = page["endCursor"]
+
+
+@dataclass
+class Item:
+    id: str
+    values: dict  # field name -> number or option name
+
+
+def load_items(gh: GitHubClient, board: Board) -> dict[str, Item]:
+    """The board's issue items, by issue node id; pull-request and draft items are left out."""
+    path = ("organization", "projectV2", "items")
+    nodes = _paginate(gh, ITEMS_QUERY, path, owner=board.owner, number=board.number)
+    items = {}
+    for node in nodes:
+        content = node.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        values = {}
+        for value in (node.get("fieldValues") or {}).get("nodes") or []:
+            name = ((value or {}).get("field") or {}).get("name")
+            if name:
+                values[name] = value["number"] if "number" in value else value.get("name")
+        items[content["id"]] = Item(node["id"], values)
+    return items
+
+
+def load_issues(gh: GitHubClient) -> list[tuple[dict, list[dict]]]:
+    """Open issues and issues closed in the last 14 days, each with its closing pull requests."""
+    since = (utcnow() - timedelta(days=RECENTLY_CLOSED_DAYS)).date().isoformat()
+    queries = (
+        f"repo:{gh.repo} is:issue is:open",
+        f"repo:{gh.repo} is:issue is:closed closed:>={since}",
+    )
+    return [_parse_issue(n) for q in queries for n in _paginate(gh, ISSUES_QUERY, ("search",), q=q)]
+
+
+@dataclass
+class Report:
+    seen: int = 0
+    added: int = 0
+    changed: Counter = field(default_factory=Counter)  # field name -> values set or cleared
+
+    def summary(self) -> str:
+        changes = ", ".join(f"{name} {count}" for name, count in self.changed.items()) or "none"
+        return f"{self.seen} items seen, {self.added} added; changed: {changes}."
+
+
+def _same(current, wanted) -> bool:
+    if isinstance(current, int | float) and isinstance(wanted, int | float):
+        return float(current) == float(wanted)
+    return current == wanted
+
+
+def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
+    """Set every issue card's Status and fields from GitHub; add open issues not on the board."""
+    board = load_board(gh)
+    items = load_items(gh, board)
+    report = Report()
+    prefix = "Would " if dry_run else ""
+    for issue, prs in load_issues(gh):
+        status = column_for(issue, prs)
+        item = items.get(issue["id"])
+        if status is None or (item is None and issue["state"] != "OPEN"):
+            continue
+        report.seen += 1
+        if item is None:
+            print(f"{prefix}add #{issue['number']} to the board.")
+            report.added += 1
+            item = Item("", {})
+            if not dry_run:
+                data = gh.graphql(ADD_ITEM, project=board.project_id, content=issue["id"])
+                item.id = data["addProjectV2ItemById"]["item"]["id"]
+        wanted = {STATUS: status, **fields_for(issue, prs)}
+        for name, value in wanted.items():
+            current = item.values.get(name)
+            if _same(current, value):
+                continue
+            found = board.fields.get(name)
+            if found is None:
+                print(f"  #{issue['number']}: the board has no {name} field; run setup.")
+                continue
+            if value is not None and found.data_type == SINGLE_SELECT:
+                if value not in found.options:
+                    print(f'  #{issue["number"]}: {name} has no "{value}" option; skipped.')
+                    continue
+            was = "(empty)" if current is None else current
+            shown = "(empty)" if value is None else value
+            print(f"{prefix}set #{issue['number']} {name}: {was} → {shown}.")
+            report.changed[name] += 1
+            if dry_run:
+                continue
+            variables = {"project": board.project_id, "item": item.id, "field": found.id}
+            if value is None:
+                gh.graphql(CLEAR_VALUE, **variables)
+            elif found.data_type == SINGLE_SELECT:
+                gh.graphql(
+                    UPDATE_VALUE, value={"singleSelectOptionId": found.options[value]}, **variables
+                )
+            else:
+                gh.graphql(UPDATE_VALUE, value={"number": float(value)}, **variables)
+    print(report.summary())
+    return report
+
+
 def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m sdlc.board", description="Check the delivery board's statuses and fields."
+        prog="python -m sdlc.board",
+        description="Check the delivery board's statuses and fields, and keep its cards current.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     setup_parser = commands.add_parser("setup", help="check the board and list what is missing")
     setup_parser.add_argument(
         "--apply", action="store_true", help="create the missing fields (default: dry run)"
     )
+    sync_parser = commands.add_parser("sync", help="move every card and set its fields")
+    sync_parser.add_argument(
+        "--dry-run", action="store_true", help="print the changes and send no mutation"
+    )
     args = parser.parse_args(argv)
 
     try:
-        left = setup(client or GitHubClient(), apply=args.apply)
+        gh = client or GitHubClient()
+        if args.command == "sync":
+            sync(gh, dry_run=args.dry_run)
+            return 0
+        left = setup(gh, apply=args.apply)
     except GitHubError as error:
         sys.exit(str(error))
     return 1 if left else 0
