@@ -723,8 +723,8 @@ def test_sync_never_sends_a_forbidden_mutation():
         assert forbidden not in source
 
 
-def test_proposed_workflow_runs_only_the_sync():
-    path = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "board.yml"
+def test_the_board_workflow_runs_only_the_sync():
+    path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "board.yml"
     workflow = yaml.safe_load(path.read_text())
     triggers = workflow[True]  # YAML 1.1 reads the bare key "on" as true
     assert triggers["schedule"] == [{"cron": "*/10 * * * *"}]
