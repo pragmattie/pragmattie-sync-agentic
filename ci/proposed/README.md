@@ -8,15 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`board.yml`** (4.16): keeps the delivery board current every 10 minutes
-  (`python -m sdlc.board sync`, no API key, no Claude call). To apply it:
-  1. check the builder app has **Organization → Projects: read and write**;
-  2. run `python -m sdlc.board setup --apply` once from `orchestrator/` (4.15), and fix anything it
-     reports;
-  3. move `ci/proposed/board.yml` to `.github/workflows/board.yml`;
-  4. run it once by hand (Actions → Delivery board → Run workflow) and check its log.
-
-  GitHub's built-in project workflows can stay on: the sync sets the same values or corrects them.
+Nothing pending.
 
 ## Applied
 
@@ -31,6 +23,8 @@ Nothing in this folder runs automatically.
 - **`approvers.yaml`** (4.11): the simulated second approver. Moved to
   `orchestrator/policies/approvers.yaml` (the loader's default, `sdlc.approver.POLICY`) and the
   copy deleted.
+- **`board.yml`** (4.16): keeps the delivery board current every 10 minutes. Moved to
+  `.github/workflows/board.yml`; the builder app has Organization → Projects: read and write.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
