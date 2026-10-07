@@ -1,5 +1,5 @@
-# Keeps the delivery board current (4.16). Proposed by an agent: a person moves it to
-# .github/workflows/board.yml; see ci/proposed/README.md.
+# Keeps the delivery board current (4.16). Proposed by an agent in ci/proposed/ and applied here
+# by a person.
 #
 # Every run recomputes every issue's card from GitHub alone (labels, the pull requests that close
 # the issue, their risk-gate status and risk comment) and sets each value that differs. It needs
