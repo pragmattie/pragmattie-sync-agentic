@@ -3,14 +3,18 @@
 The bars below were fixed before the first run. A pattern of misses is a prompt fix, never a
 reason to lower a bar or change the labels. Priority is reported but never gated.
 
-Grading the stored decisions costs nothing. A blind run re-classifies each issue's saved text
-with no labels shown, and with similar issues drawn from simulated history only, so no other
-eval issue can appear as an example with its labels. Each call is recorded as a trial row; it
-never writes to GitHub, and without ``yes`` it calls nothing and only shows the cost.
+Both sets are v1's issues, not this repository's: v1's backlog #6-#45 are renumbered
+8006-8045 and the holdout is 9001-9020. There are no stored decisions to grade, so both are
+always graded fresh, and their trial rows are recorded as simulated. ``agent_answers`` grades
+stored decisions for a future set drawn from this repository's own issues.
 
-``python -m sdlc.eval`` grades the stored decisions on the backlog set; ``--fresh`` shows what a
-blind run would send and cost, and ``--fresh --yes`` runs it and grades those answers. The
-holdout set always runs fresh.
+A blind run re-classifies each issue's saved text with no labels shown, and with similar issues
+drawn from simulated history only, so no other eval issue can appear as an example with its
+labels. Each call is recorded as a trial row; it never writes to GitHub, and without ``yes`` it
+calls nothing and only shows what it would send and cost.
+
+``python -m sdlc.eval`` shows what a blind run of the backlog set would send and cost, and
+``--yes`` runs it and grades those answers. ``--fresh`` is accepted and changes nothing.
 """
 
 import argparse
@@ -46,8 +50,9 @@ class EvalSet:
 
 
 SETS = {
-    "backlog": EvalSet(EVAL_DIR / "triage_eval_set.json", EVAL_DIR / "_issues.json", "github"),
-    # Numbers from 9001 exist nowhere else, so this set is always graded fresh.
+    # v1's backlog issues #6-#45, renumbered 8006-8045 (v1's #6 is 8006).
+    "backlog": EvalSet(EVAL_DIR / "triage_eval_set.json", EVAL_DIR / "_issues.json", "synthetic"),
+    # v1's holdout issues, 9001-9020.
     "holdout": EvalSet(
         EVAL_DIR / "triage_holdout_set.json", EVAL_DIR / "holdout_issues.json", "synthetic"
     ),
@@ -192,7 +197,12 @@ def run_blind(db: Session, llm: Any, set_name: str, *, yes: bool) -> dict[str, A
             for number in numbers
         )
         db.rollback()  # a preview writes nothing
-        return {"set": set_name, "calls": len(numbers), "max_cost_usd": round(ceiling, 6)}
+        return {
+            "set": set_name,
+            "calls": len(numbers),
+            "max_cost_usd": round(ceiling, 6),
+            "issues": [{"number": n, "title": issues[n]["title"]} for n in numbers],
+        }
 
     answers: dict[int, dict[str, Any]] = {}
     cost = 0.0
@@ -267,48 +277,40 @@ def describe(report: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None, engine: Engine | None = None, llm: Any = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m sdlc.eval", description=__doc__.split("\n")[0])
     parser.add_argument("--set", choices=sorted(SETS), default="backlog", dest="set_name")
-    parser.add_argument("--fresh", action="store_true", help="re-run the agent blind")
+    parser.add_argument("--fresh", action="store_true", help="accepted; every set runs fresh")
     parser.add_argument("--yes", action="store_true", help="confirm the real, paid calls")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     args = parser.parse_args(argv)
 
-    fresh = args.fresh or args.set_name == "holdout"
     labels = load_labels(SETS[args.set_name].labels)
     with Session(engine or get_engine()) as db:
-        if not fresh:
-            answers = agent_answers(db)
-            run = None
+        run = run_blind(db, llm or triage.triage_llm(), args.set_name, yes=args.yes)
+    if not args.yes:
+        if args.json:
+            print(json.dumps(run))
         else:
-            run = run_blind(db, llm or triage.triage_llm(), args.set_name, yes=args.yes)
-            if not args.yes:
-                if args.json:
-                    print(json.dumps(run))
-                else:
-                    print(
-                        f"A blind run of the {args.set_name} set makes {run['calls']} real, paid "
-                        f"model calls, costing at most {run['max_cost_usd']} USD. No labels are "
-                        "shown and nothing is written to GitHub. Run it again with --yes to go "
-                        "ahead."
-                    )
-                return 0
-            answers = run["answers"]
-    report = grade(labels, answers)
+            print(
+                f"A blind run of the {args.set_name} set makes {run['calls']} real, paid model "
+                f"calls, costing at most {run['max_cost_usd']} USD. It sends each issue's title "
+                "and body, with no labels and similar issues from simulated history only:"
+            )
+            for issue in run["issues"]:
+                print(f"  #{issue['number']} {issue['title']}")
+            print("Nothing is written to GitHub. Run it again with --yes to go ahead.")
+        return 0
+    report = grade(labels, run["answers"])
     if args.json:
-        if run is not None:
-            report = {
-                **report,
-                "set": args.set_name,
-                "calls": run["calls"],
-                "cost_usd": run["cost_usd"],
-            }
-        print(json.dumps(report))
+        print(
+            json.dumps(
+                {**report, "set": args.set_name, "calls": run["calls"], "cost_usd": run["cost_usd"]}
+            )
+        )
     else:
         print(describe(report))
-        if run is not None:
-            print(
-                f"Ran {run['calls']} blind calls for {run['cost_usd']} USD, recorded as trial "
-                "rows. Nothing was written to GitHub."
-            )
+        print(
+            f"Ran {run['calls']} blind calls for {run['cost_usd']} USD, recorded as trial "
+            "rows. Nothing was written to GitHub."
+        )
     return 0
 
 

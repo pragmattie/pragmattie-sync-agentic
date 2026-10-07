@@ -49,10 +49,13 @@ A `retriage` label runs it again and is then removed. It never closes, assigns o
 
 `sdlc/eval.py` grades the triage agent against a person's own labels, with bars fixed before the
 first run: module 85%, type 90%, points within one step 70% (priority is reported, never gated).
-`python -m sdlc.eval` grades the stored decisions on the backlog set at no cost; `--fresh` shows
-what a blind re-run would send and cost, and `--fresh --yes` runs it with no labels shown and
-similar issues from simulated history only, recording trial rows and writing nothing to GitHub.
-`--set holdout` always runs fresh, and `--json` prints the report. The labelled sets and their
+Both sets are v1's issues, not this
+repository's (the backlog is v1's #6-#45 renumbered 8006-8045, the holdout 9001-9020), so there
+are no stored decisions to grade and both always run fresh. `python -m sdlc.eval [--set
+backlog|holdout]` shows what a blind re-run would send and cost; `--yes` runs it with no labels
+shown and similar issues from simulated history only, recording trial rows as simulated and
+writing nothing to GitHub, then grades those answers. `--fresh` is accepted and changes nothing,
+and `--json` prints the report. The labelled sets and their
 issue texts live in `eval/` and are added by a person.
 
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.

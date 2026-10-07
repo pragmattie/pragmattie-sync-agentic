@@ -13,6 +13,8 @@ from sdlc.audit import record_decision
 from sdlc.db import Base
 from sdlc.eval import (
     BARS,
+    EVAL_DIR,
+    SETS,
     EvalSet,
     agent_answers,
     describe,
@@ -63,9 +65,8 @@ def _answer(module="leads", type="feature", points=3, priority=None):
 
 @pytest.fixture
 def sets(monkeypatch):
-    fixture = EvalSet(FIXTURES / "labels.json", FIXTURES / "issues.json", "github")
-    holdout = EvalSet(FIXTURES / "labels.json", FIXTURES / "issues.json", "synthetic")
-    monkeypatch.setattr(eval_module, "SETS", {"backlog": fixture, "holdout": holdout})
+    fixture = EvalSet(FIXTURES / "labels.json", FIXTURES / "issues.json", "synthetic")
+    monkeypatch.setattr(eval_module, "SETS", {"backlog": fixture, "holdout": fixture})
 
 
 @pytest.fixture
@@ -134,6 +135,20 @@ def _decide(db, number, output, *, trigger="opened", status="ok", source="github
 def _trials(engine):
     with Session(engine) as db:
         return list(db.scalars(select(AgentDecision).order_by(AgentDecision.id)))
+
+
+# The sets
+
+
+def test_both_sets_are_v1s_issues_recorded_as_simulated():
+    assert SETS == {
+        "backlog": EvalSet(
+            EVAL_DIR / "triage_eval_set.json", EVAL_DIR / "_issues.json", "synthetic"
+        ),
+        "holdout": EvalSet(
+            EVAL_DIR / "triage_holdout_set.json", EVAL_DIR / "holdout_issues.json", "synthetic"
+        ),
+    }
 
 
 # points_step
@@ -281,6 +296,8 @@ def test_without_yes_nothing_is_called_and_the_cost_is_shown(engine, sets, no_gi
     assert llm.calls == []
     assert preview["calls"] == 3
     assert preview["max_cost_usd"] > 0
+    assert [issue["number"] for issue in preview["issues"]] == [101, 102, 103]
+    assert preview["issues"][0]["title"] == "Import leads from a CSV file"
     assert _trials(engine) == []
 
 
@@ -319,15 +336,15 @@ def test_every_candidate_comes_from_simulated_history(engine, sets, monkeypatch)
     assert seen == ["synthetic"] * 6
 
 
-@pytest.mark.parametrize(("set_name", "source"), [("backlog", "github"), ("holdout", "synthetic")])
-def test_one_trial_row_per_issue_with_the_sets_source(engine, sets, no_github, set_name, source):
+@pytest.mark.parametrize("set_name", ["backlog", "holdout"])
+def test_one_trial_row_per_issue_with_the_sets_source(engine, sets, no_github, set_name):
     with Session(engine) as db:
         run_blind(db, TitleLLM(), set_name, yes=True)
         run_blind(db, TitleLLM(), set_name, yes=True)  # a second run never collides
     rows = _trials(engine)
     assert len(rows) == 6
     assert {(row.trigger, row.subject_source, row.status) for row in rows} == {
-        ("trial", source, "ok")
+        ("trial", "synthetic", "ok")
     }
     assert [row.subject_id for row in rows] == [101, 102, 103] * 2
     assert [row.attempt for row in rows] == [4, 4, 4, 5, 5, 5]
@@ -348,55 +365,52 @@ def test_a_failed_call_is_recorded_and_graded_as_missing(engine, sets):
 # The CLI
 
 
-def test_cli_grades_the_stored_decisions_by_default(engine, sets, capsys):
+@pytest.mark.parametrize("argv", [[], ["--fresh"], ["--set", "holdout"]])
+def test_cli_without_yes_shows_what_it_would_send_and_cost(engine, sets, capsys, argv):
     with Session(engine) as db:
         _decide(db, 101, {"module": "leads", "type": "feature", "estimate_points": 3})
         db.commit()
     llm = TitleLLM()
-    assert main([], engine=engine, llm=llm) == 0
+    assert main(argv, engine=engine, llm=llm) == 0
     out = capsys.readouterr().out
-    assert "Graded 3 issues." in out
-    assert "Module: 33% (bar 85%) FAIL" in out
-    assert "Missing answers (counted as misses): #102, #103" in out
+    name = "holdout" if "holdout" in argv else "backlog"
+    assert f"A blind run of the {name} set makes 3 real, paid model calls" in out
+    assert "#101 Import leads from a CSV file" in out
+    assert "#103 Cache the forecast rollup" in out
+    assert "Graded" not in out  # stored decisions are never graded
     assert llm.calls == []
+    assert len(_trials(engine)) == 1  # only the stored decision
 
 
-def test_cli_json_prints_the_report(engine, sets, capsys):
-    assert main(["--json"], engine=engine) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["missing"] == [101, 102, 103]
-    assert report["bars"]["module"]["passed"] is False
-
-
-def test_cli_fresh_without_yes_shows_the_cost_and_calls_nothing(engine, sets, capsys):
+def test_cli_json_without_yes_prints_the_preview(engine, sets, capsys):
     llm = TitleLLM()
-    assert main(["--fresh"], engine=engine, llm=llm) == 0
-    assert "3 real, paid model calls" in capsys.readouterr().out
-    assert main(["--fresh", "--json"], engine=engine, llm=llm) == 0
+    assert main(["--json"], engine=engine, llm=llm) == 0
     preview = json.loads(capsys.readouterr().out)
+    assert preview["set"] == "backlog"
     assert preview["calls"] == 3 and preview["max_cost_usd"] > 0
+    assert [issue["number"] for issue in preview["issues"]] == [101, 102, 103]
     assert llm.calls == []
     assert _trials(engine) == []
 
 
-def test_cli_fresh_yes_runs_blind_and_grades_those_answers(engine, sets, no_github, capsys):
-    assert main(["--fresh", "--yes", "--json"], engine=engine, llm=TitleLLM()) == 0
+@pytest.mark.parametrize("argv", [["--yes"], ["--fresh", "--yes"]])
+def test_cli_yes_runs_blind_and_grades_those_answers(engine, sets, no_github, capsys, argv):
+    assert main([*argv, "--json"], engine=engine, llm=TitleLLM()) == 0
     report = json.loads(capsys.readouterr().out)
+    assert report["set"] == "backlog"
     assert report["calls"] == 3
     assert report["rates"]["module"] == 1.0
     assert report["rates"]["type"] == pytest.approx(2 / 3)
     assert report["rates"]["points_within_one"] == 1.0
     assert report["patterns"][0]["dimension"] == "type"
+    assert {row.subject_source for row in _trials(engine)} == {"synthetic"}
     assert len(_trials(engine)) == 3
 
 
-def test_cli_holdout_always_runs_fresh(engine, sets, capsys):
-    llm = TitleLLM()
-    assert main(["--set", "holdout"], engine=engine, llm=llm) == 0
-    assert "A blind run of the holdout set" in capsys.readouterr().out
-    assert llm.calls == []
-    assert main(["--set", "holdout", "--yes"], engine=engine, llm=llm) == 0
+def test_cli_yes_prints_the_graded_report(engine, sets, no_github, capsys):
+    assert main(["--set", "holdout", "--yes"], engine=engine, llm=TitleLLM()) == 0
     out = capsys.readouterr().out
+    assert "Graded 3 issues." in out
     assert "Type: 67% (bar 90%) FAIL" in out
+    assert "1x type: chore -> feature (#103)" in out
     assert "Nothing was written to GitHub." in out
-    assert {row.subject_source for row in _trials(engine)} == {"synthetic"}
