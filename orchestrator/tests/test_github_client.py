@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 import httpx
@@ -315,3 +316,55 @@ def test_a_plain_403_is_an_ordinary_error():
         client.get("/x")
     assert not isinstance(raised.value, github_client.RateLimited)
     assert client.limited_until is None
+
+
+def test_graphql_posts_the_query_and_variables_and_returns_data():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": {"viewer": {"login": "bot"}}})
+
+    data = _client(handler).graphql("query($n: Int!) { viewer { login } }", n=1)
+    assert data == {"viewer": {"login": "bot"}}
+    request = seen[0]
+    assert request.method == "POST"
+    assert request.url == "https://api.github.com/graphql"
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+    assert json.loads(request.content) == {
+        "query": "query($n: Int!) { viewer { login } }",
+        "variables": {"n": 1},
+    }
+
+
+def test_graphql_raises_the_first_error_message():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "data": None,
+                "errors": [{"message": "Could not resolve to a ProjectV2"}, {"message": "two"}],
+            },
+        )
+
+    with pytest.raises(GitHubError, match="Could not resolve to a ProjectV2") as raised:
+        _client(handler).graphql("query { x }")
+    assert "two" not in str(raised.value)
+
+
+def test_graphql_goes_through_the_rate_limit_handling():
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"data": {}},
+            headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(RESET)},
+        )
+
+    client = _client(handler, now=Clock(NOON))
+    client.graphql("query { x }")
+    with pytest.raises(github_client.RateLimited):
+        client.graphql("query { x }")
+    assert calls == ["/graphql"]

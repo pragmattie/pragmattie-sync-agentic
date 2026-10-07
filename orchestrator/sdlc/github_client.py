@@ -7,7 +7,8 @@ Every GET is conditional: the client remembers each response's ``ETag`` per acce
 and query, sends it back as ``If-None-Match``, and on a ``304`` returns the remembered body. A 304
 doesn't count against GitHub's rate limit. When a response says no requests are left, the client
 keeps its body and refuses every later request itself, without calling GitHub, until the limit
-resets. A 403 or 429 that says the limit is spent raises ``RateLimited``.
+resets. A 403 or 429 that says the limit is spent raises ``RateLimited``. GraphQL calls go through
+the same handling.
 """
 
 from collections.abc import Callable
@@ -146,6 +147,13 @@ class GitHubClient:
 
     def patch(self, path: str, body: dict) -> Any:
         return self._send("PATCH", self._path(path), json=body).json()
+
+    def graphql(self, query: str, **variables: Any) -> dict:
+        """Run a GraphQL query or mutation and return its ``data``."""
+        body = self._send("POST", "/graphql", json={"query": query, "variables": variables}).json()
+        if body.get("errors"):
+            raise GitHubError(f"GitHub GraphQL: {body['errors'][0].get('message', 'error')}")
+        return body.get("data") or {}
 
     def delete(self, path: str) -> None:
         self._send("DELETE", self._path(path))

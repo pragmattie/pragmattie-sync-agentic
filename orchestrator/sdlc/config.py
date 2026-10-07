@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     github_token: str = Field(default="", repr=False)
     github_repo: str = ""
     github_api_url: str = DEFAULT_GITHUB_API_URL
+    board_owner: str = "pragmattie"
+    board_number: int = 1
     anthropic_api_key: str = Field(default="", repr=False)
     risk_model: str = "claude-sonnet-5"
     triage_model: str = "claude-haiku-4-5-20251001"
