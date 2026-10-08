@@ -7,6 +7,9 @@ import pytest
 from sdlc.clock import utcnow
 
 
+NEEDS_TZSET = pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
+
+
 @pytest.fixture
 def tokyo(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Tokyo")
@@ -16,6 +19,7 @@ def tokyo(monkeypatch):
     time.tzset()
 
 
+@NEEDS_TZSET
 def test_utcnow_is_naive_utc_to_the_second(tokyo):
     assert os.environ["TZ"] == "Asia/Tokyo"
     moment = utcnow()

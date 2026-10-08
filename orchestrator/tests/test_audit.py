@@ -1,6 +1,7 @@
 import inspect
 import json
 import re
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -199,8 +200,8 @@ def test_the_module_never_updates_or_deletes_a_row(module):
     assert not re.search(r"\b(update|delete)\(", source, re.I)
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 def test_record_decisions_default_time_is_utc_whatever_the_local_zone(db, monkeypatch):
-    import time
     from datetime import UTC
 
     monkeypatch.setenv("TZ", "America/Los_Angeles")

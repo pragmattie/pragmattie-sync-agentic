@@ -599,6 +599,9 @@ def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
 
 
 def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> int:
+    # The output has arrows; a cp1252 console (Windows) can't encode them otherwise.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog="python -m sdlc.board",
         description="Check the delivery board's statuses and fields, and keep its cards current.",

@@ -1,3 +1,4 @@
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from statistics import mean
@@ -66,8 +67,8 @@ def _snapshot(session):
     )
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 def test_builds_default_time_is_utc_whatever_the_local_zone(session, monkeypatch):
-    import time
     from datetime import UTC
 
     monkeypatch.setenv("TZ", "America/Los_Angeles")
