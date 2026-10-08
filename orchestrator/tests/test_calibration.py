@@ -214,3 +214,41 @@ def test_the_pooled_bars_hold_on_thirty_generated_histories():
     assert report["bars"]["t0_rate_at_most_a_quarter_of_overall"]
     assert report["bars"]["top_decile_captures_majority_pooled"]
     assert "FAIL" not in calibration.format_many(report)
+
+    pooled = calibration.POOLED_RESULT
+    assert report["merged_prs"] == pooled["merged_prs"]
+    assert report["incident_prs"] == pooled["incident_prs"]
+    assert round(report["overall_rate"], 4) == pooled["overall_rate"]
+    assert round(report["t0_rate"], 4) == pooled["t0_rate"]
+    assert round(report["top_decile"]["capture"], 4) == pooled["top_decile"]["capture"]
+    assert report["top_decile"]["lowest"] == pooled["top_decile"]["lowest"]
+    assert report["top_decile"]["highest"] == pooled["top_decile"]["highest"]
+    assert report["bars"] == pooled["bars"]
+
+
+def _merged(db, number, source, incident=False):
+    db.add(
+        PullRequest(
+            number=number,
+            title=f"PR {number}",
+            source=source,
+            review_count=1,
+            state="merged",
+            created_at=THURSDAY - timedelta(days=1),
+            merged_at=THURSDAY,
+            caused_incident=incident,
+        )
+    )
+
+
+def test_calibrate_can_be_limited_to_one_source(session):
+    _merged(session, 1, "synthetic", incident=True)
+    _merged(session, 2, "synthetic")
+    _merged(session, 3, "github")
+    session.flush()
+
+    assert calibration.calibrate(session, load_policy())["merged_prs"] == 3
+    synthetic = calibration.calibrate(session, load_policy(), source="synthetic")
+    assert synthetic["merged_prs"] == 2
+    assert synthetic["incident_prs"] == 1
+    assert [row[0] for row in calibration.score_history(session, load_policy(), "github")] == [3]
