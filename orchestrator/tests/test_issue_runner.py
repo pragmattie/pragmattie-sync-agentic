@@ -11,7 +11,7 @@ from sdlc.agents import triage
 from sdlc.agents.llm import LLMError
 from sdlc.agents.triage_comment import MARKER, comment_version, content_version
 from sdlc.db import Base
-from sdlc.issue_runner import IssueRunner, main
+from sdlc.issue_runner import GAVE_UP_MARKER, IssueRunner, main
 from sdlc.runner import Runner, run
 from sdlc.tables import AgentDecision, Issue
 from sdlc.tiers import load_policy
@@ -228,6 +228,43 @@ def test_three_failures_then_stop_but_retriage_still_runs(runner, gh, llm, engin
     assert (last.trigger, last.status, last.attempt) == ("retriage", "ok", 4)
     assert "retriage" not in gh.issue_labels[1]
     assert sorted(gh.issue_labels[1]) == sorted(FOUR)
+
+
+def _gave_up(gh):
+    return [c for c in _bot_comments(gh) if c["body"].startswith(GAVE_UP_MARKER)]
+
+
+def test_retriage_gives_up_after_three_failures_until_the_label_is_added_again(
+    runner, gh, llm, engine
+):
+    runner.poll_once(NOON)
+    llm.error = LLMError("error", "Anthropic API 529")
+    gh.label(1, "retriage", NOON + timedelta(minutes=1))
+    for minute in (2, 3, 4):  # no backoff: one paid call on every poll
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    assert len(llm.calls) == 4
+    assert [row.trigger for row in _rows(engine)[1:]] == ["retriage"] * 3
+
+    runner.poll_once(NOON + timedelta(minutes=5))
+    runner.poll_once(NOON + timedelta(minutes=6))
+    assert len(llm.calls) == 4  # stopped
+    assert "retriage" in gh.issue_labels[1]
+    [comment] = _gave_up(gh)
+    last = _rows(engine)[-1]
+    assert "gave up" in comment["body"]
+    assert f"decision {last.id}" in comment["body"]
+    assert "Anthropic API 529" in comment["body"]
+    assert "remove it and add it back" in comment["body"]
+
+    # A person removes the label and adds it back: the agent tries again.
+    gh.issue_labels[1].remove("retriage")
+    llm.error = None
+    gh.label(1, "retriage", NOON + timedelta(minutes=7))
+    runner.poll_once(NOON + timedelta(minutes=8))
+    assert len(llm.calls) == 5
+    assert _rows(engine)[-1].status == "ok"
+    assert "retriage" not in gh.issue_labels[1]
+    assert len(_gave_up(gh)) == 1
 
 
 def test_an_exception_from_assess_is_a_failed_run(runner, gh, engine, monkeypatch):

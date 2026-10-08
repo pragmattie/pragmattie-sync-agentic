@@ -31,6 +31,7 @@ class FakeGitHub:
         self.reviews: dict[int, list[dict]] = {}
         self.comments: list[dict] = []  # each carries its issue "number"
         self.issue_labels: dict[int, list[str]] = {}
+        self.issue_events: dict[int, list[dict]] = {}
         self.repo_labels: dict[str, str] = {}
         self.statuses: list[dict] = []
         self.diffs: dict[int, str] = {}
@@ -98,6 +99,12 @@ class FakeGitHub:
         }
         self.issue_labels[number] = list(labels)
         return self.issues[number]
+
+    def label(self, number: int, name: str, at: datetime) -> None:
+        """A person adds a label, leaving a ``labeled`` event like GitHub's."""
+        self.issue_labels[number].append(name)
+        event = {"event": "labeled", "label": {"name": name}, "created_at": iso(at)}
+        self.issue_events.setdefault(number, []).append(event)
 
     def push(self, number: int, sha: str) -> None:
         self.prs[number]["head"]["sha"] = sha
@@ -188,6 +195,8 @@ class FakeGitHub:
             return [c for c in self.comments if c["number"] == int(match.group(1))]
         if match := re.fullmatch(r"/issues/(\d+)/labels", path):
             return [{"name": name} for name in self.issue_labels.get(int(match.group(1)), [])]
+        if match := re.fullmatch(r"/issues/(\d+)/events", path):
+            return list(self.issue_events.get(int(match.group(1)), []))
         raise GitHubError(f"GitHub 404 on {path}: Not Found")
 
     def post(self, path: str, body: dict):

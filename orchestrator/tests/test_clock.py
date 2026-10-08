@@ -6,7 +6,6 @@ import pytest
 
 from sdlc.clock import utcnow
 
-
 NEEDS_TZSET = pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is Unix-only")
 
 
