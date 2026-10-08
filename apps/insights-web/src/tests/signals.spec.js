@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  barRows,
   delta,
   doraTiles,
+  failingBarNote,
   isFlaky,
   median,
   moduleName,
   moduleRows,
   overEstimate,
+  percent,
+  pooledNote,
+  realCountNote,
   sourceNote,
   sprintLabels,
+  thresholdRows,
+  tierRows,
+  verdict,
 } from "../signals";
 
 describe("delta", () => {
@@ -166,5 +174,101 @@ describe("names and flags", () => {
     expect(isFlaky(3)).toBe(true);
     expect(isFlaky(2.9)).toBe(false);
     expect(isFlaky(null)).toBe(false);
+  });
+});
+
+const POOLED = {
+  histories: 30,
+  merged_prs: 15044,
+  incident_prs: 451,
+  overall_rate: 0.03,
+  t0_rate: 0.0018,
+  top_decile: { capture: 0.5787, lowest: 0.375, highest: 0.8 },
+};
+
+const POOLED_SENTENCE =
+  "One history is a noisy judge. Across 30 generated histories, the bars pass: T0's " +
+  "incident rate 0.18% against 3.00% overall, and the top tenth by score catches 57.9% " +
+  "of incident PRs.";
+
+describe("percent", () => {
+  it("formats a ratio with one decimal place by default", () => {
+    expect(percent(0.6)).toBe("60.0%");
+    expect(percent(1 / 3)).toBe("33.3%");
+    expect(percent(0)).toBe("0.0%");
+  });
+
+  it("takes the number of places", () => {
+    expect(percent(0.0018, 2)).toBe("0.18%");
+  });
+
+  it("shows a dash when there is nothing to divide", () => {
+    expect(percent(null)).toBe("—");
+    expect(percent(undefined)).toBe("—");
+  });
+});
+
+describe("calibration rows", () => {
+  const report = {
+    by_tier: { T0: { prs: 7, incidents: 1 }, T1: { prs: 4, incidents: 2 } },
+    thresholds: {
+      T1: { flagged: 5, incidents: 3, precision: 0.6, recall: 0.75 },
+      T2: { flagged: 0, incidents: 0, precision: null, recall: 0 },
+    },
+  };
+
+  it("gives each threshold with percentages", () => {
+    expect(thresholdRows(report)).toEqual([
+      { tier: "T1+", flagged: 5, incidents: 3, precision: "60.0%", recall: "75.0%" },
+      { tier: "T2+", flagged: 0, incidents: 0, precision: "—", recall: "0.0%" },
+      { tier: "T3+", flagged: 0, incidents: 0, precision: "—", recall: "—" },
+    ]);
+  });
+
+  it("gives every tier, zero when it has no PRs", () => {
+    expect(tierRows(report)).toEqual([
+      { tier: "T0", prs: 7, incidents: 1 },
+      { tier: "T1", prs: 4, incidents: 2 },
+      { tier: "T2", prs: 0, incidents: 0 },
+      { tier: "T3", prs: 0, incidents: 0 },
+    ]);
+  });
+
+  it("says how many real PRs there are", () => {
+    expect(realCountNote({ real_merged_prs: 12, real_incident_prs: 0 })).toBe(
+      "The risk score is graded on simulated history, because real changes haven't caused " +
+        "incidents yet. 12 real PRs merged so far, 0 caused an incident.",
+    );
+  });
+});
+
+describe("bars", () => {
+  it("words each bar PASS or FAIL", () => {
+    expect(verdict(true)).toBe("PASS");
+    expect(verdict(false)).toBe("FAIL");
+    const rows = barRows({
+      bars: { t0_has_no_incidents: false, top_decile_captures_majority: true },
+    });
+    expect(rows.map((row) => [row.key, row.verdict])).toEqual([
+      ["t0_has_no_incidents", "FAIL"],
+      ["top_decile_captures_majority", "PASS"],
+    ]);
+  });
+
+  it("falls back on the pooled grading when a bar fails", () => {
+    const report = {
+      bars: { t0_has_no_incidents: true, top_decile_captures_majority: false },
+      pooled: POOLED,
+    };
+    expect(failingBarNote(report)).toBe(POOLED_SENTENCE);
+    expect(pooledNote(POOLED)).toBe(POOLED_SENTENCE);
+  });
+
+  it("says nothing more when both bars pass", () => {
+    const report = {
+      bars: { t0_has_no_incidents: true, top_decile_captures_majority: true },
+      pooled: POOLED,
+    };
+    expect(failingBarNote(report)).toBeNull();
   });
 });

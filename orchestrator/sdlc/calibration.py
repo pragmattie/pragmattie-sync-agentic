@@ -31,13 +31,37 @@ TOP_DECILE_CAPTURE = 0.5
 THRESHOLD_TIERS = ("T1", "T2", "T3")
 
 
-def score_history(db: Session, policy: Policy) -> list[tuple[int | None, int, str, bool]]:
-    """Every merged PR, by number, as ``(number, score, tier, incident)``."""
-    prs = db.scalars(
-        select(PullRequest)
-        .where(PullRequest.merged_at.is_not(None))
-        .order_by(PullRequest.number, PullRequest.id)
-    ).all()
+# The locked pooled grading (PR #162, 2026-10-05): ``calibrate_many`` over seeds 1..30.
+POOLED_RESULT = {
+    "graded_on": "2026-10-05",
+    "pull_request": 162,
+    "histories": 30,
+    "merged_prs": 15044,
+    "incident_prs": 451,
+    "overall_rate": 0.03,
+    "t0_rate": 0.0018,
+    "top_decile": {"capture": 0.5787, "lowest": 0.375, "highest": 0.8},
+    "bars": {
+        "t0_rate_at_most_a_quarter_of_overall": True,
+        "top_decile_captures_majority_pooled": True,
+    },
+}
+"""The pooled grading is the judge of the risk score; one history is noisy.
+
+A single history holds about 500 merged PRs and 15 incident PRs, so its bars swing with
+chance: across the 30 histories the top decile caught anywhere from 37.5% to 80.0% of incident
+PRs. Read a single history's report beside this one, never instead of it.
+"""
+
+
+def score_history(
+    db: Session, policy: Policy, source: str | None = None
+) -> list[tuple[int | None, int, str, bool]]:
+    """Every merged PR, by number, as ``(number, score, tier, incident)``; one source if given."""
+    query = select(PullRequest).where(PullRequest.merged_at.is_not(None))
+    if source is not None:
+        query = query.where(PullRequest.source == source)
+    prs = db.scalars(query.order_by(PullRequest.number, PullRequest.id)).all()
     rows = []
     for pr in prs:
         score = scoring.score_pull_request(db, pr).total
@@ -95,8 +119,8 @@ def summarize(rows: list[tuple[int | None, int, str, bool]]) -> dict:
     }
 
 
-def calibrate(db: Session, policy: Policy) -> dict:
-    return summarize(score_history(db, policy))
+def calibrate(db: Session, policy: Policy, source: str | None = None) -> dict:
+    return summarize(score_history(db, policy, source))
 
 
 def pool(runs: list[dict]) -> dict:
