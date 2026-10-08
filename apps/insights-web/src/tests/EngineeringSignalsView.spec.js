@@ -51,6 +51,28 @@ const SOURCES = {
   incidents: { synthetic: 5, github: 0 },
 };
 
+const CALIBRATION = {
+  merged_prs: 412,
+  incident_prs: 5,
+  by_tier: {
+    T0: { prs: 250, incidents: 0 },
+    T1: { prs: 100, incidents: 2 },
+    T2: { prs: 50, incidents: 1 },
+    T3: { prs: 12, incidents: 2 },
+  },
+  top_decile: { size: 42, incidents: 3, capture: 0.6 },
+  thresholds: {
+    T1: { flagged: 162, incidents: 5, precision: 0.0309, recall: 1 },
+    T2: { flagged: 62, incidents: 3, precision: 0.0484, recall: 0.6 },
+    T3: { flagged: 12, incidents: 2, precision: 0.1667, recall: 0.4 },
+  },
+  bars: { t0_has_no_incidents: true, top_decile_captures_majority: true },
+  real_merged_prs: 0,
+  real_incident_prs: 0,
+  pooled: { histories: 30, overall_rate: 0.03, t0_rate: 0.0018, top_decile: { capture: 0.5787 } },
+  as_of: "2026-10-08T09:00:00",
+};
+
 const EMPTY_SOURCES = Object.fromEntries(
   Object.keys(SOURCES).map((name) => [name, { synthetic: 0, github: 0 }]),
 );
@@ -63,6 +85,7 @@ function responses(overrides = {}) {
     "/api/v1/signals/ci": CI,
     "/api/v1/signals/modules": MODULES,
     "/api/v1/signals/sources": SOURCES,
+    "/api/v1/signals/calibration": CALIBRATION,
     ...overrides,
   };
 }
@@ -102,7 +125,7 @@ beforeEach(() => {
 });
 
 describe("EngineeringSignalsView", () => {
-  it("requests the six signals in parallel", async () => {
+  it("requests the six signals and the risk model grading in parallel", async () => {
     const fetch = mockApi(responses());
 
     const wrapper = await mountView();
@@ -119,6 +142,7 @@ describe("EngineeringSignalsView", () => {
         "/api/v1/signals/ci?weeks=26",
         "/api/v1/signals/modules",
         "/api/v1/signals/sources",
+        "/api/v1/signals/calibration",
       ].sort(),
     );
     expect(wrapper.find("h1").text()).toBe("Engineering signals");
@@ -242,7 +266,7 @@ describe("EngineeringSignalsView", () => {
     const error = wrapper.find("[data-test='load-error']");
     expect(error.text()).toContain("Database is unavailable");
     expect(wrapper.find("[data-test='source-note']").exists()).toBe(false);
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).toHaveBeenCalledTimes(7);
 
     mockApi(responses());
     await wrapper.find("[data-test='retry']").trigger("click");
@@ -251,6 +275,46 @@ describe("EngineeringSignalsView", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(6);
     expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
     expect(wrapper.find("[data-test='source-note']").exists()).toBe(true);
+  });
+
+  it("shows the risk model below the other signals", async () => {
+    mockApi(responses());
+
+    const wrapper = await mountView();
+
+    const panel = wrapper.find("[data-test='risk-model']");
+    expect(panel.find("[data-test='calibration-chip']").text()).toBe(
+      "Calibration data · simulated",
+    );
+    expect(panel.find("[data-test='thresholds']").exists()).toBe(true);
+  });
+
+  it("keeps the rest of the page when the risk model fails to load", async () => {
+    mockApi(responses(), { failing: "/api/v1/signals/calibration" });
+
+    const wrapper = await mountView();
+
+    const panel = wrapper.find("[data-test='risk-model']");
+    expect(panel.find("[data-test='load-error']").text()).toContain("Database is unavailable");
+    expect(wrapper.findAll("[data-test='load-error']")).toHaveLength(1);
+    expect(wrapper.find("[data-test='source-note']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='modules']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='ci']").exists()).toBe(true);
+  });
+
+  it("shows the rest of the page while the risk model is still loading", async () => {
+    const fetch = mockApi(responses());
+    const quick = fetch.getMockImplementation();
+    fetch.mockImplementation((url) =>
+      new URL(url).pathname === "/api/v1/signals/calibration" ? new Promise(() => {}) : quick(url),
+    );
+
+    const wrapper = await mountView();
+
+    expect(wrapper.find("[data-test='source-note']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='risk-model'] [data-test='loading-bar']").exists()).toBe(
+      true,
+    );
   });
 
   it("leaves out sections with no data", async () => {
@@ -289,5 +353,6 @@ describe("EngineeringSignalsView", () => {
       "No engineering history yet. Run python -m sdlc.synth in the orchestrator to generate it.",
     );
     expect(wrapper.find("[data-test='source-note']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='risk-model']").exists()).toBe(false);
   });
 });
