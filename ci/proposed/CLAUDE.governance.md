@@ -62,7 +62,8 @@ The highest of the score band, the policy floors and (with no floor) the docs ca
 
 ### The demo rule
 
-- Every Delivery Insights page says how much of what it shows is simulated.
+- Every page says how much of what it shows is simulated (in Delivery Insights; the CRM shows no
+  demo labels).
 - Simulated history is calibration data, never a team: don't present it as people or their work.
 - Every agent run is an append-only audit row with its model, prompt version, tokens and cost
   ([ADR 0004](docs/adr/0004-append-only-audit-trail.md)).
