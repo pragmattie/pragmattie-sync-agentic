@@ -153,10 +153,16 @@ jobs:
           model=claude-opus-5-5
           echo "$labels" | grep -q ',model:sonnet,' && model=claude-sonnet-5
           case "$tier" in T0) turns=20 ;; T1) turns=40 ;; T2) turns=60 ;; *) turns=80 ;; esac
-          # Tiers measure risk, not size: a big low-risk issue gets 10 turns a story point (at most 100).
+          # Tiers measure risk, not size: a big low-risk issue gets 15 turns a story point (at most
+          # 150). Raised from 10 and 100 by Geoff on 2026-10-08, after 4.18 (5 points, a front-end
+          # page with its tests) ran out at 56 turns with the work done but unchecked. The limit is
+          # a ceiling: a run stops when it's done, and the daily cap still bounds the spend.
           points=$(echo "$labels" | tr ',' '\n' | sed -n 's/^points:\([0-9][0-9]*\)$/\1/p' | head -1)
-          if [ -n "$points" ] && [ $((points * 10)) -gt "$turns" ]; then turns=$((points * 10)); fi
-          [ "$turns" -gt 100 ] && turns=100
+          if [ -n "$points" ] && [ $((points * 15)) -gt "$turns" ]; then turns=$((points * 15)); fi
+          # A `turns:N` label on the issue overrides the rule for that issue (1-150).
+          override=$(echo "$labels" | tr ',' '\n' | sed -n 's/^turns:\([0-9][0-9]*\)$/\1/p' | head -1)
+          if [ -n "$override" ] && [ "$override" -ge 1 ]; then turns=$override; fi
+          [ "$turns" -gt 150 ] && turns=150
           [ "$action" = "plan" ] && turns=25  # 15 ran out on 2.7 once the CRM web app had grown
 
           if [ "$action" != "revise" ]; then
