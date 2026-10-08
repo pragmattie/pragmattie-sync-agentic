@@ -34,8 +34,14 @@ npm run preview   # serves the built bundle
 
 - `src/api.js`: `buildUrl` and `getJson` for the orchestrator's API
 - `src/router/index.js`: the routes, and `navItems`, the pages the navigation drawer lists
-- `src/components/`: the app bar mark, the footer credit, and the shared `PageHeader`, `LoadError`
-  (emits `retry`) and `LoadingBar`
+- `src/components/`: the app bar mark, the footer credit, the shared `PageHeader`, `LoadError`
+  (emits `retry`) and `LoadingBar`, and the decision log's `DecisionDrawer`
 - `src/views/`: one component per page
+- `src/signals.js`, `src/decisions.js`: the pure helpers behind the Engineering signals and
+  Decision log pages
+
+The Decision log (`/decisions`) keeps its filters, page and open decision in the URL query
+(`agent`, `subject`, `status`, `tier`, `source`, `page`, `decision`), so any view of it can be
+shared.
 
 Nothing here is imported from `apps/crm-web`, and nothing links into the CRM.
