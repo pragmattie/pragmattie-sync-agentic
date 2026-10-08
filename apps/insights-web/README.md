@@ -37,8 +37,8 @@ npm run preview   # serves the built bundle
 - `src/components/`: the app bar mark, the footer credit, the shared `PageHeader`, `LoadError`
   (emits `retry`) and `LoadingBar`, and the decision log's `DecisionDrawer`
 - `src/views/`: one component per page
-- `src/signals.js`, `src/decisions.js`: the pure helpers behind the Engineering signals and
-  Decision log pages
+- `src/signals.js`, `src/decisions.js`, `src/flow.js`: the pure helpers behind the Engineering
+  signals, Decision log and Delivery flow pages
 
 The Decision log (`/decisions`) keeps its filters, page and open decision in the URL query
 (`agent`, `subject`, `status`, `tier`, `source`, `page`, `decision`), so any view of it can be

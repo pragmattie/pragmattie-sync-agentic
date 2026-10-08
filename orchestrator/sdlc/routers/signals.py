@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from sdlc import audit, calibration, metrics
+from sdlc import audit, calibration, flow, metrics
 from sdlc.clock import utcnow
 from sdlc.db import get_session
 from sdlc.tables import AgentDecision, PullRequest
@@ -59,6 +59,20 @@ def ci(
 @router.get("/modules")
 def modules(db: Session = Depends(get_session)) -> list[dict]:
     return metrics.quality_by_module(db)
+
+
+@router.get("/flow")
+def delivery_flow(
+    source: Literal["github", "synthetic"] = "github",
+    days: int = Query(60, ge=7, le=180),
+    db: Session = Depends(get_session),
+    now: datetime = Depends(get_now),
+) -> dict:
+    """Stage counts per day, throughput and cycle time for one source, and each source's size."""
+    return {
+        **flow.flow(db, source=source, days=days, today=now.date()),
+        "available": flow.available(db),
+    }
 
 
 @router.get("/sources")

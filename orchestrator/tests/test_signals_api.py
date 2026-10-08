@@ -13,7 +13,16 @@ NOW = datetime(2026, 10, 2, 12, 0)  # a Friday
 SPRINT_ONE = date(2026, 9, 7)
 SPRINT_TWO = date(2026, 9, 21)
 
-ENDPOINTS = ["summary", "sprints", "cycle-time", "ci", "modules", "sources", "calibration"]
+ENDPOINTS = [
+    "summary",
+    "sprints",
+    "cycle-time",
+    "ci",
+    "modules",
+    "sources",
+    "calibration",
+    "flow",
+]
 
 
 @pytest.fixture
@@ -317,6 +326,7 @@ def test_openapi_lists_the_signal_and_decision_endpoints_with_their_queries(api)
     assert queries("summary") == {"days"}
     assert queries("cycle-time") == {"bucket", "weeks"}
     assert queries("ci") == {"weeks"}
+    assert queries("flow") == {"source", "days"}
     assert queries("sprints") == queries("modules") == queries("sources") == set()
     assert queries("decisions") == {
         "agent",

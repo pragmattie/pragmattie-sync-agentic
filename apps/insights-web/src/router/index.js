@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 const DecisionLogView = () => import("../views/DecisionLogView.vue");
+const DeliveryFlowView = () => import("../views/DeliveryFlowView.vue");
 const EngineeringSignalsView = () => import("../views/EngineeringSignalsView.vue");
 const NotFoundView = () => import("../views/NotFoundView.vue");
 
@@ -9,6 +10,7 @@ export const appName = "Delivery Insights · PragMattie Sync";
 export const navItems = [
   { title: "Engineering signals", to: "/signals", name: "signals" },
   { title: "Decision log", to: "/decisions", name: "decisions" },
+  { title: "Delivery flow", to: "/flow", name: "flow" },
 ];
 
 export function pageTitle(route) {
@@ -31,6 +33,12 @@ export const router = createRouter({
       name: "decisions",
       component: DecisionLogView,
       meta: { title: "Decision log" },
+    },
+    {
+      path: "/flow",
+      name: "flow",
+      component: DeliveryFlowView,
+      meta: { title: "Delivery flow" },
     },
     {
       path: "/:pathMatch(.*)*",
