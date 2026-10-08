@@ -45,11 +45,20 @@ describe("App", () => {
     expect(navItems).toEqual([
       { title: "Engineering signals", to: "/signals", name: "signals" },
       { title: "Decision log", to: "/decisions", name: "decisions" },
+      { title: "Delivery flow", to: "/flow", name: "flow" },
     ]);
     const drawer = wrapper.find("[data-test='nav-drawer']");
     const links = drawer.findAll("a");
-    expect(links.map((link) => link.text())).toEqual(["Engineering signals", "Decision log"]);
-    expect(links.map((link) => link.attributes("href"))).toEqual(["/signals", "/decisions"]);
+    expect(links.map((link) => link.text())).toEqual([
+      "Engineering signals",
+      "Decision log",
+      "Delivery flow",
+    ]);
+    expect(links.map((link) => link.attributes("href"))).toEqual([
+      "/signals",
+      "/decisions",
+      "/flow",
+    ]);
   });
 
   it("toggles the drawer from the menu button", async () => {
