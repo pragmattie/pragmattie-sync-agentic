@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from sqlalchemy.orm import Session
 
+from sdlc import calibration
 from sdlc.db import Base
 from sdlc.main import app
 from sdlc.routers.signals import get_now
@@ -12,7 +13,7 @@ NOW = datetime(2026, 10, 2, 12, 0)  # a Friday
 SPRINT_ONE = date(2026, 9, 7)
 SPRINT_TWO = date(2026, 9, 21)
 
-ENDPOINTS = ["summary", "sprints", "cycle-time", "ci", "modules", "sources"]
+ENDPOINTS = ["summary", "sprints", "cycle-time", "ci", "modules", "sources", "calibration"]
 
 
 @pytest.fixture
@@ -169,6 +170,87 @@ def test_modules_and_sources(api):
     counts = api.get("/api/v1/signals/sources").json()
     assert counts["pull_requests"] == {"synthetic": 1, "github": 1}
     assert set(counts) == {"issues", "pull_requests", "ci_runs", "deployments", "incidents"}
+
+
+def _add_prs(engine, *prs):
+    with Session(engine) as db:
+        db.add_all(prs)
+        db.commit()
+
+
+def _merged_pr(source, incident=False, number=None):
+    return PullRequest(
+        number=number,
+        title="Change",
+        state="merged",
+        created_at=datetime(2026, 9, 30, 9),
+        merged_at=datetime(2026, 9, 30, 15),
+        caused_incident=incident,
+        source=source,
+    )
+
+
+def test_calibration_grades_only_the_simulated_history(api, sqlite_engine):
+    _add_prs(sqlite_engine, _merged_pr("synthetic", incident=True), _merged_pr("github"))
+
+    body = api.get("/api/v1/signals/calibration").json()
+
+    assert body["merged_prs"] == 2
+    assert body["incident_prs"] == 1
+    assert sum(row["prs"] for row in body["by_tier"].values()) == 2
+    assert set(body["thresholds"]) == {"T1", "T2", "T3"}
+    assert set(body["bars"]) == {"t0_has_no_incidents", "top_decile_captures_majority"}
+
+
+def test_calibration_counts_real_prs_from_github_rows(api, sqlite_engine):
+    _add_prs(
+        sqlite_engine,
+        _merged_pr("github", incident=True),
+        _merged_pr("synthetic", incident=True),
+        PullRequest(
+            title="Still open",
+            state="open",
+            created_at=datetime(2026, 10, 1, 9),
+            caused_incident=True,
+            source="github",
+        ),
+    )
+
+    body = api.get("/api/v1/signals/calibration").json()
+
+    assert body["real_merged_prs"] == 2
+    assert body["real_incident_prs"] == 1
+
+
+def test_calibration_carries_the_pooled_grading_and_when(api):
+    body = api.get("/api/v1/signals/calibration").json()
+
+    assert body["pooled"] == calibration.POOLED_RESULT
+    assert body["pooled"]["histories"] == 30
+    assert body["as_of"] == "2026-10-02T12:00:00"
+
+
+def test_calibration_is_scored_once_per_day(api, monkeypatch):
+    from sdlc.routers import signals
+
+    calls = []
+    real = signals.calibration.calibrate
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("source"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(signals.calibration, "calibrate", counting)
+
+    first = api.get("/api/v1/signals/calibration").json()
+    second = api.get("/api/v1/signals/calibration").json()
+
+    assert calls == ["synthetic"]
+    assert second == first
+
+    app.dependency_overrides[get_now] = lambda: NOW + timedelta(days=1)
+    api.get("/api/v1/signals/calibration")
+    assert calls == ["synthetic", "synthetic"]
 
 
 @pytest.mark.parametrize(
