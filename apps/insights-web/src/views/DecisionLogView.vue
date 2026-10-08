@@ -66,7 +66,11 @@ async function load() {
     const body = await getJson("/api/v1/signals/decisions", listParams(filters.value, page.value));
     if (request === latest) result.value = body;
   } catch (err) {
-    if (request === latest) error.value = err.message;
+    if (request === latest) {
+      // Rows from an earlier load would read as this query's answer.
+      result.value = null;
+      error.value = err.message;
+    }
   } finally {
     if (request === latest) loading.value = false;
   }
@@ -253,6 +257,7 @@ function rowProps({ item }) {
       :items-per-page-options="[{ value: PAGE_SIZE, title: String(PAGE_SIZE) }]"
       :page="page"
       :loading="loading"
+      :hide-no-data="Boolean(error)"
       :row-props="rowProps"
       item-value="id"
       density="comfortable"
@@ -301,7 +306,7 @@ function rowProps({ item }) {
       </template>
       <template #[`item.cost`]="{ item }">{{ formatCost(decisionCost(item)) }}</template>
       <template #no-data>
-        <div class="py-6" data-test="empty">
+        <div v-if="!error" class="py-6" data-test="empty">
           <p class="text-body-1 mb-2">No decisions match these filters.</p>
           <v-btn
             v-if="hasFilters"
