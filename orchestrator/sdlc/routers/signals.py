@@ -81,6 +81,7 @@ def sources(db: Session = Depends(get_session)) -> dict[str, dict[str, int]]:
 
 
 # Scoring one history takes about two seconds, so each database's grading is kept for the day.
+# Only the grading is kept: the real PR counts are read on every request.
 _calibration_cache: dict[tuple[str, date], dict] = {}
 
 
@@ -98,23 +99,24 @@ def _real_counts(db: Session) -> tuple[int, int]:
 def calibration_report(
     db: Session = Depends(get_session), now: datetime = Depends(get_now)
 ) -> dict:
-    """The risk score graded on the simulated history, beside the real PR counts."""
+    """The pooled grading of the risk score, this history's figures and the real PR counts.
+
+    ``as_of`` is when this history was graded, which may be earlier today.
+    """
     key = (db.get_bind().url.render_as_string(hide_password=True), now.date())
-    cached = _calibration_cache.get(key)
-    if cached is not None:
-        return cached
+    graded = _calibration_cache.get(key)
+    if graded is None:
+        graded = {**calibration.calibrate(db, load_policy(), source="synthetic"), "as_of": now}
+        for stale in [cached_key for cached_key in _calibration_cache if cached_key[1] != key[1]]:
+            del _calibration_cache[stale]
+        _calibration_cache[key] = graded
     real_merged, real_incidents = _real_counts(db)
-    report = {
-        **calibration.calibrate(db, load_policy(), source="synthetic"),
+    return {
+        **graded,
         "real_merged_prs": real_merged,
         "real_incident_prs": real_incidents,
         "pooled": calibration.POOLED_RESULT,
-        "as_of": now,
     }
-    for stale in [cached_key for cached_key in _calibration_cache if cached_key[1] != key[1]]:
-        del _calibration_cache[stale]
-    _calibration_cache[key] = report
-    return report
 
 
 @router.get("/decisions")

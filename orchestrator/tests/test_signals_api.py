@@ -262,6 +262,20 @@ def test_calibration_is_scored_once_per_day(api, monkeypatch):
     assert calls == ["synthetic", "synthetic"]
 
 
+def test_real_counts_are_read_on_every_request_and_as_of_is_the_grading_time(api, sqlite_engine):
+    first = api.get("/api/v1/signals/calibration").json()
+    before = (first["real_merged_prs"], first["real_incident_prs"])
+
+    _add_prs(sqlite_engine, _merged_pr("github", incident=True))
+    app.dependency_overrides[get_now] = lambda: NOW + timedelta(hours=3)
+    second = api.get("/api/v1/signals/calibration").json()
+
+    assert second["real_merged_prs"] == before[0] + 1
+    assert second["real_incident_prs"] == before[1] + 1
+    assert second["merged_prs"] == first["merged_prs"]  # the grading is still the cached one
+    assert second["as_of"] == "2026-10-02T12:00:00"
+
+
 @pytest.mark.parametrize(
     ("endpoint", "params"),
     [
