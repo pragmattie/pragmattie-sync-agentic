@@ -118,7 +118,17 @@ export const SUBJECT_OPTIONS = [
   { title: "Release", value: "release" },
 ];
 
-export const STATUS_OPTIONS = ["ok", "error", "rejected", "missed"];
+// The API matches status exactly, so every failure kind is its own option.
+export const STATUS_OPTIONS = [
+  "ok",
+  "error",
+  "timeout",
+  "rate_limited",
+  "refused",
+  "invalid_output",
+  "rejected",
+  "missed",
+];
 
 export const TIER_OPTIONS = ["T0", "T1", "T2", "T3"];
 

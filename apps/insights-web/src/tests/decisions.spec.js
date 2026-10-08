@@ -11,6 +11,7 @@ import {
   parseUtc,
   prettyJson,
   signalRows,
+  STATUS_OPTIONS,
   statusColor,
   subjectLabel,
   TIME_FORMAT,
@@ -103,6 +104,19 @@ describe("statusColor", () => {
     ["invalid_output", "error"],
   ])("colours %s %s", (status, color) => {
     expect(statusColor(status)).toBe(color);
+  });
+
+  it("offers every status as its own filter option", () => {
+    expect(STATUS_OPTIONS).toEqual([
+      "ok",
+      "error",
+      "timeout",
+      "rate_limited",
+      "refused",
+      "invalid_output",
+      "rejected",
+      "missed",
+    ]);
   });
 });
 

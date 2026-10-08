@@ -256,6 +256,74 @@ describe("DecisionLogView", () => {
     );
   });
 
+  it("offers every failure kind as its own status filter option", async () => {
+    mockApi();
+    const { wrapper, router } = await mountView();
+
+    expect(filter(wrapper, "status").props("items")).toEqual([
+      "ok",
+      "error",
+      "timeout",
+      "rate_limited",
+      "refused",
+      "invalid_output",
+      "rejected",
+      "missed",
+    ]);
+
+    await navigate(router, () =>
+      filter(wrapper, "status").vm.$emit("update:modelValue", "rate_limited"),
+    );
+
+    expect(router.currentRoute.value.query).toEqual({ status: "rate_limited" });
+    expect(listCalls().at(-1)[1]).toMatchObject({ status: "rate_limited" });
+  });
+
+  it("reports a decision that fails to load in the drawer and keeps the list", async () => {
+    const list = page();
+    getJson.mockImplementation(async (path) => {
+      if (path === "/api/v1/signals/decisions/agents") return AGENTS;
+      if (path === "/api/v1/signals/decisions") return list;
+      throw new Error("404 Not Found");
+    });
+    const { wrapper, router } = await mountView({ decision: "999" });
+
+    expect(router.currentRoute.value.query).toEqual({ decision: "999" });
+    const drawer = wrapper.find("[data-test='decision-drawer']");
+    expect(drawer.find("[data-test='drawer-load-error']").text()).toBe(
+      "Couldn't load decision 999.",
+    );
+    expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='row-1']").exists()).toBe(true);
+    expect(wrapper.find("[data-test='totals']").text()).toContain("120 decisions");
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it("clears the drawer before fetching a different decision", async () => {
+    let resolveSecond;
+    getJson.mockImplementation((path) => {
+      if (path === "/api/v1/signals/decisions/agents") return Promise.resolve(AGENTS);
+      if (path === "/api/v1/signals/decisions") return Promise.resolve(page({ decisions: [] }));
+      if (path === "/api/v1/signals/decisions/1") return Promise.resolve(ROWS[0]);
+      return new Promise((resolve) => {
+        resolveSecond = () => resolve(ROWS[1]);
+      });
+    });
+    const { wrapper, router } = await mountView({ decision: "1" });
+
+    const drawer = () => wrapper.find("[data-test='decision-drawer']");
+    expect(drawer().find("[data-test='drawer-title']").text()).toBe("PR risk · PR #42");
+
+    await navigate(router, () => router.replace({ query: { decision: "2" } }));
+
+    expect(drawer().find("[data-test='drawer-title']").exists()).toBe(false);
+
+    resolveSecond();
+    await flushPromises();
+
+    expect(drawer().find("[data-test='drawer-title']").text()).toBe("Triage · Issue #7");
+  });
+
   it("shows the empty state with a button that clears the filters", async () => {
     mockApi(page({ total: 0, decisions: [], totals: { ...TOTALS, runs: 0 } }));
     const { wrapper, router } = await mountView({ status: "missed", tier: "T3" });

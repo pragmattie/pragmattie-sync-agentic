@@ -112,6 +112,7 @@ const openId = computed(() => {
   return Number.isNaN(value) ? null : value;
 });
 const selected = ref(null);
+const drawerError = ref("");
 const drawerOpen = computed({
   get: () => openId.value !== null,
   set: (open) => {
@@ -119,9 +120,16 @@ const drawerOpen = computed({
   },
 });
 
+let latestDecision = 0;
+
+// A decision that fails to load (a stale shared link, say) reports in the
+// drawer and leaves the list and totals alone.
 watch(
   openId,
   async (id) => {
+    const request = ++latestDecision;
+    selected.value = null;
+    drawerError.value = "";
     if (id === null) return;
     const row = rows.value.find((item) => item.id === id);
     if (row) {
@@ -129,10 +137,10 @@ watch(
       return;
     }
     try {
-      selected.value = await getJson(`/api/v1/signals/decisions/${id}`);
-    } catch (err) {
-      error.value = err.message;
-      updateQuery({ decision: undefined });
+      const body = await getJson(`/api/v1/signals/decisions/${id}`);
+      if (request === latestDecision) selected.value = body;
+    } catch {
+      if (request === latestDecision) drawerError.value = `Couldn't load decision ${id}.`;
     }
   },
   { immediate: true },
@@ -308,7 +316,11 @@ function rowProps({ item }) {
       </template>
     </v-data-table-server>
 
-    <DecisionDrawer v-model="drawerOpen" :decision="drawerOpen ? selected : null" />
+    <DecisionDrawer
+      v-model="drawerOpen"
+      :decision="drawerOpen ? selected : null"
+      :error="drawerOpen ? drawerError : ''"
+    />
   </v-container>
 </template>
 

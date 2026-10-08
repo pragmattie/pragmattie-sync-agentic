@@ -23,6 +23,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  error: {
+    type: String,
+    default: "",
+  },
 });
 
 defineEmits(["update:modelValue"]);
@@ -83,7 +87,18 @@ const signals = computed(() => signalRows(props.decision?.signals));
     data-test="decision-drawer"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <div v-if="decision" class="pa-4">
+    <div v-if="error" class="pa-4 d-flex align-start ga-2">
+      <v-alert type="error" variant="tonal" class="flex-grow-1" data-test="drawer-load-error">
+        {{ error }}
+      </v-alert>
+      <v-btn
+        icon="mdi-close"
+        variant="text"
+        aria-label="Close"
+        @click="$emit('update:modelValue', false)"
+      />
+    </div>
+    <div v-else-if="decision" class="pa-4">
       <div class="d-flex align-start ga-2 mb-4">
         <div class="flex-grow-1">
           <h2 class="text-h6" data-test="drawer-title">
