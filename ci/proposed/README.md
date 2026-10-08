@@ -8,10 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`CLAUDE.governance.md`** (4.21): the "## Governance" section for `CLAUDE.md` (tiers, `/tier`
-  and `/hold`, the simulated approver rule, modes, triage autonomy, evaluation bars and the demo
-  rule). A person adds it to `CLAUDE.md` under a "## Governance" heading, then deletes this copy
-  and moves this entry to Applied.
+Nothing pending.
 
 ## Applied
 
@@ -28,6 +25,9 @@ Nothing in this folder runs automatically.
   copy deleted.
 - **`board.yml`** (4.16): keeps the delivery board current every 10 minutes. Moved to
   `.github/workflows/board.yml`; the builder app has Organization → Projects: read and write.
+- **`CLAUDE.governance.md`** (4.21): added to `CLAUDE.md` as its "## Governance" section,
+  with two wording fixes (the tier sentence; the audit bullet moved out of the demo rule), and
+  the copy deleted.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
