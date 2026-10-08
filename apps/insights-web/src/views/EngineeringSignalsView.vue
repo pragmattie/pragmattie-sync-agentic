@@ -14,6 +14,7 @@ import { getJson } from "../api";
 import LoadError from "../components/LoadError.vue";
 import LoadingBar from "../components/LoadingBar.vue";
 import PageHeader from "../components/PageHeader.vue";
+import RiskModelPanel from "../components/RiskModelPanel.vue";
 import {
   doraTiles,
   hasHistory,
@@ -339,6 +340,9 @@ const hasInProgress = computed(() => sprints.value.some((row) => row.in_progress
         </v-table>
       </v-card>
     </template>
+
+    <!-- Loads on its own: a slow or failing grading never holds up the rest of the page. -->
+    <RiskModelPanel v-if="!empty" />
   </v-container>
 </template>
 

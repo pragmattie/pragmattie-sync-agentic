@@ -137,3 +137,77 @@ export function hasHistory({ sources, sprints, modules, ci }) {
 export function isFlaky(flakyRate) {
   return hasValue(flakyRate) && flakyRate >= FLAKY_THRESHOLD;
 }
+
+// Risk model calibration (/api/v1/signals/calibration). Ratios arrive as 0–1.
+
+const THRESHOLD_TIERS = ["T1", "T2", "T3"];
+const TIERS = ["T0", "T1", "T2", "T3"];
+
+const BARS = [
+  { key: "t0_has_no_incidents", label: "No incident PR in T0" },
+  {
+    key: "top_decile_captures_majority",
+    label: "The top tenth by score holds more than half of incident PRs",
+  },
+];
+
+// A 0–1 ratio as a percentage with `places` decimals, or a dash when missing.
+export function percent(ratio, places = 1) {
+  return hasValue(ratio) ? `${(ratio * 100).toFixed(places)}%` : MISSING;
+}
+
+export function verdict(passed) {
+  return passed ? "PASS" : "FAIL";
+}
+
+export function realCountNote(report) {
+  const merged = report?.real_merged_prs ?? 0;
+  const incidents = report?.real_incident_prs ?? 0;
+  return (
+    "The risk score is graded on simulated history, because real changes haven't caused " +
+    `incidents yet. ${merged} real PRs merged so far, ${incidents} caused an incident.`
+  );
+}
+
+export function thresholdRows(report) {
+  return THRESHOLD_TIERS.map((tier) => {
+    const row = report?.thresholds?.[tier] ?? {};
+    return {
+      tier: `${tier}+`,
+      flagged: row.flagged ?? 0,
+      incidents: row.incidents ?? 0,
+      precision: percent(row.precision),
+      recall: percent(row.recall),
+    };
+  });
+}
+
+export function tierRows(report) {
+  return TIERS.map((tier) => ({
+    tier,
+    prs: report?.by_tier?.[tier]?.prs ?? 0,
+    incidents: report?.by_tier?.[tier]?.incidents ?? 0,
+  }));
+}
+
+export function barRows(report) {
+  return BARS.map((bar) => {
+    const passed = Boolean(report?.bars?.[bar.key]);
+    return { ...bar, passed, verdict: verdict(passed) };
+  });
+}
+
+// Said when a bar fails on this one history: the pooled grading is the judge.
+export function pooledNote(pooled) {
+  return (
+    `One history is a noisy judge. Across ${pooled?.histories ?? 30} generated histories, ` +
+    `the bars pass: T0's incident rate ${percent(pooled?.t0_rate, 2)} against ` +
+    `${percent(pooled?.overall_rate, 2)} overall, and the top tenth by score catches ` +
+    `${percent(pooled?.top_decile?.capture)} of incident PRs.`
+  );
+}
+
+// The pooled sentence, or null when both bars pass on this history.
+export function failingBarNote(report) {
+  return barRows(report).every((bar) => bar.passed) ? null : pooledNote(report?.pooled);
+}
