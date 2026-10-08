@@ -347,5 +347,24 @@ describe("DecisionLogView", () => {
     const error = wrapper.find("[data-test='load-error']");
     expect(error.text()).toContain("Couldn't load the decision log");
     expect(error.text()).toContain("Database is unavailable");
+    expect(wrapper.find("[data-test='empty']").exists()).toBe(false);
+  });
+
+  it("clears the old rows and shows no empty state when a later reload fails", async () => {
+    let fail = false;
+    mockApi(() => {
+      if (fail) throw new Error("Database is unavailable");
+      return page();
+    });
+    const { wrapper, router } = await mountView();
+    expect(wrapper.find("[data-test='row-1']").exists()).toBe(true);
+
+    fail = true;
+    await navigate(router, () => router.replace({ query: { status: "error" } }));
+
+    expect(wrapper.find("[data-test='load-error']").text()).toContain("Database is unavailable");
+    expect(wrapper.find("[data-test='row-1']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='empty']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='totals']").exists()).toBe(false);
   });
 });

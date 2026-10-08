@@ -128,6 +128,86 @@ def test_issue_closed_unmerged_leaves_the_flow(db):
     assert _stage_on(result, TODAY) == []
 
 
+def test_real_issue_with_a_triage_decision_and_module_is_triaged_at_the_decision(db):
+    _issue(db, 1, datetime(2026, 9, 27, 9), module="leads", points=3)
+    _decision(db, "triage", "issue", 1, datetime(2026, 9, 29, 10))
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    assert _stage_on(result, date(2026, 9, 28)) == ["Backlog"]
+    assert _stage_on(result, date(2026, 9, 29)) == ["Triaged"]
+
+
+def test_synthetic_issue_ignores_triage_decisions(db):
+    _issue(db, 1, datetime(2026, 9, 27, 9), source="synthetic")
+    _decision(db, "triage", "issue", 1, datetime(2026, 9, 29, 10), source="synthetic")
+
+    result = flow(db, source="synthetic", days=7, today=TODAY)
+
+    assert _stage_on(result, date(2026, 9, 27)) == ["Triaged"]
+    assert _stage_on(result, date(2026, 9, 28)) == ["Triaged"]
+
+
+def test_closed_issue_with_a_merged_pr_stays_in_merged_or_production(db):
+    issue = _issue(
+        db, 1, datetime(2026, 9, 26), state="closed", closed_at=datetime(2026, 9, 28, 16)
+    )
+    _pr(db, issue, 10, datetime(2026, 9, 27), merged_at=datetime(2026, 9, 28, 15))
+    _pr(db, issue, 11, datetime(2026, 9, 30))  # a later open PR doesn't pull it back
+    db.add(Deployment(source="github", version="g1", deployed_at=datetime(2026, 9, 28, 15, 30)))
+    db.flush()
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    for day in (date(2026, 9, 28), date(2026, 9, 30), TODAY):
+        assert _stage_on(result, day) == ["Production"]
+
+
+def test_closed_merged_issue_without_a_deploy_stays_merged(db):
+    issue = _issue(
+        db, 1, datetime(2026, 9, 26), state="closed", closed_at=datetime(2026, 9, 28, 16)
+    )
+    _pr(db, issue, 10, datetime(2026, 9, 27), merged_at=datetime(2026, 9, 28, 15))
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    assert _stage_on(result, date(2026, 9, 28)) == ["Merged"]
+    assert _stage_on(result, TODAY) == ["Merged"]
+
+
+def test_cycle_time_starts_at_the_earliest_linked_pr(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    _pr(db, issue, 10, datetime(2026, 9, 20), merged_at=datetime(2026, 9, 30))
+    _pr(db, issue, 11, datetime(2026, 9, 26), state="closed", closed_at=datetime(2026, 9, 27))
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    assert result["cycle_time_days"] == {"median": 10.0, "p85": 10.0}
+
+
+def test_pr_closed_unmerged_drops_a_triaged_issue_back_to_triaged(db):
+    issue = _issue(db, 1, datetime(2026, 9, 26), module="leads", points=3)
+    _pr(db, issue, 10, datetime(2026, 9, 27), state="closed", closed_at=datetime(2026, 9, 29))
+    _decision(db, "pr_risk", "pr", 10, datetime(2026, 9, 28))
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    assert _stage_on(result, date(2026, 9, 26)) == ["Triaged"]
+    assert _stage_on(result, date(2026, 9, 28)) == ["In review"]
+    assert _stage_on(result, date(2026, 9, 29)) == ["Triaged"]
+
+
+def test_closed_issue_without_a_close_time_is_left_out(db):
+    _issue(db, 1, datetime(2026, 9, 26), state="closed")
+    _issue(db, 2, datetime(2026, 9, 26))
+
+    result = flow(db, source="github", days=7, today=TODAY)
+
+    assert _day(result, date(2026, 9, 26))["Backlog"] == 1
+    assert _day(result, TODAY)["Backlog"] == 1
+    assert result["items"] == 1
+
+
 def test_most_advanced_pr_decides(db):
     issue = _issue(db, 1, datetime(2026, 9, 26))
     _pr(db, issue, 10, datetime(2026, 9, 27))

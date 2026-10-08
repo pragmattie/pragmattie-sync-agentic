@@ -85,6 +85,11 @@ class Effects:
 
         return self._write("comment", action)
 
+    def add_comment(self, number: int, body: str) -> dict[str, str]:
+        """Add a new comment, leaving any earlier one as it is."""
+        path = f"/repos/{{repo}}/issues/{number}/comments"
+        return self._write("comment", lambda: self.gh.post(path, {"body": body}))
+
     def set_status(
         self, sha: str, state: str, description: str, context: str = "risk-gate"
     ) -> dict[str, str]:

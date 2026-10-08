@@ -4,7 +4,9 @@ It runs in the same loop and mode as the PR risk agent. ``off`` does nothing at 
 gets its labels and one comment explaining them; an exception on one issue leaves it as it was.
 A dimension a person has changed since the agent's last run is left alone, now and later. The
 agent never closes, assigns or edits an issue, and never removes ``needs-info`` or
-``possible-duplicate``: a person does. A ``retriage`` label runs it again whatever the version.
+``possible-duplicate``: a person does. A ``retriage`` label runs it again whatever the version,
+skipping the backoff; after three failed ``retriage`` runs on one version the agent gives up,
+leaves the label and says so in one comment. Removing and re-adding the label tries again.
 
 ``python -m sdlc.issue_runner once`` polls once, ``dry-run <n>`` shows the exact request and a
 cost ceiling without calling the model or writing anything, and ``try <n> --yes`` makes one real
@@ -29,6 +31,7 @@ from sdlc.backlog import PREFIX_COLOURS
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
+from sdlc.github_client import parse_time
 from sdlc.runner import MAX_ATTEMPTS, guarded, may_attempt
 from sdlc.signals.github import Collector, labels_of
 from sdlc.tables import AgentDecision
@@ -37,6 +40,8 @@ log = logging.getLogger("sdlc.issue_runner")
 
 DIMENSIONS = ("module", "type", "priority", "points")
 RETRIAGE = "retriage"
+RETRIAGE_CAP = 3  # failed ``retriage`` runs on one version before the agent gives up
+GAVE_UP_MARKER = "<!-- sdlc:triage-gave-up -->"
 INCIDENT = "incident"
 NEEDS_INFO = (
     "needs-info",
@@ -87,9 +92,43 @@ class IssueRunner:
         done = any(row.status == "ok" for row in rows)
         if not retriage and (done or not may_attempt(rows, now)):
             return
+        if retriage:
+            failures = self._retriage_failures(item["number"], rows)
+            if len(failures) >= RETRIAGE_CAP:
+                self._give_up(item["number"], version, failures[-1])
+                return
         assessment = self._triage(db, item, version, retriage, now)
         summary["triaged"] += 1
         summary["failed"] += 0 if assessment.ok else 1
+
+    def _retriage_failures(self, number: int, rows: list[AgentDecision]) -> list[AgentDecision]:
+        """This version's failed ``retriage`` runs since the label was last added."""
+        added = None
+        for event in self.gh.paginate(f"/repos/{{repo}}/issues/{number}/events"):
+            label = (event.get("label") or {}).get("name")
+            if event.get("event") == "labeled" and label == RETRIAGE:
+                added = parse_time(event.get("created_at"))
+        return [
+            row
+            for row in rows
+            if row.trigger == RETRIAGE
+            and row.status != "ok"
+            and (added is None or row.created_at >= added)
+        ]
+
+    def _give_up(self, number: int, version: str, last: AgentDecision) -> None:
+        """Say once, for this round of the label, that the agent stopped and why."""
+        reason = f"`{last.status}`" + (f": {last.error}" if last.error else "")
+        body = (
+            f"{GAVE_UP_MARKER}\n**The triage agent gave up on this issue.** "
+            f"{RETRIAGE_CAP} `retriage` runs on version `{version}` failed; "
+            f"the last (decision {last.id}) ended with {reason}\n\n"
+            f"The `retriage` label is left in place. To try again, remove it and add it back."
+        )
+        comments = self.effects.read_comments(number)
+        if any(comment.get("body") == body for comment in comments):
+            return
+        self.effects.add_comment(number, body)
 
     def _assess(self, db: Session, item: dict) -> triage.Assessment:
         try:

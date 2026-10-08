@@ -1,4 +1,6 @@
+import io
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -676,6 +678,17 @@ def test_dry_run_prints_the_changes_and_sends_no_mutation(capsys):
     assert "Would set #4 Status: In progress → Backlog." in out
     assert "Would add #6 to the board." in out
     assert "Would set #6 Module: (empty) → pipeline." in out
+
+
+def test_dry_run_works_on_a_cp1252_console(monkeypatch):
+    raw = io.BytesIO()
+    console = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", console)
+    fake = _current_board()
+    fake.items[3] = _item("PVTI_4", 4, status="In progress")
+    assert main(["sync", "--dry-run"], client=fake) == 0
+    console.flush()
+    assert "Would set #4 Status: In progress → Backlog." in raw.getvalue().decode("utf-8")
 
 
 def test_closed_issues_off_the_board_are_not_added_and_not_planned_cards_are_left_alone():

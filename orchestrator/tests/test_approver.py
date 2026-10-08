@@ -20,7 +20,6 @@ from sdlc.approver import (
 from sdlc.db import Base
 from sdlc.tables import Approval, PullRequest
 
-# Read only through an explicit path until a person moves it to orchestrator/policies/.
 NOON = datetime(2026, 10, 6, 12, 0)
 SIMULATED = Approver(
     id="simulated-second-human",

@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  barRows,
   delta,
   doraTiles,
-  failingBarNote,
+  historyFigures,
   isFlaky,
   median,
   moduleName,
   moduleRows,
   overEstimate,
   percent,
+  pooledBarRows,
   pooledNote,
   realCountNote,
   sourceNote,
@@ -184,12 +184,12 @@ const POOLED = {
   overall_rate: 0.03,
   t0_rate: 0.0018,
   top_decile: { capture: 0.5787, lowest: 0.375, highest: 0.8 },
+  bars: { t0_rate_at_most_a_quarter_of_overall: true, top_decile_captures_majority_pooled: true },
 };
 
 const POOLED_SENTENCE =
-  "One history is a noisy judge. Across 30 generated histories, the bars pass: T0's " +
-  "incident rate 0.18% against 3.00% overall, and the top tenth by score catches 57.9% " +
-  "of incident PRs.";
+  "The risk score passes both bars across 30 generated histories: T0's incident rate 0.18% " +
+  "against 3.00% overall, and the top tenth by score catches 57.9% of incident PRs.";
 
 describe("percent", () => {
   it("formats a ratio with one decimal place by default", () => {
@@ -243,32 +243,41 @@ describe("calibration rows", () => {
 });
 
 describe("bars", () => {
-  it("words each bar PASS or FAIL", () => {
+  it("words each pooled bar PASS or FAIL", () => {
     expect(verdict(true)).toBe("PASS");
     expect(verdict(false)).toBe("FAIL");
-    const rows = barRows({
-      bars: { t0_has_no_incidents: false, top_decile_captures_majority: true },
+    const rows = pooledBarRows({
+      bars: {
+        t0_rate_at_most_a_quarter_of_overall: false,
+        top_decile_captures_majority_pooled: true,
+      },
     });
     expect(rows.map((row) => [row.key, row.verdict])).toEqual([
-      ["t0_has_no_incidents", "FAIL"],
-      ["top_decile_captures_majority", "PASS"],
+      ["t0_rate_at_most_a_quarter_of_overall", "FAIL"],
+      ["top_decile_captures_majority_pooled", "PASS"],
     ]);
   });
 
-  it("falls back on the pooled grading when a bar fails", () => {
-    const report = {
-      bars: { t0_has_no_incidents: true, top_decile_captures_majority: false },
-      pooled: POOLED,
-    };
-    expect(failingBarNote(report)).toBe(POOLED_SENTENCE);
+  it("gives the verdict from the pooled grading", () => {
     expect(pooledNote(POOLED)).toBe(POOLED_SENTENCE);
   });
 
-  it("says nothing more when both bars pass", () => {
-    const report = {
-      bars: { t0_has_no_incidents: true, top_decile_captures_majority: true },
-      pooled: POOLED,
-    };
-    expect(failingBarNote(report)).toBeNull();
+  it("gives this history's figures with no verdict", () => {
+    const figures = historyFigures({
+      merged_prs: 400,
+      incident_prs: 12,
+      by_tier: { T0: { prs: 200, incidents: 1 } },
+      top_decile: { capture: 0.25 },
+      bars: { t0_has_no_incidents: false, top_decile_captures_majority: false },
+    });
+    expect(figures.map((figure) => figure.label)).toEqual([
+      "T0's incident rate 0.50% against 3.00% overall",
+      "The top tenth by score catches 25.0% of incident PRs",
+    ]);
+  });
+
+  it("shows dashes for a history with no PRs", () => {
+    const labels = historyFigures({}).map((figure) => figure.label);
+    expect(labels[0]).toBe("T0's incident rate — against — overall");
   });
 });

@@ -87,28 +87,65 @@ describe("RiskModelPanel", () => {
     expect(wrapper.findAll("[data-test='tiers'] tbody tr")).toHaveLength(4);
   });
 
-  it("passes both bars without the pooled sentence", async () => {
+  it("gives the pooled verdict and this history's figures without a verdict", async () => {
     vi.spyOn(api, "getJson").mockResolvedValue(report());
 
     const wrapper = await mountPanel();
 
-    const verdicts = wrapper.findAll("[data-test='verdict']").map((chip) => chip.text());
-    expect(verdicts).toEqual(["PASS", "PASS"]);
-    expect(wrapper.find("[data-test='pooled-note']").exists()).toBe(false);
+    const bars = wrapper.find("[data-test='bars']");
+    expect(bars.findAll("[data-test='verdict']").map((chip) => chip.text())).toEqual([
+      "PASS",
+      "PASS",
+    ]);
+    expect(wrapper.find("[data-test='pooled-note']").text()).toBe(
+      "The risk score passes both bars across 30 generated histories: T0's incident rate " +
+        "0.18% against 3.00% overall, and the top tenth by score catches 57.9% of incident PRs.",
+    );
+    const history = wrapper.find("[data-test='history']");
+    expect(history.text()).toContain("This database's history (one history is a noisy judge)");
+    expect(wrapper.find("[data-test='history-t0_rate']").text()).toBe(
+      "T0's incident rate 0.33% against 3.20% overall",
+    );
+    expect(wrapper.find("[data-test='history-top_decile']").text()).toBe(
+      "The top tenth by score catches 56.3% of incident PRs",
+    );
   });
 
-  it("falls back on the pooled grading when a bar fails here", async () => {
-    vi.spyOn(api, "getJson").mockResolvedValue(report({ t0_has_no_incidents: false }));
+  it("never grades this history on its own, even when its strict bars would fail", async () => {
+    vi.spyOn(api, "getJson").mockResolvedValue(
+      report({
+        t0_has_no_incidents: false,
+        top_decile_captures_majority: false,
+      }),
+    );
+
+    const wrapper = await mountPanel();
+
+    const verdicts = wrapper.findAll("[data-test='verdict']");
+    expect(verdicts.map((chip) => chip.text())).toEqual(["PASS", "PASS"]);
+    expect(wrapper.find("[data-test='history']").text()).not.toMatch(/PASS|FAIL/);
+    expect(wrapper.text()).not.toContain("No incident PR in T0");
+  });
+
+  it("takes its verdict from the pooled grading alone", async () => {
+    const failing = {
+      ...POOLED,
+      bars: { ...POOLED.bars, top_decile_captures_majority_pooled: false },
+    };
+    vi.spyOn(api, "getJson").mockResolvedValue({
+      ...report(),
+      pooled: failing,
+    });
 
     const wrapper = await mountPanel();
 
     expect(
-      wrapper.find("[data-test='bar-t0_has_no_incidents'] [data-test='verdict']").text(),
+      wrapper
+        .find("[data-test='bar-top_decile_captures_majority_pooled'] [data-test='verdict']")
+        .text(),
     ).toBe("FAIL");
-    expect(wrapper.find("[data-test='pooled-note']").text()).toBe(
-      "One history is a noisy judge. Across 30 generated histories, the bars pass: T0's " +
-        "incident rate 0.18% against 3.00% overall, and the top tenth by score catches 57.9% " +
-        "of incident PRs.",
+    expect(wrapper.find("[data-test='pooled-note']").text()).toMatch(
+      /^The risk score does not pass both bars across 30 generated histories/,
     );
   });
 

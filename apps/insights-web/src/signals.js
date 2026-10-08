@@ -143,10 +143,14 @@ export function isFlaky(flakyRate) {
 const THRESHOLD_TIERS = ["T1", "T2", "T3"];
 const TIERS = ["T0", "T1", "T2", "T3"];
 
-const BARS = [
-  { key: "t0_has_no_incidents", label: "No incident PR in T0" },
+// The bars as the pooled grading names them: the only verdict the panel gives.
+const POOLED_BARS = [
   {
-    key: "top_decile_captures_majority",
+    key: "t0_rate_at_most_a_quarter_of_overall",
+    label: "T0's incident rate is at most a quarter of the overall rate",
+  },
+  {
+    key: "top_decile_captures_majority_pooled",
     label: "The top tenth by score holds more than half of incident PRs",
   },
 ];
@@ -190,24 +194,41 @@ export function tierRows(report) {
   }));
 }
 
-export function barRows(report) {
-  return BARS.map((bar) => {
-    const passed = Boolean(report?.bars?.[bar.key]);
+export function pooledBarRows(pooled) {
+  return POOLED_BARS.map((bar) => {
+    const passed = Boolean(pooled?.bars?.[bar.key]);
     return { ...bar, passed, verdict: verdict(passed) };
   });
 }
 
-// Said when a bar fails on this one history: the pooled grading is the judge.
+// The verdict sentence, from the pooled grading only.
 export function pooledNote(pooled) {
+  const passes = pooledBarRows(pooled).every((bar) => bar.passed);
   return (
-    `One history is a noisy judge. Across ${pooled?.histories ?? 30} generated histories, ` +
-    `the bars pass: T0's incident rate ${percent(pooled?.t0_rate, 2)} against ` +
-    `${percent(pooled?.overall_rate, 2)} overall, and the top tenth by score catches ` +
-    `${percent(pooled?.top_decile?.capture)} of incident PRs.`
+    `The risk score ${passes ? "passes" : "does not pass"} both bars across ` +
+    `${pooled?.histories ?? 30} generated histories: T0's incident rate ` +
+    `${percent(pooled?.t0_rate, 2)} against ${percent(pooled?.overall_rate, 2)} overall, and ` +
+    `the top tenth by score catches ${percent(pooled?.top_decile?.capture)} of incident PRs.`
   );
 }
 
-// The pooled sentence, or null when both bars pass on this history.
-export function failingBarNote(report) {
-  return barRows(report).every((bar) => bar.passed) ? null : pooledNote(report?.pooled);
+function ratio(part, whole) {
+  return whole ? part / whole : null;
+}
+
+// This history's own figures: context for the pooled verdict, never a verdict of their own.
+export function historyFigures(report) {
+  const t0 = report?.by_tier?.T0 ?? {};
+  return [
+    {
+      key: "t0_rate",
+      label:
+        `T0's incident rate ${percent(ratio(t0.incidents ?? 0, t0.prs ?? 0), 2)} against ` +
+        `${percent(ratio(report?.incident_prs ?? 0, report?.merged_prs ?? 0), 2)} overall`,
+    },
+    {
+      key: "top_decile",
+      label: `The top tenth by score catches ${percent(report?.top_decile?.capture)} of incident PRs`,
+    },
+  ];
 }

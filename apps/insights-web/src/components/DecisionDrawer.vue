@@ -39,13 +39,12 @@ function orMissing(value) {
 
 const details = computed(() => {
   const row = props.decision;
-  const prompt = row.prompt_version
-    ? `${row.prompt_version}${row.prompt_hash ? ` · ${row.prompt_hash.slice(0, 12)}` : ""}`
-    : MISSING;
+  // The version and the hash are recorded separately; show each that is present.
+  const prompt = [row.prompt_version, row.prompt_hash?.slice(0, 12)].filter(Boolean).join(" · ");
   return [
     ["Time", formatTime(row.created_at)],
     ["Model", orMissing(row.model_id)],
-    ["Prompt version", prompt],
+    ["Prompt", prompt || MISSING],
     ["Version decided on", orMissing(row.head_sha)],
     ["Attempt", orMissing(row.attempt)],
     ["Trigger", orMissing(row.trigger)],

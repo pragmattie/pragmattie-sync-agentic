@@ -96,4 +96,17 @@ describe("DecisionDrawer", () => {
     expect(wrapper.find("[data-test='drawer-signals']").exists()).toBe(false);
     expect(wrapper.find("[data-test='drawer-supersedes']").exists()).toBe(false);
   });
+
+  it("shows the prompt hash without a prompt version, and the version without a hash", async () => {
+    let wrapper = await mountDrawer({ ...DECISION, prompt_version: null });
+    let details = wrapper.find("[data-test='drawer-details']").text();
+    expect(details).toContain("fedcba987654");
+    expect(details).not.toContain("v3");
+    expect(details).not.toContain(" · fedcba");
+
+    wrapper = await mountDrawer({ ...DECISION, prompt_hash: null });
+    details = wrapper.find("[data-test='drawer-details']").text();
+    expect(details).toContain("v3");
+    expect(details).not.toContain("fedcba");
+  });
 });

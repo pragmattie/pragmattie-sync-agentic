@@ -4,8 +4,9 @@ import { computed, onMounted, ref } from "vue";
 import { Bar } from "vue-chartjs";
 import { getJson } from "../api";
 import {
-  barRows,
-  failingBarNote,
+  historyFigures,
+  pooledBarRows,
+  pooledNote,
   realCountNote,
   thresholdRows,
   tierRows,
@@ -39,8 +40,9 @@ onMounted(load);
 const note = computed(() => realCountNote(report.value));
 const thresholds = computed(() => thresholdRows(report.value));
 const tiers = computed(() => tierRows(report.value));
-const bars = computed(() => barRows(report.value));
-const fallback = computed(() => failingBarNote(report.value));
+const bars = computed(() => pooledBarRows(report.value.pooled));
+const verdictNote = computed(() => pooledNote(report.value.pooled));
+const figures = computed(() => historyFigures(report.value));
 
 const legend = [
   { label: "Precision", color: DARK },
@@ -168,7 +170,7 @@ const chartOptions = {
 
         <v-col cols="12" lg="5">
           <v-card variant="outlined" class="mb-4" data-test="bars">
-            <v-card-title>The bars, on this history</v-card-title>
+            <v-card-title>The bars</v-card-title>
             <v-list density="compact">
               <v-list-item v-for="bar in bars" :key="bar.key" :data-test="`bar-${bar.key}`">
                 <template #prepend>
@@ -185,9 +187,22 @@ const chartOptions = {
                 <v-list-item-title class="text-wrap">{{ bar.label }}</v-list-item-title>
               </v-list-item>
             </v-list>
-            <v-card-text v-if="fallback" class="pt-0" data-test="pooled-note">
-              {{ fallback }}
-            </v-card-text>
+            <v-card-text class="pt-0" data-test="pooled-note">{{ verdictNote }}</v-card-text>
+          </v-card>
+
+          <v-card variant="outlined" class="mb-4" data-test="history">
+            <v-card-title class="text-wrap">
+              This database's history (one history is a noisy judge)
+            </v-card-title>
+            <v-list density="compact">
+              <v-list-item
+                v-for="figure in figures"
+                :key="figure.key"
+                :data-test="`history-${figure.key}`"
+              >
+                <v-list-item-title class="text-wrap">{{ figure.label }}</v-list-item-title>
+              </v-list-item>
+            </v-list>
           </v-card>
 
           <v-card variant="outlined" data-test="calibration-chart">

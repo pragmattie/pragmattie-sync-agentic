@@ -11,7 +11,8 @@ delivery board, each issue's stage on a day is derived from what had happened by
   same source at or after the merge. A PR closed unmerged stops counting when it closes, and when
   several PRs are linked the most advanced decides. Gated has no history, so it is In review here.
 
-An issue closed without a merged PR leaves the flow when it closes.
+An issue closed without a merged PR leaves the flow when it closes; one with no close time can't
+be placed in time, so it is left out.
 """
 
 from bisect import bisect_left
@@ -122,7 +123,10 @@ def _items(db: Session, source: str) -> list[_Item]:
         else:
             triaged_at = None
         has_merge = any(pr.merged is not None for pr in prs)
-        left = issue.closed_at if issue.state == "closed" and not has_merge else None
+        closed_unmerged = issue.state == "closed" and not has_merge
+        if closed_unmerged and issue.closed_at is None:
+            continue  # it can't be placed in time
+        left = issue.closed_at if closed_unmerged else None
         items.append(_Item(issue.created_at, triaged_at, left, prs))
     return items
 
