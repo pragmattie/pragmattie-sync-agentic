@@ -368,6 +368,19 @@ jobs:
             gh pr merge "$PR" -R "$REPO" --auto --merge \
               || echo "Auto-merge not enabled (is 'Allow auto-merge' on in the repository?)"
           fi
+          if [ "$ACTION" = "revise" ] && [ "$OUTCOME" = "success" ]; then
+            # Keep the description true after a revision: a note at the top says it was revised,
+            # and "Revisions" at the end lists each one (date, commit, the agent's summary), so a
+            # reviewer never takes the original description for the current state.
+            note='> **Revised after this description was written.** Each revision is listed under "Revisions" at the end; where they differ from the text above, the revisions and the commits are current.'
+            body=$(gh pr view "$PR" -R "$REPO" --json body --jq .body) || body=""
+            summary=$(echo "$RESULT" | jq -r '.summary // "(no summary)"' 2>/dev/null | sed '2,$s/^/  /') || summary="(no summary)"
+            case "$body" in *"$note"*) ;; *) body=$(printf '%s\n\n%s' "$note" "$body") ;; esac
+            case "$body" in *"## Revisions"*) ;; *) body=$(printf '%s\n\n## Revisions' "$body") ;; esac
+            body=$(printf '%s\n\n- **%s (commit %s):** %s' "$body" "$(date -u +%Y-%m-%d)" "$(git rev-parse --short HEAD)" "$summary")
+            printf '%s\n' "$body" > pr-body.md
+            gh pr edit "$PR" -R "$REPO" --body-file pr-body.md || echo "Couldn't update the PR description."
+          fi
           if [ "$ACTION" = "build" ] && [ "$OUTCOME" != "success" ]; then
             title=$(gh issue view "$ISSUE" -R "$REPO" --json title --jq .title)
             # shellcheck disable=SC2016  # literal backticks in Markdown
