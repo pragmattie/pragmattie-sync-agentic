@@ -8,7 +8,10 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`CLAUDE.governance.md`** (4.21): the "## Governance" section for `CLAUDE.md` (tiers, `/tier`
+  and `/hold`, the simulated approver rule, modes, triage autonomy, evaluation bars and the demo
+  rule). A person adds it to `CLAUDE.md` under a "## Governance" heading, then deletes this copy
+  and moves this entry to Applied.
 
 ## Applied
 
