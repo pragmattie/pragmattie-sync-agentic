@@ -63,6 +63,27 @@ class Engineer(Base):
     source: Mapped[str] = _source()
 
 
+class Epic(Base):
+    """A body of work that issues belong to. Real epics are GitHub milestones.
+
+    ``external_id`` is ``milestone-{number}``, ``name`` the milestone's title and ``due_on`` its
+    due date, the epic's target.
+    """
+
+    __tablename__ = "sdlc_epics"
+    __table_args__ = (_external_id_unique(__tablename__),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = _source(index=True)
+    external_id: Mapped[str | None] = mapped_column(String(64))
+    number: Mapped[int | None]
+    name: Mapped[str] = mapped_column(String(80))
+    state: Mapped[str] = mapped_column(String(10), default="open", server_default="open")
+    due_on: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class Sprint(Base):
     __tablename__ = "sdlc_sprints"
 
