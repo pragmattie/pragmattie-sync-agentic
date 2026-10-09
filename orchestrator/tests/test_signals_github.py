@@ -1,4 +1,5 @@
-from datetime import datetime
+import logging
+from datetime import date, datetime
 
 import httpx
 import pytest
@@ -9,7 +10,7 @@ from sdlc.db import Base
 from sdlc.github_client import GitHubClient, GitHubError
 from sdlc.signals import github
 from sdlc.signals.github import Collector, labels_of, linked_issue_number, suite_of
-from sdlc.tables import CIRun, Engineer, Issue, PullRequest
+from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
 
 REPO = "acme/widgets"
 API = f"/repos/{REPO}"
@@ -18,6 +19,25 @@ API = f"/repos/{REPO}"
 def _label(*names):
     return [{"id": index, "name": name} for index, name in enumerate(names)]
 
+
+MILESTONES = [
+    {
+        "number": 5,
+        "title": "M5 Delivery forecasting",
+        "state": "open",
+        "due_on": "2026-11-20T08:00:00Z",
+        "created_at": "2026-08-01T09:00:00Z",
+        "closed_at": None,
+    },
+    {
+        "number": 4,
+        "title": "M4 Governance",
+        "state": "closed",
+        "due_on": None,
+        "created_at": "2026-07-01T09:00:00Z",
+        "closed_at": "2026-10-08T17:30:00Z",
+    },
+]
 
 ISSUES = [
     {
@@ -33,10 +53,11 @@ ISSUES = [
         "number": 13,
         "title": "Forecast export",
         "state": "open",
-        "labels": _label("points:big"),
+        "labels": _label("points:big", "epic:Exports"),
         "created_at": "2026-09-02T09:00:00Z",
         "closed_at": None,
         "assignee": None,
+        "milestone": {"number": 5, "title": "M5 Delivery forecasting"},
     },
     {
         "number": 14,
@@ -143,6 +164,9 @@ JOBS = {
 
 def _handler(request):
     path = request.url.path
+    if path == f"{API}/milestones":
+        assert request.url.params["state"] == "all"
+        return httpx.Response(200, json=MILESTONES)
     if path == f"{API}/issues":
         return httpx.Response(200, json=ISSUES)
     if path == f"{API}/pulls":
@@ -226,7 +250,7 @@ def test_suite_of():
 
 def test_run_returns_the_counts(collected):
     _, counts = collected
-    assert counts == {"issues": 2, "pull_requests": 2, "ci_jobs": 5}
+    assert counts == {"epics": 2, "issues": 2, "pull_requests": 2, "ci_jobs": 5}
 
 
 def test_issue_fields(collected):
@@ -395,9 +419,9 @@ def test_synthetic_rows_with_the_same_number_are_untouched(session, client):
 
 def test_cli_prints_the_counts(sqlite_engine, client, capsys):
     Base.metadata.create_all(sqlite_engine)
-    assert github.main(engine=sqlite_engine, client=client) == 0
+    assert github.main([], engine=sqlite_engine, client=client) == 0
     assert capsys.readouterr().out.strip() == (
-        f"Collected from {REPO}: issues: 2, pull_requests: 2, ci_jobs: 5"
+        f"Collected from {REPO}: epics: 2, issues: 2, pull_requests: 2, ci_jobs: 5"
     )
 
 
@@ -407,7 +431,7 @@ def test_cli_exits_with_the_friendly_error(monkeypatch, sqlite_engine):
 
     monkeypatch.setattr(github, "GitHubClient", missing_settings)
     with pytest.raises(SystemExit) as raised:
-        github.main(engine=sqlite_engine)
+        github.main([], engine=sqlite_engine)
     assert raised.value.code == (
         "Set GITHUB_TOKEN and GITHUB_REPO (owner/name) in your .env file first."
     )
@@ -423,8 +447,8 @@ def test_cli_exits_with_a_github_error(sqlite_engine):
         ),
     )
     with pytest.raises(SystemExit) as raised:
-        github.main(engine=sqlite_engine, client=failing)
-    assert raised.value.code == f"GitHub 404 on {API}/issues: Nope"
+        github.main([], engine=sqlite_engine, client=failing)
+    assert raised.value.code == f"GitHub 404 on {API}/milestones: Nope"
 
 
 def test_collect_pull_request_stores_one_pr_and_updates_it_in_place(session, client):
@@ -443,3 +467,147 @@ def test_collect_pull_request_stores_one_pr_and_updates_it_in_place(session, cli
     assert again.id == pr.id
     assert again.state == "closed"
     assert session.scalar(select(func.count()).select_from(PullRequest)) == 1
+
+
+def test_milestones_are_stored_as_epics_with_their_due_dates(collected):
+    session, _ = collected
+    open_epic = _github(session, Epic, "milestone-5")
+    assert open_epic.number == 5
+    assert open_epic.name == "M5 Delivery forecasting"
+    assert open_epic.state == "open"
+    assert open_epic.due_on == date(2026, 11, 20)
+    assert open_epic.created_at == datetime(2026, 8, 1, 9, 0)
+    assert open_epic.closed_at is None
+
+    closed_epic = _github(session, Epic, "milestone-4")
+    assert closed_epic.state == "closed"
+    assert closed_epic.due_on is None
+    assert closed_epic.closed_at == datetime(2026, 10, 8, 17, 30)
+
+
+def test_an_issue_in_a_milestone_gets_its_title_as_the_epic(collected):
+    session, _ = collected
+    assert _github(session, Issue, "issue-13").epic == "M5 Delivery forecasting"
+
+
+def test_the_epic_label_is_used_only_without_a_milestone(collected):
+    session, _ = collected
+    assert _github(session, Issue, "issue-12").epic == "Scoring"
+    collector = Collector(session, None)
+    plain = {**ISSUES[1], "number": 30, "labels": [], "milestone": None}
+    assert collector.collect_issue(plain).epic is None
+
+
+def test_closing_a_milestone_updates_its_row(collected, client):
+    session, _ = collected
+    original = dict(MILESTONES[0])
+    MILESTONES[0].update(state="closed", closed_at="2026-11-18T12:00:00Z")
+    try:
+        Collector(session, client).run()
+    finally:
+        MILESTONES[0] = original
+    epic = _github(session, Epic, "milestone-5")
+    assert epic.state == "closed"
+    assert epic.closed_at == datetime(2026, 11, 18, 12, 0)
+    assert session.scalar(select(func.count()).select_from(Epic)) == 2
+
+
+def _spy_client(handler=_handler):
+    """A client whose transport records every request, and the method each one used."""
+    sent = []
+
+    def spy(request):
+        sent.append((request.method, request.url.path))
+        return handler(request)
+
+    return GitHubClient(token="test-token", repo=REPO, transport=httpx.MockTransport(spy)), sent
+
+
+def test_run_every_collects_twice_with_a_fake_clock(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    spy, sent = _spy_client()
+    waits = []
+    assert (
+        github.main(
+            ["run", "--every", "900"], engine=sqlite_engine, client=spy, sleep=waits.append, runs=2
+        )
+        == 0
+    )
+    assert waits == [900, 900]
+    assert [path for _, path in sent].count(f"{API}/milestones") == 2
+    with Session(sqlite_engine) as session:
+        assert _github(session, Epic, "milestone-5").name == "M5 Delivery forecasting"
+
+
+def test_once_is_the_default_command(sqlite_engine, capsys):
+    Base.metadata.create_all(sqlite_engine)
+    spy, _ = _spy_client()
+    assert github.main([], engine=sqlite_engine, client=spy) == 0
+    assert github.main(["once"], engine=sqlite_engine, client=spy) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 2 and lines[0] == lines[1]
+
+
+def test_a_failed_run_is_logged_and_the_next_one_tries_again(sqlite_engine, caplog, monkeypatch):
+    monkeypatch.setattr(github.log, "disabled", False)  # alembic's fileConfig disables it
+    Base.metadata.create_all(sqlite_engine)
+    failures = [1]
+
+    def flaky(request):
+        if failures and request.url.path == f"{API}/milestones":
+            failures.pop()
+            return httpx.Response(500, json={"message": "Server Error"})
+        return _handler(request)
+
+    spy, sent = _spy_client(flaky)
+    waits = []
+    with caplog.at_level(logging.INFO, logger="sdlc.signals.github"):
+        github.main(
+            ["run", "--every", "60"], engine=sqlite_engine, client=spy, sleep=waits.append, runs=2
+        )
+    assert waits == [60, 60]
+    assert "The collection failed" in caplog.text
+    assert "GitHub 500" in caplog.text
+    with Session(sqlite_engine) as session:
+        assert _github(session, Epic, "milestone-5") is not None
+        assert _github(session, Issue, "issue-12") is not None
+
+
+def test_a_spent_rate_limit_waits_until_the_reset(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    reset = datetime(2030, 1, 1, 12, 0)
+    reset_epoch = int((reset - datetime(1970, 1, 1)).total_seconds())
+    limited = [1]
+
+    def spent(request):
+        if limited:
+            limited.pop()
+            return httpx.Response(
+                403,
+                headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset_epoch)},
+                json={"message": "API rate limit exceeded"},
+            )
+        return _handler(request)
+
+    spy, _ = _spy_client(spent)
+    waits = []
+    github.run_every(
+        900,
+        lambda: github.collect_once(sqlite_engine, spy),
+        sleep=waits.append,
+        now=lambda: datetime(2030, 1, 1, 11, 50),
+        runs=1,
+    )
+    assert waits == [600]
+
+
+def test_the_collector_never_sends_a_write_request(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    spy, sent = _spy_client()
+    github.main(
+        ["run", "--every", "1"], engine=sqlite_engine, client=spy, sleep=lambda _: None, runs=2
+    )
+    github.main(["once"], engine=sqlite_engine, client=spy)
+    assert sent
+    assert {method for method, _ in sent} == {"GET"}
+    assert not {"POST", "PATCH", "PUT", "DELETE"} & {method for method, _ in sent}

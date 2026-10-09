@@ -66,6 +66,31 @@ To bring up just the database, run
 `docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
 `docker compose ps` shows it as such.
 
+Every published host port comes from `.env`: `CRM_WEB_PORT`, `INSIGHTS_WEB_PORT`, `API_PORT`,
+`ORCH_PORT` and `MYSQL_HOST_PORT`, defaulting to the addresses above. Containers keep their own
+ports, and the web apps' API addresses follow the host ports.
+
+## Running beside v1
+
+v2 can run on the same machine as v1 and read this repository, so Delivery Insights shows the
+real agent build. It only reads: the agents stay off (`ORCHESTRATOR_MODE=off`), and the
+`collector` service sends GET requests only, collecting milestones (as epics), issues, pull
+requests and CI jobs every `COLLECT_SECONDS` (900 by default). A failed run is logged and the next
+one tries again; a spent rate limit waits until it resets.
+
+v2 reads with its own token, never v1's, so the two never share a rate limit. Create a
+fine-grained personal access token for `pragmattie/pragmattie-sync-agentic` only, with these
+repository permissions, all **read-only**: Metadata, Contents, Issues, Pull requests, Actions and
+Deployments.
+
+1. Create the read-only token above.
+2. Copy `.env.example` to `.env` (v2's own, separate from v1's), uncomment the "Running beside
+   v1" block (ports 15173, 15174, 18000, 18001 and 13307, and
+   `GITHUB_REPO=pragmattie/pragmattie-sync-agentic`), and set the token as `GITHUB_TOKEN`.
+3. Run `docker compose --profile collect up -d`. On a new database, apply the migrations first
+   (see [Database migrations](#database-migrations)).
+4. Open Delivery Insights on <http://localhost:15174>.
+
 ## CRM API
 
 The CRM API serves the CRM web app on <http://localhost:8000>, under `/api/v1`, and documents

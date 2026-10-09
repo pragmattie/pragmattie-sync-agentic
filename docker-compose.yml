@@ -1,8 +1,10 @@
 services:
   crm-web:
     build: ./apps/crm-web
+    environment:
+      VITE_API_URL: http://localhost:${API_PORT:-8000}
     ports:
-      - "5173:5173"
+      - "${CRM_WEB_PORT:-5173}:5173"
     volumes:
       - ./apps/crm-web:/app
       - crm-web-node-modules:/app/node_modules
@@ -11,9 +13,9 @@ services:
   insights-web:
     build: ./apps/insights-web
     environment:
-      VITE_ORCH_URL: http://localhost:8001
+      VITE_ORCH_URL: http://localhost:${ORCH_PORT:-8001}
     ports:
-      - "5174:5174"
+      - "${INSIGHTS_WEB_PORT:-5174}:5174"
     volumes:
       - ./apps/insights-web:/app
       - insights-web-node-modules:/app/node_modules
@@ -23,9 +25,9 @@ services:
     build: ./apps/api
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
-      CORS_ORIGINS: http://localhost:5173,http://pragmattie-sync.localhost
+      CORS_ORIGINS: http://localhost:${CRM_WEB_PORT:-5173},http://pragmattie-sync.localhost
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -37,12 +39,31 @@ services:
     build: ./orchestrator
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
-      CORS_ORIGINS: http://localhost:5174,http://insights.pragmattie-sync.localhost
+      CORS_ORIGINS: http://localhost:${INSIGHTS_WEB_PORT:-5174},http://insights.pragmattie-sync.localhost
     ports:
-      - "8001:8001"
+      - "${ORCH_PORT:-8001}:8001"
     volumes:
       - ./orchestrator:/orchestrator
     command: uvicorn sdlc.main:app --host 0.0.0.0 --port 8001 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Reads the repository in GITHUB_REPO on a schedule, with GET requests only. It never runs the
+  # agents. Start it with `docker compose --profile collect up -d`.
+  collector:
+    build: ./orchestrator
+    profiles: ["collect"]
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
+      ORCHESTRATOR_MODE: "off"
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-}
+    volumes:
+      - ./orchestrator:/orchestrator
+    command: python -m sdlc.signals.github run --every ${COLLECT_SECONDS:-900}
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
