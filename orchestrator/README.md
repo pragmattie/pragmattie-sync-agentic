@@ -12,9 +12,12 @@ Simulated engineering history (about six months of sprints, issues and pull requ
 `source = "synthetic"`) comes from `sdlc/synth.py`: run `python -m sdlc.synth` to add it,
 `--if-empty` to skip when it already exists, or `--reset` to replace it.
 
-Real work (issues, pull requests with their files and reviews, and CI jobs, every row
-`source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_TOKEN` and `GITHUB_REPO`
-in `.env`, then run `python -m sdlc.signals.github`. Re-running updates rows in place.
+Real work (milestones as epics, issues, pull requests with their files and reviews, and CI jobs,
+every row `source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_TOKEN` and
+`GITHUB_REPO` in `.env`, then run `python -m sdlc.signals.github` (or `once`) to collect once, or
+`run --every SECONDS` to collect on a schedule. Re-running updates rows in place. An issue's epic
+is its milestone's title, or its `epic:` label when it has no milestone; `sdlc.epics.epic_label`
+shows "M5 Delivery forecasting" as "Delivery forecasting (M5)". The collector only sends GETs.
 
 The risk score is graded against history by `sdlc/calibration.py`. `python -m sdlc.risk explain
 <pr>` shows one pull request's signals, score, tier and reasons (add `--source` when the number
