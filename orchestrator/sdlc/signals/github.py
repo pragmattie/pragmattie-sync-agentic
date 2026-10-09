@@ -1,11 +1,21 @@
-"""Real work from a GitHub repository: issues, pull requests with their files and reviews, CI jobs.
+"""Real work from a GitHub repository: milestones (as epics), issues, pull requests with their
+files and reviews, CI jobs.
 
 Every row is stored with ``source = "github"`` and matched on its ``external_id``, so running
 the collector again updates rows in place instead of adding new ones.
+
+The collector only reads: it sends GET requests and never writes to GitHub.
+``python -m sdlc.signals.github`` (or ``once``) collects once and prints the counts;
+``run --every SECONDS`` collects, waits and collects again, forever. A failed run is logged and
+the next one tries again; a spent rate limit waits until it resets.
 """
 
+import argparse
+import logging
 import re
 import sys
+import time
+from collections.abc import Callable
 from datetime import datetime
 
 from sqlalchemy import select
@@ -13,9 +23,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from sdlc.changes import classify_files, infer_module
+from sdlc.clock import utcnow
 from sdlc.db import get_engine
-from sdlc.github_client import GitHubClient, GitHubError, parse_time
-from sdlc.tables import CIRun, Engineer, Issue, PullRequest
+from sdlc.github_client import GitHubClient, GitHubError, RateLimited, parse_time
+from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
+
+log = logging.getLogger("sdlc.signals.github")
 
 DEPLOY_WORKFLOW = ".github/workflows/deploy.yml"
 LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s*#(\d+)", re.I)
@@ -27,6 +40,7 @@ SUITES = {
     "Migrations on MySQL": "migrations",
 }
 SUITE_LENGTH = 40
+EPIC_LENGTH = 80
 
 
 def labels_of(item: dict) -> dict[str, str]:
@@ -70,6 +84,7 @@ class Collector:
 
     def run(self) -> dict[str, int]:
         counts = {
+            "epics": self.collect_milestones(),
             "issues": self.collect_issues(),
             "pull_requests": self.collect_pull_requests(),
             "ci_jobs": self.collect_ci(),
@@ -100,6 +115,22 @@ class Collector:
             self._engineers[login] = engineer
         return self._engineers[login]
 
+    def collect_milestones(self) -> int:
+        """Store or update every milestone, open and closed, as an epic."""
+        count = 0
+        for item in self.client.paginate("/repos/{repo}/milestones", state="all"):
+            epic = self._row(Epic, f"milestone-{item['number']}")
+            epic.number = item["number"]
+            epic.name = item["title"][:EPIC_LENGTH]
+            epic.state = item["state"]
+            due_on = parse_time(item.get("due_on"))
+            epic.due_on = due_on.date() if due_on else None
+            epic.created_at = parse_time(item["created_at"])
+            epic.closed_at = parse_time(item.get("closed_at"))
+            count += 1
+        self.db.flush()
+        return count
+
     def collect_issues(self) -> int:
         count = 0
         for item in self.client.paginate("/repos/{repo}/issues", state="all"):
@@ -119,7 +150,8 @@ class Collector:
         issue.module = labels.get("module")
         issue.type = labels.get("type", "feature")
         issue.priority = labels.get("priority")
-        issue.epic = labels.get("epic")
+        milestone = item.get("milestone")
+        issue.epic = milestone["title"][:EPIC_LENGTH] if milestone else labels.get("epic")
         issue.estimate_points = _points(labels.get("points"))
         issue.state = item["state"]
         issue.created_at = parse_time(item["created_at"])
@@ -247,11 +279,67 @@ class Collector:
         )
 
 
-def main(engine: Engine | None = None, client: GitHubClient | None = None) -> int:
+def collect_once(engine: Engine, client: GitHubClient) -> dict[str, int]:
+    with Session(engine) as db:
+        return Collector(db, client).run()
+
+
+def run_every(
+    seconds: float,
+    collect: Callable[[], dict[str, int]],
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], datetime] = utcnow,
+    runs: int | None = None,
+) -> None:
+    """Collect, wait ``seconds`` and collect again, forever unless ``runs`` is given.
+
+    A failed run is logged and the next one runs as usual. When GitHub's rate limit is spent, the
+    wait lasts until it resets instead.
+    """
+    done = 0
+    while runs is None or done < runs:
+        done += 1
+        wait = seconds
+        try:
+            log.info("Collected: %s", collect())
+        except RateLimited as limited:
+            wait = max(1.0, (limited.until - now()).total_seconds())
+            log.warning("GitHub's rate limit is spent; waiting until %s UTC", limited.until)
+        except Exception:
+            log.exception("The collection failed; the next one runs as usual")
+        sleep(wait)
+
+
+def main(
+    argv: list[str] | None = None,
+    engine: Engine | None = None,
+    client: GitHubClient | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], datetime] = utcnow,
+    runs: int | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m sdlc.signals.github", description="Collect real work from GitHub."
+    )
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("once", help="collect once and print the counts (the default)")
+    every = commands.add_parser("run", help="collect on a schedule, forever")
+    every.add_argument("--every", type=float, required=True, metavar="SECONDS")
+    args = parser.parse_args(argv)
+
     try:
         client = client or GitHubClient()
-        with Session(engine or get_engine()) as db:
-            counts = Collector(db, client).run()
+    except GitHubError as error:
+        sys.exit(str(error))
+    engine = engine or get_engine()
+    if args.command == "run":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        log.info("Collecting from %s every %ss", client.repo, args.every)
+        run_every(args.every, lambda: collect_once(engine, client), sleep=sleep, now=now, runs=runs)
+        return 0
+    try:
+        counts = collect_once(engine, client)
     except GitHubError as error:
         sys.exit(str(error))
     summary = ", ".join(f"{kind}: {count}" for kind, count in counts.items())
