@@ -25,6 +25,12 @@ exists in both sources); `python -m sdlc.risk calibrate` grades this database's 
 `calibrate --generated N` grades N generated histories, pooled. Both are read-only, except that
 `explain <pr> --record` appends the explained decision to the audit trail.
 
+The delivery forecast in `sdlc/forecast.py` is a Monte Carlo simulation: it resamples the issues
+closed on each working day of the last 84 days and plays the open work forward 10,000 times for
+P50, P85 and the chance of finishing on time, seeded by the sprint and the day so the same day
+repeats. `python -m sdlc.forecast [--runs N]` prints the current simulated sprint's forecast,
+with the items at risk; it is read-only.
+
 Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
 reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer
