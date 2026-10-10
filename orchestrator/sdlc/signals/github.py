@@ -8,6 +8,9 @@ The collector only reads: it sends GET requests and never writes to GitHub.
 ``python -m sdlc.signals.github`` (or ``once``) collects once and prints the counts;
 ``run --every SECONDS`` collects, waits and collects again, forever. A failed run is logged and
 the next one tries again; a spent rate limit waits until it resets.
+
+After each collection the forecaster agent saves fresh forecasts (``sdlc.forecaster``), whatever
+``ORCHESTRATOR_MODE`` says: it writes only its own tables and sends nothing to GitHub.
 """
 
 import argparse
@@ -280,8 +283,16 @@ class Collector:
 
 
 def collect_once(engine: Engine, client: GitHubClient) -> dict[str, int]:
+    """Collect, then save fresh forecasts; a failed forecast is logged and leaves the counts."""
     with Session(engine) as db:
-        return Collector(db, client).run()
+        counts = Collector(db, client).run()
+    from sdlc.forecaster import ALWAYS_ON, ForecastRunner
+
+    try:
+        log.info("Forecasts: %s", ForecastRunner(ALWAYS_ON, engine=engine).poll_once())
+    except Exception:
+        log.exception("The forecaster failed; the next collection runs it again")
+    return counts
 
 
 def run_every(
