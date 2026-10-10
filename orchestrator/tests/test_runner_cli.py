@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sdlc import runner as runner_module
-from sdlc.config import Settings
+from sdlc.config import Settings, get_settings
 from sdlc.db import Base
 from sdlc.runner import Runner, main, run
 from sdlc.signals.github import Collector
@@ -152,6 +152,36 @@ def test_once_prints_the_summary(runner, capsys):
     assert main(["once"], runner=runner) == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary == {"mode": "enforce", "prs": 1, "assessed": 1, "failed": 0, "errors": 0}
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_run_builds_the_forecaster_with_the_runners_own_mode(mode, gh, llm, engine, monkeypatch):
+    from sdlc import issue_runner
+    from sdlc.forecaster import ForecastRunner
+
+    monkeypatch.setenv("ORCHESTRATOR_MODE", mode)
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        runner_module, "_build", lambda m: Runner(gh, llm, load_policy(), m, engine=engine)
+    )
+    monkeypatch.setattr(issue_runner, "build", lambda m, gh=None, engine=None: None)
+    seen = {}
+
+    def loop(runner, poll_seconds, *, issue_runner, forecast_runner):
+        seen["runner"], seen["forecaster"] = runner, forecast_runner
+
+    monkeypatch.setattr(runner_module, "run", loop)
+    try:
+        assert main(["run"]) == 0
+    finally:
+        get_settings.cache_clear()
+
+    forecaster = seen["forecaster"]
+    assert isinstance(forecaster, ForecastRunner)
+    assert forecaster.mode == seen["runner"].mode == mode
+    assert forecaster.engine is engine
+    if mode == "off":
+        assert forecaster.poll_once() == {"mode": "off"}
 
 
 @pytest.fixture(autouse=True)

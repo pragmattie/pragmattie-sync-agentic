@@ -139,6 +139,8 @@ def days_per_point(db: Session, source: str) -> dict[str | None, float]:
     rates: dict[str | None, float] = {}
     total_days = total_points = 0.0
     for module, days, points in rows:
+        # MySQL's SUM of an integer column is a Decimal; SQLite's is a number.
+        days, points = float(days), float(points)
         total_days += days
         total_points += points
         if module is not None:

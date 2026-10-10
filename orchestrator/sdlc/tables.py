@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -305,3 +306,34 @@ class Approval(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     pull_request: Mapped[PullRequest] = relationship()
+
+
+class Forecast(Base):
+    """One saved sprint or epic forecast. Append-only: a fresh forecast is a new row.
+
+    ``source`` is "synthetic", "github" or "mixed"; ``end_date`` is a sprint's last day or an
+    epic's target.
+    """
+
+    __tablename__ = "sdlc_forecasts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    as_of: Mapped[date] = mapped_column(Date)
+    kind: Mapped[str] = mapped_column(String(10))
+    subject: Mapped[str] = mapped_column(String(80), index=True)
+    source: Mapped[str] = mapped_column(String(20))
+    trigger: Mapped[str] = mapped_column(String(20))
+    inputs_hash: Mapped[str] = mapped_column(String(64))
+    remaining_items: Mapped[int]
+    remaining_real: Mapped[int] = _count()
+    remaining_points: Mapped[int]
+    end_date: Mapped[date | None] = mapped_column(Date)
+    p50: Mapped[date | None] = mapped_column(Date)
+    p85: Mapped[date | None] = mapped_column(Date)
+    on_time_probability: Mapped[float | None] = mapped_column(Float)
+    throughput_mean: Mapped[float] = mapped_column(Float)
+    history_days: Mapped[int]
+    runs: Mapped[int]
+    seed: Mapped[int] = mapped_column(BigInteger)
+    at_risk: Mapped[list | None] = mapped_column(JSON)

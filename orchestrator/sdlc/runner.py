@@ -1,6 +1,7 @@
 """The shared poll loop: score each new commit once, then keep the ``risk-gate`` in step.
 
-The triage agent (``sdlc.issue_runner``) runs in the same loop, after it, in the same mode.
+The triage agent (``sdlc.issue_runner``) and then the forecaster (``sdlc.forecaster``) run in
+the same loop, after it, in the same mode.
 
 ``ORCHESTRATOR_MODE`` switches all of it. ``off`` does nothing at all, not even a read. ``shadow``
 does everything, but the status always passes and says what it would be. ``enforce`` makes the
@@ -432,10 +433,13 @@ def run(
     clock: Callable[[], float] = time.monotonic,
     polls: int | None = None,
     issue_runner: Any = None,
+    forecast_runner: Any = None,
 ) -> None:
     """Poll every ``poll_seconds``, forever unless ``polls`` is given. Nothing stops the loop.
 
-    The triage agent's ``issue_runner``, when given, polls after the PR risk agent each time.
+    The triage agent's ``issue_runner``, when given, polls after the PR risk agent each time, and
+    the ``forecast_runner`` after that. It sends nothing to GitHub, so a spent rate limit doesn't
+    stop it.
     """
     stats_at = clock()
     limited_logged = None
@@ -458,6 +462,11 @@ def run(
                     log.info("Issue poll: %s", issue_runner.poll_once())
                 except Exception:
                     log.exception("The issue poll failed; the next one runs as usual")
+        if forecast_runner is not None:
+            try:
+                log.info("Forecast poll: %s", forecast_runner.poll_once())
+            except Exception:
+                log.exception("The forecast poll failed; the next one runs as usual")
         if clock() - stats_at >= STATS_EVERY_SECONDS:
             stats_at = clock()
             log.info(
@@ -574,9 +583,11 @@ def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         log.info("Polling every %ss in %s mode", settings.poll_seconds, runner.mode)
         from sdlc import issue_runner
+        from sdlc.forecaster import ForecastRunner
 
         issues = issue_runner.build(runner.mode, gh=runner.gh, engine=runner.engine)
-        run(runner, settings.poll_seconds, issue_runner=issues)
+        forecasts = ForecastRunner(runner.mode, engine=runner.engine)
+        run(runner, settings.poll_seconds, issue_runner=issues, forecast_runner=forecasts)
         return 0
     if args.command == "once":
         print(json.dumps(runner.poll_once()))

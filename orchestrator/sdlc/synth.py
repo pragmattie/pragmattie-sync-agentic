@@ -40,6 +40,7 @@ from sqlalchemy import delete, exists, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from sdlc import forecaster
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
 from sdlc.tables import CIRun, Deployment, Engineer, Incident, Issue, PullRequest, Sprint
@@ -677,7 +678,8 @@ def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, 
 
 
 def reset(db: Session) -> None:
-    """Deletes every synthetic row, children first."""
+    """Deletes every synthetic row, children first, and the forecasts made from them."""
+    forecaster.reset(db)
     synthetic_prs = select(PullRequest.id).where(PullRequest.source == SOURCE)
     synthetic_issues = select(Issue.id).where(Issue.source == SOURCE)
     synthetic_sprints = select(Sprint.id).where(Sprint.source == SOURCE)

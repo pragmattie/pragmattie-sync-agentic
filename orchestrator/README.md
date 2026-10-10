@@ -31,6 +31,18 @@ P50, P85 and the chance of finishing on time, seeded by the sprint and the day s
 repeats. `python -m sdlc.forecast [--runs N]` prints the current simulated sprint's forecast,
 with the items at risk; it is read-only.
 
+The forecaster agent in `sdlc/forecaster.py` saves forecasts to `sdlc_forecasts` (append-only), so
+a page can show how a date moved. It fingerprints what the forecast depends on (the day, and each
+open item's id, points, module and first pull request) and saves a fresh forecast only when that
+changes: `schedule` for a subject's first forecast of the day, `change` for one later that day,
+`manual` when forced. Each save is one forecast row and one audit row; it makes no model call and
+no GitHub request. It runs after the PR risk and triage agents in `python -m sdlc.runner run`
+(`ORCHESTRATOR_MODE=off` stops it there) and after every collection in the collector, whatever
+the mode. `python -m sdlc.forecaster once` polls once and `now` saves a fresh forecast of
+everything; both follow `ORCHESTRATOR_MODE`. `python -m sdlc.synth --reset` forgets the simulated
+forecasts and the forecaster's audit rows about them, and keeps real forecasts and every other
+agent's rows.
+
 Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
 reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer

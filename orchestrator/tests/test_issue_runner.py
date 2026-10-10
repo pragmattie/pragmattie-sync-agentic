@@ -313,6 +313,47 @@ def test_the_run_loop_polls_issues_after_pull_requests(gh, engine):
     assert order == ["prs", "issues", "prs", "issues"]
 
 
+def test_the_run_loop_forecasts_last_even_when_github_is_rate_limited(gh, engine, monkeypatch):
+    order = []
+
+    class Recorder:
+        def __init__(self, name):
+            self.name = name
+            self.gh = gh
+
+        def poll_once(self):
+            order.append(self.name)
+            return {}
+
+    run(
+        Recorder("prs"),
+        30,
+        sleep=lambda _: None,
+        polls=1,
+        issue_runner=Recorder("issues"),
+        forecast_runner=Recorder("forecasts"),
+    )
+    assert order == ["prs", "issues", "forecasts"]
+
+    monkeypatch.setattr(gh, "rate_limited", lambda: True, raising=False)
+    order.clear()
+    run(
+        Recorder("prs"),
+        30,
+        sleep=lambda _: None,
+        polls=1,
+        issue_runner=Recorder("issues"),
+        forecast_runner=Recorder("forecasts"),
+    )
+    assert order == ["forecasts"]
+
+
+def test_the_poll_loop_forecaster_does_nothing_when_off(engine):
+    from sdlc.forecaster import ForecastRunner
+
+    assert ForecastRunner("off", engine=engine).poll_once() == {"mode": "off"}
+
+
 @pytest.fixture(autouse=True)
 def runner_logs(monkeypatch):
     """Alembic's fileConfig in other tests disables loggers that already exist; undo that."""
