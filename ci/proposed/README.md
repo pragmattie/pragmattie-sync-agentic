@@ -8,7 +8,13 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`ci.yml`** (5.2): in the job **"Migrations on MySQL"** (name unchanged), install
+  `orchestrator/requirements-dev.txt` instead of `requirements.txt` (for pytest), and between the
+  orchestrator's `alembic check` and `alembic downgrade base` run
+  `pytest tests/test_migrations.py -k mysql`, which stores and reads back a forecast seed above
+  2³¹ on MySQL (the test skips unless `DATABASE_URL` is MySQL). The orchestrator's migration
+  step is split in two around it. Apply it over `.github/workflows/ci.yml` after the 5.2 merge
+  and delete this copy; no required check changes.
 
 ## Applied
 
