@@ -334,14 +334,16 @@ def test_openapi_lists_the_signal_and_decision_endpoints_with_their_queries(api)
         return {p["name"] for p in operation.get("parameters", []) if p["in"] == "query"}
 
     decisions = ["decisions", "decisions/agents", "decisions/{decision_id}"]
+    forecasts = ["forecast", "forecast/{forecast_id}"]
     assert {path for path in paths if path.startswith("/api/v1/signals/")} == {
-        f"/api/v1/signals/{endpoint}" for endpoint in ENDPOINTS + decisions
+        f"/api/v1/signals/{endpoint}" for endpoint in ENDPOINTS + decisions + forecasts
     }
     assert queries("summary") == {"days"}
     assert queries("cycle-time") == {"bucket", "weeks"}
     assert queries("ci") == {"weeks"}
     assert queries("flow") == {"source", "days"}
     assert queries("sprints") == queries("modules") == queries("sources") == set()
+    assert queries("forecast") == set()
     assert queries("decisions") == {
         "agent",
         "subject_type",

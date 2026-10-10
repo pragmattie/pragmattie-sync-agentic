@@ -24,7 +24,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,7 @@ from sdlc.audit import record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
+from sdlc.epics import MILESTONE_TITLE, epic_label
 from sdlc.forecast import (
     RUNS,
     EpicForecast,
@@ -52,6 +53,8 @@ AGENT_VERSION = "v1"
 ALWAYS_ON = "enforce"  # the collector's mode: it has no GitHub effects for shadow to hold back
 TRAIL = 30
 SOURCE = "synthetic"
+REAL_NOTE = "Real build: forecast at the agents' pace"
+SIMULATED_NOTE = "Simulated history: calibration data"
 
 
 def _fingerprint(today: date, subject: str, rows: list[dict[str, Any]]) -> str:
@@ -286,54 +289,79 @@ def _days_moved(new: date | None, old: date | None) -> int | None:
     return (new - old).days if new and old else None
 
 
-def moved(db: Session, kind: str, subject: str) -> dict[str, Any] | None:
-    """The latest forecast, the one before it, and how many days P50 and P85 moved."""
-    rows = _history(db, kind, subject, 2)
-    if not rows:
-        return None
-    current = rows[0]
-    previous = rows[1] if len(rows) > 1 else None
+MOVED_KEYS = ("p50_days", "p85_days", "previous_p50", "previous_p85", "previous_at")
+
+
+def moved(current: Forecast, previous: Forecast | None) -> dict[str, Any]:
+    """How many days P50 and P85 moved since ``previous``, and what they were; all None without."""
+    if previous is None:
+        return dict.fromkeys(MOVED_KEYS)
     return {
-        "latest": serialize(current),
-        "previous": serialize(previous) if previous else None,
-        "p50_moved_days": _days_moved(current.p50, previous.p50) if previous else None,
-        "p85_moved_days": _days_moved(current.p85, previous.p85) if previous else None,
+        "p50_days": _days_moved(current.p50, previous.p50),
+        "p85_days": _days_moved(current.p85, previous.p85),
+        "previous_p50": _iso(previous.p50),
+        "previous_p85": _iso(previous.p85),
+        "previous_at": _iso(previous.created_at),
     }
 
 
-def _entry(db: Session, kind: str, subject: str) -> dict[str, Any]:
-    trail = [
-        {
-            "created_at": _iso(row.created_at),
-            "as_of": _iso(row.as_of),
-            "p50": _iso(row.p50),
-            "p85": _iso(row.p85),
-        }
-        for row in reversed(_history(db, kind, subject, TRAIL))
-    ]
-    return {**moved(db, kind, subject), "trail": trail}
+def _entry(db: Session, kind: str, subject: str, kind_note: str) -> dict[str, Any]:
+    """The latest forecast of ``subject`` with its label, kind note, move and trail."""
+    rows = _history(db, kind, subject, TRAIL)
+    latest_row = serialize(rows[0])
+    for key in ("inputs_hash", "seed"):
+        del latest_row[key]
+    return {
+        **latest_row,
+        "label": epic_label(subject),
+        "kind_note": kind_note,
+        "moved": moved(rows[0], rows[1] if len(rows) > 1 else None),
+        "trail": [
+            {"at": _iso(row.created_at), "p50": _iso(row.p50), "p85": _iso(row.p85)}
+            for row in reversed(rows)
+        ],
+    }
+
+
+def _milestone_order(name: str) -> tuple[int, str]:
+    """M5 before M6 before M10 (by the number after M); untitled milestones last, by name."""
+    match = MILESTONE_TITLE.match(name.strip())
+    return (int(match.group(1)[1:]) if match else sys.maxsize, name)
 
 
 def dashboard(db: Session) -> dict[str, Any]:
-    """The newest sprint and every epic, each moved and with its trail, oldest first.
+    """Everything the forecast page shows, read from saved forecasts; it never simulates.
 
-    It only reads saved forecasts; it never runs a simulation.
+    ``epics`` holds each open milestone's latest forecast in milestone order, then each
+    simulated epic's by name; a closed milestone's forecasts stay saved but are not listed.
+    ``sprint`` is the newest simulated sprint's. ``proposals`` stays empty until the planner.
     """
     newest = db.scalars(
+        select(Forecast).order_by(Forecast.created_at.desc(), Forecast.id.desc()).limit(1)
+    ).first()
+    sprint = db.scalars(
         select(Forecast)
         .where(Forecast.kind == "sprint")
         .order_by(Forecast.created_at.desc(), Forecast.id.desc())
         .limit(1)
     ).first()
-    epics = db.scalars(
-        select(Forecast.subject)
-        .where(Forecast.kind == "epic")
-        .distinct()
-        .order_by(Forecast.subject)
-    )
+    open_milestones = {epic.name for epic in real_epics(db)}
+    real, simulated = [], []
+    subjects = db.scalars(select(Forecast.subject).where(Forecast.kind == "epic").distinct())
+    for subject in subjects:
+        if latest(db, "epic", subject).source == SOURCE:
+            simulated.append(subject)
+        elif subject in open_milestones:
+            real.append(subject)
     return {
-        "sprint": _entry(db, "sprint", newest.subject) if newest else None,
-        "epics": [_entry(db, "epic", subject) for subject in epics],
+        "epics": [
+            _entry(db, "epic", subject, REAL_NOTE) for subject in sorted(real, key=_milestone_order)
+        ]
+        + [_entry(db, "epic", subject, SIMULATED_NOTE) for subject in sorted(simulated)],
+        "sprint": _entry(db, "sprint", sprint.subject, SIMULATED_NOTE) if sprint else None,
+        "proposals": {},
+        "saved": db.scalar(select(func.count(Forecast.id))),
+        "as_of": _iso(newest.as_of) if newest else None,
     }
 
 
