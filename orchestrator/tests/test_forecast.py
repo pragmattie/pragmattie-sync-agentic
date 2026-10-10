@@ -434,6 +434,27 @@ def test_the_real_pace_starts_at_the_first_real_closure_and_moves_weekends(sessi
     assert real_throughput(session, today=WEDNESDAY, days=3) == [0, 1]
 
 
+@pytest.mark.parametrize(
+    ("today", "friday"), [(date(2026, 10, 4), 1), (date(2026, 10, 5), 2)], ids=["sunday", "monday"]
+)
+def test_a_forecast_on_sunday_or_monday_counts_the_weekend_on_friday(session, epics, today, friday):
+    # Sat Oct 3's closure would count on Monday Oct 5, which isn't sampled yet: it counts on
+    # Friday Oct 2, the last working day before today, so every closure since Sep 28 is kept.
+    # On Sunday, Sunday's own closure is today's and unfinished.
+    _closed(session, 7, datetime(2026, 10, 4, 18), source="github")
+    session.flush()
+    samples = real_throughput(session, today=today)
+    assert samples == [1, 2, 0, 0, friday]  # Sep 28 to Oct 2
+    real_closures = [
+        closed_at
+        for closed_at in session.scalars(
+            select(Issue.closed_at).where(Issue.source == "github", Issue.closed_at.is_not(None))
+        )
+        if closed_at.date() < today
+    ]
+    assert sum(samples) == len(real_closures)
+
+
 def test_no_real_closure_gives_no_real_pace(session):
     _closed(session, 1, datetime(2026, 10, 5, 10))  # synthetic only
     _issue(session, 2, source="github")
@@ -458,7 +479,12 @@ def test_a_real_epic_with_no_real_closure_has_no_dates(session, epics):
     result = epic_forecast(session, date(2026, 9, 28), MILESTONE, runs=50)
     assert result.history_days == 0 and result.throughput_mean == 0.0
     assert result.p50 is None and result.p85 is None
-    assert result.on_time_probability == 0.0
+    # Nothing can be judged without a pace: None, not a certain miss.
+    assert result.end_date == date(2026, 10, 16) and result.on_time_probability is None
+    assert describe_epic(result).startswith(
+        "Delivery forecasting (M5): 3 items left; P50 not within"
+    )
+    assert "; its target is Oct 16 (agents' pace" in describe_epic(result)
 
 
 def test_a_simulated_epic_uses_only_its_own_pace(session, epics):

@@ -59,6 +59,14 @@ def next_workday(day: date) -> date:
     return day
 
 
+def previous_workday(day: date) -> date:
+    """The last working day before ``day``."""
+    day -= timedelta(days=1)
+    while not is_workday(day):
+        day -= timedelta(days=1)
+    return day
+
+
 def _first_workday(day: date) -> date:
     """``day`` itself if it is a working day, otherwise the next one."""
     return day if is_workday(day) else next_workday(day)
@@ -90,7 +98,9 @@ def real_throughput(db: Session, *, today: date, days: int = HISTORY_DAYS) -> li
     """Real issues closed on each working day since the first real closure, up to yesterday.
 
     The window starts at the later of ``today - days`` and the earliest real closure, so the days
-    before the real work existed aren't sampled. A weekend closure counts on the next working day.
+    before the real work existed aren't sampled. A weekend closure counts on the next working day,
+    or, when that is today or later (a forecast made on a Sunday or Monday), on the last working
+    day before today, so no closure is left out.
     """
     earliest = db.scalar(select(func.min(Issue.closed_at)).where(Issue.source == "github"))
     if earliest is None:
@@ -101,7 +111,8 @@ def real_throughput(db: Session, *, today: date, days: int = HISTORY_DAYS) -> li
         Issue.closed_at >= datetime.combine(first, time()),
         Issue.closed_at < datetime.combine(today, time()),
     )
-    closed = Counter(_first_workday(closed_at.date()) for closed_at in db.scalars(query))
+    last = previous_workday(today)
+    closed = Counter(min(_first_workday(closed_at.date()), last) for closed_at in db.scalars(query))
     return [closed[day] for day in working_days(first, today - timedelta(days=1))]
 
 
@@ -421,7 +432,7 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
     seed = epic_seed(epic, today)
     results = simulate(len(items), samples, start=today, runs=runs, seed=seed)
     on_time = None
-    if end_date is not None and runs:
+    if end_date is not None and runs and (any(samples) or not items):
         on_time = sum(1 for day in results if day is not None and day <= end_date) / runs
     return EpicForecast(
         epic=epic,
@@ -449,7 +460,9 @@ def _short(day: date | None) -> str:
 def describe_epic(forecast: EpicForecast) -> str:
     """One sentence summarising ``forecast``."""
     target = ""
-    if forecast.end_date is not None:
+    if forecast.end_date is not None and forecast.on_time_probability is None:
+        target = f"; its target is {_short(forecast.end_date)}"
+    elif forecast.end_date is not None:
         target = (
             f"; {forecast.on_time_probability:.0%} chance by its target, "
             f"{_short(forecast.end_date)}"
