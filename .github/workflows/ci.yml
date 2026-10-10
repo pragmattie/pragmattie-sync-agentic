@@ -114,11 +114,11 @@ jobs:
           cache: pip
           cache-dependency-path: |
             apps/api/requirements.txt
-            orchestrator/requirements.txt
+            orchestrator/requirements*.txt
       - name: Install dependencies
         run: |
           pip install -r apps/api/requirements.txt
-          pip install -r orchestrator/requirements.txt
+          pip install -r orchestrator/requirements-dev.txt
       - name: CRM API migrations
         working-directory: apps/api
         run: |
@@ -131,7 +131,12 @@ jobs:
         run: |
           alembic upgrade head
           alembic check
-          alembic downgrade base
+      - name: Orchestrator tests that need MySQL
+        working-directory: orchestrator
+        run: pytest tests/test_migrations.py tests/test_forecaster.py -k mysql
+      - name: Orchestrator downgrade
+        working-directory: orchestrator
+        run: alembic downgrade base
       - name: CRM API schema untouched by the orchestrator
         working-directory: apps/api
         run: alembic check
