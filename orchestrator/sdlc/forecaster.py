@@ -1,10 +1,12 @@
 """The forecaster agent: save a fresh forecast only when something it depends on has changed.
 
-For the current simulated sprint it fingerprints the inputs (the day, and each open item's id,
-points, module and first pull request), and saves a forecast with ``sdlc.forecast`` when the
+Its subjects are the current simulated sprint and every epic: each open GitHub milestone (real
+work) and each simulated epic. For each it fingerprints the inputs (the day and the open items;
+for a sprint each item's id, points, module and first pull request, for an epic each story's id,
+points and source plus the epic's due date), and saves a forecast with ``sdlc.forecast`` when the
 fingerprint differs from the latest saved one: a new day, an item added, closed or re-estimated,
-or work starting. Each save is one ``sdlc_forecasts`` row and one audit row. It makes no model
-call and no GitHub request, so it costs nothing to run.
+work starting, or a target date moved. Each save is one ``sdlc_forecasts`` row and one audit row.
+It makes no model call and no GitHub request, so it costs nothing to run.
 
 It runs after the PR risk and triage agents in ``python -m sdlc.runner run``, where
 ``ORCHESTRATOR_MODE=off`` stops it, and after each collection in the collector, where it always
@@ -18,6 +20,7 @@ import dataclasses
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
@@ -29,7 +32,19 @@ from sdlc.audit import record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
-from sdlc.forecast import RUNS, SprintForecast, current_sprint, describe, sprint_forecast
+from sdlc.forecast import (
+    RUNS,
+    EpicForecast,
+    SprintForecast,
+    current_sprint,
+    describe,
+    describe_epic,
+    epic_forecast,
+    real_epic,
+    real_epics,
+    simulated_epics,
+    sprint_forecast,
+)
 from sdlc.tables import AgentDecision, Forecast, Issue, PullRequest, Sprint
 
 AGENT = "forecaster"
@@ -72,8 +87,17 @@ def sprint_inputs(db: Session, sprint: Sprint) -> list[dict[str, Any]]:
 
 
 def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
-    """The inputs of an epic's forecast; 5.3 fills in which issues."""
-    raise NotImplementedError("epic forecasts arrive in 5.3")
+    """Each open story of ``epic`` (its id, points and source), and the epic's due date."""
+    rows = db.execute(
+        select(Issue.id, Issue.estimate_points, Issue.source).where(
+            Issue.epic == epic, Issue.state == "open"
+        )
+    ).all()
+    milestone = real_epic(db, epic)
+    due_on = milestone.due_on if milestone else None
+    return [
+        {"id": issue_id, "points": points, "source": source} for issue_id, points, source in rows
+    ] + [{"due_on": _iso(due_on)}]
 
 
 def latest(db: Session, kind: str, subject: str) -> Forecast | None:
@@ -94,7 +118,7 @@ def _risk(risk) -> dict[str, Any]:
 
 def _save(
     db: Session,
-    forecast: SprintForecast,
+    forecast: SprintForecast | EpicForecast,
     *,
     kind: str,
     inputs_hash: str,
@@ -102,15 +126,22 @@ def _save(
     now: datetime,
 ) -> Forecast:
     """Write one forecast row and the audit row that records it; flushes, never commits."""
+    if isinstance(forecast, SprintForecast):
+        subject, remaining_real = forecast.sprint, 0
+        at_risk, rationale = [_risk(risk) for risk in forecast.at_risk], describe(forecast)
+    else:
+        subject, remaining_real = forecast.epic, forecast.remaining_real
+        at_risk, rationale = [], describe_epic(forecast)
     row = Forecast(
         created_at=now.replace(microsecond=0),
         as_of=forecast.as_of,
         kind=kind,
-        subject=forecast.sprint,
+        subject=subject,
         source=forecast.source,
         trigger=trigger,
         inputs_hash=inputs_hash,
         remaining_items=forecast.remaining_items,
+        remaining_real=remaining_real,
         remaining_points=forecast.remaining_points,
         end_date=forecast.end_date,
         p50=forecast.p50,
@@ -120,7 +151,7 @@ def _save(
         history_days=forecast.history_days,
         runs=forecast.runs,
         seed=forecast.seed,
-        at_risk=[_risk(risk) for risk in forecast.at_risk],
+        at_risk=at_risk,
     )
     db.add(row)
     db.flush()
@@ -146,7 +177,7 @@ def _save(
             "p85": _iso(row.p85),
             "end_date": _iso(row.end_date),
             "confidence": row.on_time_probability,
-            "rationale": describe(forecast),
+            "rationale": rationale,
             "runs": row.runs,
             "seed": row.seed,
         },
@@ -172,29 +203,59 @@ class ForecastRunner:
         with Session(self.engine or get_engine()) as db:
             sprint = current_sprint(db, today, SOURCE)
             if sprint is not None:
-                inputs_hash = _fingerprint(today, sprint.name, sprint_inputs(db, sprint))
-                previous = latest(db, "sprint", sprint.name)
-                if not force and previous is not None and previous.inputs_hash == inputs_hash:
-                    summary["unchanged"] += 1
-                else:
-                    if force:
-                        trigger = "manual"
-                    elif previous is None or previous.as_of < today:
-                        trigger = "schedule"
-                    else:
-                        trigger = "change"
-                    forecast = sprint_forecast(db, today, sprint=sprint, runs=self.runs)
-                    _save(
-                        db,
-                        forecast,
-                        kind="sprint",
-                        inputs_hash=inputs_hash,
-                        trigger=trigger,
-                        now=now,
-                    )
-                    db.commit()
-                    summary["assessed"] += 1
+                self._poll_subject(
+                    db,
+                    summary,
+                    kind="sprint",
+                    subject=sprint.name,
+                    rows=sprint_inputs(db, sprint),
+                    build=lambda: sprint_forecast(db, today, sprint=sprint, runs=self.runs),
+                    now=now,
+                    force=force,
+                )
+            real = [epic.name for epic in real_epics(db)]
+            simulated = [name for name in simulated_epics(db) if name not in real]
+            for name in real + simulated:
+                self._poll_subject(
+                    db,
+                    summary,
+                    kind="epic",
+                    subject=name,
+                    rows=epic_inputs(db, name),
+                    build=lambda name=name: epic_forecast(db, today, name, runs=self.runs),
+                    now=now,
+                    force=force,
+                )
         return summary
+
+    def _poll_subject(
+        self,
+        db: Session,
+        summary: dict[str, Any],
+        *,
+        kind: str,
+        subject: str,
+        rows: list[dict[str, Any]],
+        build: Callable[[], SprintForecast | EpicForecast],
+        now: datetime,
+        force: bool,
+    ) -> None:
+        """Save a forecast of ``subject`` if its fingerprint changed, or with ``force``."""
+        today = now.date()
+        inputs_hash = _fingerprint(today, subject, rows)
+        previous = latest(db, kind, subject)
+        if not force and previous is not None and previous.inputs_hash == inputs_hash:
+            summary["unchanged"] += 1
+            return
+        if force:
+            trigger = "manual"
+        elif previous is None or previous.as_of < today:
+            trigger = "schedule"
+        else:
+            trigger = "change"
+        _save(db, build(), kind=kind, inputs_hash=inputs_hash, trigger=trigger, now=now)
+        db.commit()
+        summary["assessed"] += 1
 
 
 def _iso(day: date | datetime | None) -> str | None:

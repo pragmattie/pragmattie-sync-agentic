@@ -6,7 +6,9 @@ P85 (the date to promise). Every run is seeded from the sprint and the day, so t
 gives the same numbers and a demo repeats.
 
 Sprints are simulated only: nothing assigns real issues a sprint, so the sprint forecast covers the
-simulated history (calibration data). Real work is forecast by milestone.
+simulated history (calibration data). Real work is forecast by milestone: each open GitHub milestone
+is an epic, forecast at the agents' pace across all real work. The simulated history's epics are
+forecast at their own pace.
 
 Run ``python -m sdlc.forecast`` to print the current simulated sprint's forecast.
 """
@@ -26,7 +28,8 @@ from sqlalchemy.orm import Session
 
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
-from sdlc.tables import Issue, PullRequest, Sprint
+from sdlc.epics import epic_label
+from sdlc.tables import Epic, Issue, PullRequest, Sprint
 
 HISTORY_DAYS = 84  # six two-week sprints
 RUNS = 10_000
@@ -56,6 +59,14 @@ def next_workday(day: date) -> date:
     return day
 
 
+def previous_workday(day: date) -> date:
+    """The last working day before ``day``."""
+    day -= timedelta(days=1)
+    while not is_workday(day):
+        day -= timedelta(days=1)
+    return day
+
+
 def _first_workday(day: date) -> date:
     """``day`` itself if it is a working day, otherwise the next one."""
     return day if is_workday(day) else next_workday(day)
@@ -80,6 +91,28 @@ def daily_throughput(
     if epic is not None:
         query = query.where(Issue.epic == epic)
     closed = Counter(closed_at.date() for closed_at in db.scalars(query))
+    return [closed[day] for day in working_days(first, today - timedelta(days=1))]
+
+
+def real_throughput(db: Session, *, today: date, days: int = HISTORY_DAYS) -> list[int]:
+    """Real issues closed on each working day since the first real closure, up to yesterday.
+
+    The window starts at the later of ``today - days`` and the earliest real closure, so the days
+    before the real work existed aren't sampled. A weekend closure counts on the next working day,
+    or, when that is today or later (a forecast made on a Sunday or Monday), on the last working
+    day before today, so no closure is left out.
+    """
+    earliest = db.scalar(select(func.min(Issue.closed_at)).where(Issue.source == "github"))
+    if earliest is None:
+        return []
+    first = max(today - timedelta(days=days), earliest.date())
+    query = select(Issue.closed_at).where(
+        Issue.source == "github",
+        Issue.closed_at >= datetime.combine(first, time()),
+        Issue.closed_at < datetime.combine(today, time()),
+    )
+    last = previous_workday(today)
+    closed = Counter(min(_first_workday(closed_at.date()), last) for closed_at in db.scalars(query))
     return [closed[day] for day in working_days(first, today - timedelta(days=1))]
 
 
@@ -316,6 +349,138 @@ def describe(forecast: SprintForecast) -> str:
     else:
         lines.append("At risk: none")
     return "\n".join(lines)
+
+
+def real_epics(db: Session) -> list[Epic]:
+    """The open GitHub milestones, by name."""
+    return list(
+        db.scalars(
+            select(Epic).where(Epic.source == "github", Epic.state == "open").order_by(Epic.name)
+        )
+    )
+
+
+def simulated_epics(db: Session) -> list[str]:
+    """The distinct epic names on synthetic issues, sorted."""
+    return list(
+        db.scalars(
+            select(Issue.epic)
+            .where(Issue.source == "synthetic", Issue.epic.is_not(None))
+            .distinct()
+            .order_by(Issue.epic)
+        )
+    )
+
+
+def real_epic(db: Session, name: str) -> Epic | None:
+    """The open GitHub milestone titled ``name``."""
+    return db.scalars(
+        select(Epic)
+        .where(Epic.source == "github", Epic.state == "open", Epic.name == name)
+        .order_by(Epic.id)
+        .limit(1)
+    ).first()
+
+
+@dataclass
+class EpicForecast:
+    epic: str
+    source: str
+    as_of: date
+    remaining_items: int
+    remaining_real: int
+    remaining_points: int
+    closed_items: int
+    end_date: date | None
+    p50: date | None
+    p85: date | None
+    on_time_probability: float | None
+    throughput_mean: float
+    history_days: int
+    runs: int
+    seed: int
+
+
+def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> EpicForecast:
+    """``epic``'s forecast: a real milestone at the agents' pace, a simulated epic at its own.
+
+    A real epic counts only its real stories; its source is mixed if open synthetic stories share
+    its name. Items without points count as 0 points.
+    """
+    milestone = real_epic(db, epic)
+    story_source = "github" if milestone else "synthetic"
+    is_story = (Issue.epic == epic, Issue.source == story_source)
+    items = list(
+        db.scalars(select(Issue).where(*is_story, Issue.state == "open").order_by(Issue.id))
+    )
+    closed = db.scalar(select(func.count(Issue.id)).where(*is_story, Issue.state == "closed"))
+    if milestone:
+        samples = real_throughput(db, today=today)
+        history_days = len(samples)
+        end_date = milestone.due_on
+        shared = db.scalars(
+            select(Issue.id)
+            .where(Issue.epic == epic, Issue.source == "synthetic", Issue.state == "open")
+            .limit(1)
+        ).first()
+        source = "mixed" if shared is not None else "github"
+    else:
+        samples = daily_throughput(db, today=today, epic=epic)
+        history_days = HISTORY_DAYS
+        end_date = None
+        source = "synthetic"
+    seed = epic_seed(epic, today)
+    results = simulate(len(items), samples, start=today, runs=runs, seed=seed)
+    on_time = None
+    if end_date is not None and runs and (any(samples) or not items):
+        on_time = sum(1 for day in results if day is not None and day <= end_date) / runs
+    return EpicForecast(
+        epic=epic,
+        source=source,
+        as_of=today,
+        remaining_items=len(items),
+        remaining_real=len(items) if milestone else 0,
+        remaining_points=sum(item.estimate_points or 0 for item in items),
+        closed_items=closed,
+        end_date=end_date,
+        p50=percentile_date(results, 0.5),
+        p85=percentile_date(results, 0.85),
+        on_time_probability=on_time,
+        throughput_mean=round(sum(samples) / len(samples), 2) if samples else 0.0,
+        history_days=history_days,
+        runs=runs,
+        seed=seed,
+    )
+
+
+def _short(day: date | None) -> str:
+    return f"{day:%b} {day.day}" if day else f"not within {HORIZON} working days"
+
+
+def describe_epic(forecast: EpicForecast) -> str:
+    """One sentence summarising ``forecast``."""
+    target = ""
+    if forecast.end_date is not None and forecast.on_time_probability is None:
+        target = f"; its target is {_short(forecast.end_date)}"
+    elif forecast.end_date is not None:
+        target = (
+            f"; {forecast.on_time_probability:.0%} chance by its target, "
+            f"{_short(forecast.end_date)}"
+        )
+    if forecast.source == "synthetic":
+        pace = (
+            f"simulated pace: {forecast.throughput_mean:.1f} items per working day over the last "
+            f"{forecast.history_days} days"
+        )
+    else:
+        pace = (
+            f"agents' pace: {forecast.throughput_mean:.1f} items per working day over the last "
+            f"{forecast.history_days} working days"
+        )
+    return (
+        f"{epic_label(forecast.epic)}: {forecast.remaining_items} items left; "
+        f"P50 {_short(forecast.p50)}, P85 {_short(forecast.p85)}{target} ({pace})."
+    )
 
 
 def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
