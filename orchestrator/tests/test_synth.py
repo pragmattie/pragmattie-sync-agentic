@@ -690,7 +690,8 @@ def test_reset_forgets_simulated_forecasts_and_keeps_real_ones_and_planner_rows(
             trigger="schedule",
         )
     session.commit()
-    assert session.scalar(select(func.count()).where(Forecast.source == "synthetic")) == 1
+    # The sprint and the four simulated epics.
+    assert session.scalar(select(func.count()).where(Forecast.source == "synthetic")) == 5
 
     synth.reset(session)
     session.commit()

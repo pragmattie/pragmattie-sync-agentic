@@ -629,9 +629,12 @@ def test_the_collector_saves_forecasts_with_the_agents_off(sqlite_engine, client
     github.collect_once(sqlite_engine, client)  # nothing changed: nothing more is saved
 
     with Session(sqlite_engine) as session:
-        assert session.scalars(select(Forecast.trigger)).all() == ["schedule"]
+        # The sprint, the four simulated epics and the open milestone, once each.
+        assert session.scalars(select(Forecast.trigger)).all() == ["schedule"] * 6
+        real = select(Forecast.subject).where(Forecast.source == "github")
+        assert session.scalars(real).all() == ["M5 Delivery forecasting"]
         query = select(func.count()).where(AgentDecision.agent == forecaster.AGENT)
-        assert session.scalar(query) == 1
+        assert session.scalar(query) == 6
 
 
 def test_a_failed_forecast_is_logged_and_keeps_the_counts(
