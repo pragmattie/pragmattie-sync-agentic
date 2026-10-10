@@ -1,5 +1,6 @@
 import zlib
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -213,6 +214,21 @@ def sprint_with_risks(session):
 def test_days_per_point_is_per_module_with_an_overall_rate(session, sprint_with_risks):
     assert days_per_point(session, "synthetic") == {"forecasting": 2.0, "leads": 1.0, None: 1.5}
     assert days_per_point(session, "github") == {"leads": 10.0, None: 10.0}
+
+
+def test_days_per_point_gives_floats_from_decimal_sums():
+    """MySQL's SUM of an integer column is a Decimal; SQLite's is a number."""
+
+    class DecimalSums:
+        def execute(self, query):
+            return self
+
+        def all(self):
+            return [("leads", Decimal("6.0"), Decimal("4")), ("pipeline", Decimal("3"), 1)]
+
+    rates = days_per_point(DecimalSums(), "synthetic")
+    assert rates == {"leads": 1.5, "pipeline": 3.0, None: 1.8}
+    assert all(type(rate) is float for rate in rates.values())
 
 
 def test_items_at_risk_are_flagged_with_v1_reasons_worst_first(session, sprint_with_risks):
