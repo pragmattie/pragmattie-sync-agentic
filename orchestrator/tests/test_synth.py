@@ -648,6 +648,58 @@ def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     assert session.scalars(select(PullRequest.title)).all() == ["Real change"]
 
 
+def test_reset_forgets_simulated_forecasts_and_keeps_real_ones_and_planner_rows(built):
+    from datetime import date
+
+    from sdlc import forecaster
+    from sdlc.audit import record_decision
+    from sdlc.tables import AgentDecision, Forecast
+
+    session = built
+    runner = forecaster.ForecastRunner("shadow", engine=session.get_bind(), runs=50)
+    runner.poll_once(EVEN_WEEK_NOW)
+    real = Forecast(
+        created_at=TUESDAY,
+        as_of=TUESDAY.date(),
+        kind="epic",
+        subject="M5 Delivery forecasting",
+        source="github",
+        trigger="schedule",
+        inputs_hash="a" * 64,
+        remaining_items=4,
+        remaining_points=13,
+        end_date=date(2026, 11, 20),
+        throughput_mean=1.0,
+        history_days=84,
+        runs=50,
+        seed=1,
+    )
+    session.add(real)
+    session.flush()
+    for agent, source, subject_id in (
+        (forecaster.AGENT, "github", real.id),
+        ("planner", "synthetic", 1),
+    ):
+        record_decision(
+            session,
+            agent=agent,
+            agent_version="v1",
+            subject_type="epic",
+            subject_source=source,
+            subject_id=subject_id,
+            trigger="schedule",
+        )
+    session.commit()
+    assert session.scalar(select(func.count()).where(Forecast.source == "synthetic")) == 1
+
+    synth.reset(session)
+    session.commit()
+
+    assert session.scalars(select(Forecast.source)).all() == ["github"]
+    kept = session.execute(select(AgentDecision.agent, AgentDecision.subject_source)).all()
+    assert sorted(kept) == [("forecaster", "github"), ("planner", "synthetic")]
+
+
 def test_cli_refuses_a_second_build_without_reset(sqlite_engine, capsys):
     Base.metadata.create_all(sqlite_engine)
 

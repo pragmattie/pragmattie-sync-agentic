@@ -611,3 +611,42 @@ def test_the_collector_never_sends_a_write_request(sqlite_engine):
     assert sent
     assert {method for method, _ in sent} == {"GET"}
     assert not {"POST", "PATCH", "PUT", "DELETE"} & {method for method, _ in sent}
+
+
+def test_the_collector_saves_forecasts_with_the_agents_off(sqlite_engine, client, monkeypatch):
+    from sdlc import forecaster, synth
+    from sdlc.tables import AgentDecision, Forecast
+
+    wednesday = datetime(2026, 10, 7, 10, 0)
+    monkeypatch.setenv("ORCHESTRATOR_MODE", "off")
+    monkeypatch.setattr(forecaster, "utcnow", lambda: wednesday)
+    Base.metadata.create_all(sqlite_engine)
+    with Session(sqlite_engine) as session:
+        synth.build(session, now=wednesday)
+        session.commit()
+
+    github.collect_once(sqlite_engine, client)
+    github.collect_once(sqlite_engine, client)  # nothing changed: nothing more is saved
+
+    with Session(sqlite_engine) as session:
+        assert session.scalars(select(Forecast.trigger)).all() == ["schedule"]
+        query = select(func.count()).where(AgentDecision.agent == forecaster.AGENT)
+        assert session.scalar(query) == 1
+
+
+def test_a_failed_forecast_is_logged_and_keeps_the_counts(
+    sqlite_engine, client, caplog, monkeypatch
+):
+    from sdlc import forecaster
+
+    monkeypatch.setattr(github.log, "disabled", False)  # alembic's fileConfig disables it
+
+    def broken(self, now=None, *, force=False):
+        raise RuntimeError("no forecast")
+
+    monkeypatch.setattr(forecaster.ForecastRunner, "poll_once", broken)
+    Base.metadata.create_all(sqlite_engine)
+    with caplog.at_level(logging.INFO, logger="sdlc.signals.github"):
+        counts = github.collect_once(sqlite_engine, client)
+    assert counts["issues"] == 2
+    assert "The forecaster failed" in caplog.text
