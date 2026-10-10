@@ -1,12 +1,15 @@
 import json
+import os
 from datetime import date, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from alembic import command
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import Session
 
 from sdlc import forecaster, synth
 from sdlc.audit import record_decision
+from sdlc.config import get_settings
 from sdlc.db import Base
 from sdlc.forecast import current_sprint
 from sdlc.forecaster import (
@@ -20,7 +23,8 @@ from sdlc.forecaster import (
     serialize,
     sprint_inputs,
 )
-from sdlc.tables import AgentDecision, Forecast, Issue, PullRequest
+from sdlc.tables import AgentDecision, Forecast, Issue, PullRequest, Sprint
+from tests.test_migrations import _alembic_config
 
 WEDNESDAY = datetime(2026, 10, 7, 10, 0)  # inside the simulated Sprint 13
 RUNS = 200
@@ -390,3 +394,100 @@ def test_reset_forgets_only_simulated_forecasts_and_their_audit_rows(db):
         ("forecaster", "mixed"),
         ("planner", "synthetic"),
     ]
+
+
+# MySQL
+
+MYSQL_NOW = datetime(2031, 3, 12, 10, 0)  # a Wednesday, well clear of any generated history
+MYSQL_SPRINT = "MySQL check sprint"
+
+
+def _small_history(db):
+    """Closed, estimated issues over the past weeks and an open sprint with three items."""
+    sprint = Sprint(
+        name=MYSQL_SPRINT,
+        start_date=date(2031, 3, 3),
+        end_date=date(2031, 3, 16),
+        source="synthetic",
+    )
+    db.add(sprint)
+    db.flush()
+    for k in range(12):
+        closed = MYSQL_NOW - timedelta(days=2 + k * 3)
+        db.add(
+            Issue(
+                number=9000 + k,
+                external_id=f"mysql-check-{k}",
+                title=f"Closed {k}",
+                module="leads" if k % 2 else "forecasting",
+                estimate_points=2 + k % 3,
+                actual_days=3.0 + k % 4,
+                state="closed",
+                created_at=closed - timedelta(days=10),
+                closed_at=closed,
+                source="synthetic",
+            )
+        )
+    for k in range(3):
+        db.add(
+            Issue(
+                number=9100 + k,
+                external_id=f"mysql-check-open-{k}",
+                title=f"Open {k}",
+                module="leads",
+                estimate_points=3,
+                created_at=MYSQL_NOW - timedelta(days=5),
+                sprint_id=sprint.id,
+                source="synthetic",
+            )
+        )
+    db.commit()
+
+
+def _forget_small_history(db):
+    ids = list(db.scalars(select(Forecast.id).where(Forecast.subject == MYSQL_SPRINT)))
+    if ids:
+        db.execute(
+            delete(AgentDecision).where(
+                AgentDecision.agent == AGENT, AgentDecision.subject_id.in_(ids)
+            )
+        )
+        db.execute(delete(Forecast).where(Forecast.id.in_(ids)))
+    db.execute(delete(Issue).where(Issue.external_id.like("mysql-check-%")))
+    db.execute(delete(Sprint).where(Sprint.name == MYSQL_SPRINT))
+    db.commit()
+
+
+def test_the_forecaster_saves_a_forecast_on_mysql():
+    """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("mysql"):
+        pytest.skip("DATABASE_URL is not MySQL")
+    get_settings.cache_clear()
+    try:
+        command.upgrade(_alembic_config(), "head")
+        mysql = create_engine(url)
+        try:
+            with Session(mysql) as db:
+                _forget_small_history(db)
+                _small_history(db)
+                try:
+                    summary = ForecastRunner("shadow", engine=mysql, runs=RUNS).poll_once(MYSQL_NOW)
+                    assert summary == {"mode": "shadow", "assessed": 1, "unchanged": 0}
+                    row = db.scalars(select(Forecast).where(Forecast.subject == MYSQL_SPRINT)).one()
+                    assert row.trigger == "schedule"
+                    assert row.remaining_items == 3 and row.remaining_points == 9
+                    assert row.p50 is not None and row.history_days > 0
+                    audit = db.scalars(
+                        select(AgentDecision).where(
+                            AgentDecision.agent == AGENT, AgentDecision.subject_id == row.id
+                        )
+                    ).one()
+                    assert audit.action_taken == {"saved_forecast": row.id}
+                finally:
+                    db.rollback()
+                    _forget_small_history(db)
+        finally:
+            mysql.dispose()
+    finally:
+        get_settings.cache_clear()
