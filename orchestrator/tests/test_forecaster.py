@@ -18,12 +18,13 @@ from sdlc.forecaster import (
     ForecastRunner,
     _fingerprint,
     dashboard,
+    epic_inputs,
     latest,
     moved,
     serialize,
     sprint_inputs,
 )
-from sdlc.tables import AgentDecision, Forecast, Issue, PullRequest, Sprint
+from sdlc.tables import AgentDecision, Epic, Forecast, Issue, PullRequest, Sprint
 from tests.test_migrations import _alembic_config
 
 WEDNESDAY = datetime(2026, 10, 7, 10, 0)  # inside the simulated Sprint 13
@@ -241,6 +242,147 @@ def test_cli_once_and_now(engine, monkeypatch, capsys):
     printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [line["assessed"] for line in printed] == [5, 0, 5]
     assert _triggers(engine) == ["schedule", "manual"]
+
+
+# Epics
+
+MILESTONE = "M5 Delivery forecasting"
+
+
+@pytest.fixture
+def milestone(engine):
+    """A real milestone due Oct 16 with two open stories, and real closures since Sep 28."""
+    with Session(engine) as db:
+        db.add(
+            Epic(
+                source="github",
+                external_id="milestone-5",
+                number=5,
+                name=MILESTONE,
+                due_on=date(2026, 10, 16),
+                created_at=datetime(2026, 9, 28, 9),
+            )
+        )
+        for k in range(6):
+            db.add(
+                Issue(
+                    source="github",
+                    external_id=f"real-closed-{k}",
+                    number=100 + k,
+                    title=f"Real {k}",
+                    created_at=datetime(2026, 9, 28, 9),
+                    state="closed",
+                    closed_at=datetime(2026, 9, 28, 12) + timedelta(days=k),
+                )
+            )
+        for k, points in enumerate((3, None)):
+            db.add(
+                Issue(
+                    source="github",
+                    external_id=f"real-open-{k}",
+                    number=200 + k,
+                    title=f"Story {k}",
+                    estimate_points=points,
+                    epic=MILESTONE,
+                    created_at=datetime(2026, 9, 28, 9),
+                )
+            )
+        db.commit()
+    return MILESTONE
+
+
+def _epic_rows(engine, subject):
+    with Session(engine) as db:
+        query = select(Forecast).where(Forecast.kind == "epic", Forecast.subject == subject)
+        rows = list(db.scalars(query.order_by(Forecast.id)))
+        db.expunge_all()
+        return rows
+
+
+def test_epic_inputs_list_open_stories_and_the_due_date(engine, milestone):
+    with Session(engine) as db:
+        rows = epic_inputs(db, MILESTONE)
+        ids = [issue.id for issue in db.scalars(select(Issue).where(Issue.epic == MILESTONE))]
+    assert sorted(rows[:-1], key=lambda row: row["id"]) == [
+        {"id": ids[0], "points": 3, "source": "github"},
+        {"id": ids[1], "points": None, "source": "github"},
+    ]
+    assert rows[-1] == {"due_on": "2026-10-16"}
+
+
+def test_epic_rows_are_saved_with_their_source_target_and_probability(engine, runner, milestone):
+    assert runner.poll_once(WEDNESDAY) == {"mode": "shadow", "assessed": 6, "unchanged": 0}
+    assert _counts(engine, "epic") == (5, 5)
+
+    (real,) = _epic_rows(engine, MILESTONE)
+    assert (real.source, real.trigger) == ("github", "schedule")
+    assert (real.remaining_items, real.remaining_real, real.remaining_points) == (2, 2, 3)
+    assert real.end_date == date(2026, 10, 16)
+    assert 0.0 <= real.on_time_probability <= 1.0
+    assert real.history_days == 7  # Sep 28 to Oct 6
+    assert real.at_risk == []
+
+    with Session(engine) as db:
+        simulated = list(
+            db.scalars(
+                select(Forecast).where(Forecast.kind == "epic", Forecast.subject != MILESTONE)
+            )
+        )
+        assert {row.source for row in simulated} == {"synthetic"}
+        assert all(row.end_date is None and row.on_time_probability is None for row in simulated)
+        assert all(row.remaining_real == 0 for row in simulated)
+
+        decision = db.scalars(
+            select(AgentDecision).where(
+                AgentDecision.subject_type == "epic", AgentDecision.subject_id == real.id
+            )
+        ).one()
+        assert decision.subject_source == "github"
+        assert decision.output["end_date"] == "2026-10-16"
+        assert decision.output["rationale"].startswith("Delivery forecasting (M5): 2 items left")
+        assert "agents' pace" in decision.output["rationale"]
+
+    assert runner.poll_once(WEDNESDAY + timedelta(hours=1))["assessed"] == 0
+    assert _counts(engine, "epic") == (5, 5)
+
+
+@pytest.mark.parametrize("change", ["due date", "add", "re-estimate", "close"])
+def test_a_change_to_a_real_epic_re_forecasts_it(engine, runner, milestone, change):
+    runner.poll_once(WEDNESDAY)
+    with Session(engine) as db:
+        story = db.scalars(select(Issue).where(Issue.epic == MILESTONE).order_by(Issue.id)).first()
+        if change == "due date":
+            epic = db.scalars(select(Epic).where(Epic.name == MILESTONE)).one()
+            epic.due_on = date(2026, 10, 9)
+        elif change == "add":
+            db.add(
+                Issue(
+                    source="github",
+                    external_id="real-added",
+                    title="Added",
+                    epic=MILESTONE,
+                    created_at=WEDNESDAY,
+                )
+            )
+        elif change == "re-estimate":
+            story.estimate_points = 5
+        else:
+            story.state = "closed"
+            story.closed_at = WEDNESDAY
+        db.commit()
+    assert runner.poll_once(WEDNESDAY + timedelta(minutes=5)) == {
+        "mode": "shadow",
+        "assessed": 1,
+        "unchanged": 5,
+    }
+    rows = _epic_rows(engine, MILESTONE)
+    assert [row.trigger for row in rows] == ["schedule", "change"]
+    if change == "due date":
+        assert rows[1].end_date == date(2026, 10, 9)
+        assert rows[1].on_time_probability <= rows[0].on_time_probability
+    if change == "add":
+        assert rows[1].remaining_items == 3
+        assert rows[1].p50 >= rows[0].p50 and rows[1].p85 >= rows[0].p85
 
 
 # moved and the dashboard
