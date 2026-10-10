@@ -44,17 +44,22 @@ def runner(engine):
     return ForecastRunner("shadow", engine=engine, runs=RUNS)
 
 
-def _counts(engine):
+def _counts(engine, kind="sprint"):
     with Session(engine) as db:
         return (
-            db.scalar(select(func.count(Forecast.id))),
-            db.scalar(select(func.count(AgentDecision.id)).where(AgentDecision.agent == AGENT)),
+            db.scalar(select(func.count(Forecast.id)).where(Forecast.kind == kind)),
+            db.scalar(
+                select(func.count(AgentDecision.id)).where(
+                    AgentDecision.agent == AGENT, AgentDecision.subject_type == kind
+                )
+            ),
         )
 
 
-def _triggers(engine):
+def _triggers(engine, kind="sprint"):
     with Session(engine) as db:
-        return list(db.scalars(select(Forecast.trigger).order_by(Forecast.id)))
+        query = select(Forecast.trigger).where(Forecast.kind == kind)
+        return list(db.scalars(query.order_by(Forecast.id)))
 
 
 def _sprint(db):
@@ -104,29 +109,30 @@ def test_sprint_inputs_list_each_open_item_and_its_first_pull_request(engine):
 
 
 def test_a_forecast_is_saved_only_when_its_inputs_change(engine, runner):
-    assert runner.poll_once(WEDNESDAY) == {"mode": "shadow", "assessed": 1, "unchanged": 0}
+    # The sprint and the four simulated epics.
+    assert runner.poll_once(WEDNESDAY) == {"mode": "shadow", "assessed": 5, "unchanged": 0}
     assert _counts(engine) == (1, 1)
     assert _triggers(engine) == ["schedule"]
 
     later = WEDNESDAY + timedelta(hours=3)
-    assert runner.poll_once(later) == {"mode": "shadow", "assessed": 0, "unchanged": 1}
+    assert runner.poll_once(later) == {"mode": "shadow", "assessed": 0, "unchanged": 5}
     assert _counts(engine) == (1, 1)
 
     with Session(engine) as db:
-        item = _open_items(db)[0]
+        item = next(item for item in _open_items(db) if item.epic is None)
         item.state = "closed"
         item.closed_at = later
         db.commit()
-    assert runner.poll_once(later)["assessed"] == 1
+    assert runner.poll_once(later) == {"mode": "shadow", "assessed": 1, "unchanged": 4}
     assert _counts(engine) == (2, 2)
     assert _triggers(engine) == ["schedule", "change"]
 
     tomorrow = WEDNESDAY + timedelta(days=1)
-    assert runner.poll_once(tomorrow)["assessed"] == 1
+    assert runner.poll_once(tomorrow)["assessed"] == 5
     assert _counts(engine) == (3, 3)
-    assert runner.poll_once(tomorrow)["unchanged"] == 1
+    assert runner.poll_once(tomorrow)["unchanged"] == 5
 
-    assert runner.poll_once(tomorrow, force=True)["assessed"] == 1
+    assert runner.poll_once(tomorrow, force=True)["assessed"] == 5
     assert _counts(engine) == (4, 4)
     assert _triggers(engine) == ["schedule", "change", "schedule", "manual"]
 
@@ -158,7 +164,7 @@ def test_re_estimating_starting_or_adding_an_item_is_a_change(engine, runner, ch
                 )
             )
         db.commit()
-    assert runner.poll_once(WEDNESDAY + timedelta(minutes=5))["assessed"] == 1
+    assert runner.poll_once(WEDNESDAY + timedelta(minutes=5))["assessed"] >= 1
     assert _triggers(engine) == ["schedule", "change"]
 
 
@@ -166,7 +172,9 @@ def test_the_saved_row_and_its_audit_row(engine, runner):
     runner.poll_once(WEDNESDAY)
     with Session(engine) as db:
         row = latest(db, "sprint", "Sprint 13")
-        decision = db.scalars(select(AgentDecision)).one()
+        decision = db.scalars(
+            select(AgentDecision).where(AgentDecision.subject_type == "sprint")
+        ).one()
 
         assert row.created_at == WEDNESDAY
         assert row.as_of == WEDNESDAY.date()
@@ -204,12 +212,14 @@ def test_the_saved_row_and_its_audit_row(engine, runner):
 def test_off_does_nothing(engine):
     assert ForecastRunner("off", engine=engine).poll_once(WEDNESDAY, force=True) == {"mode": "off"}
     assert _counts(engine) == (0, 0)
+    assert _counts(engine, "epic") == (0, 0)
 
 
-def test_no_sprint_in_progress_saves_nothing(engine, runner):
+def test_no_sprint_in_progress_saves_no_sprint_forecast(engine, runner):
     weekend_after = datetime(2027, 1, 1, 9)  # long after the last simulated sprint
-    assert runner.poll_once(weekend_after) == {"mode": "shadow", "assessed": 0, "unchanged": 0}
+    assert runner.poll_once(weekend_after) == {"mode": "shadow", "assessed": 4, "unchanged": 0}
     assert _counts(engine) == (0, 0)
+    assert _counts(engine, "epic") == (4, 4)
 
 
 def test_cli_once_and_now(engine, monkeypatch, capsys):
@@ -229,7 +239,7 @@ def test_cli_once_and_now(engine, monkeypatch, capsys):
     finally:
         forecaster.get_settings.cache_clear()
     printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["assessed"] for line in printed] == [1, 0, 1]
+    assert [line["assessed"] for line in printed] == [5, 0, 5]
     assert _triggers(engine) == ["schedule", "manual"]
 
 

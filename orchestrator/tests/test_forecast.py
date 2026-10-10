@@ -9,19 +9,26 @@ from sqlalchemy.orm import Session
 from sdlc import forecast, synth
 from sdlc.db import Base
 from sdlc.forecast import (
+    HISTORY_DAYS,
     HORIZON,
+    EpicForecast,
     current_sprint,
     daily_throughput,
     days_per_point,
     describe,
+    describe_epic,
+    epic_forecast,
     epic_seed,
     percentile_date,
+    real_epics,
+    real_throughput,
     seed_for,
     simulate,
+    simulated_epics,
     sprint_forecast,
     working_days,
 )
-from sdlc.tables import Issue, PullRequest, Sprint
+from sdlc.tables import Epic, Issue, PullRequest, Sprint
 
 EVEN_WEEK_NOW = datetime(2026, 10, 2, 15, 30)  # ISO week 40, a Friday
 ODD_WEEK_NOW = datetime(2026, 7, 15, 11, 0)  # ISO week 29, a Wednesday
@@ -352,6 +359,201 @@ def test_no_sprint_in_progress_gives_none(session):
     assert current_sprint(session, WEDNESDAY, "github") is None
     assert sprint_forecast(session, WEDNESDAY, source="github", runs=10) is None
     assert sprint_forecast(session, date(2027, 6, 1), runs=10) is None
+
+
+# Epic forecasts
+
+MILESTONE = "M5 Delivery forecasting"
+
+
+@pytest.fixture
+def epics(session):
+    """A real milestone with three open stories and none closed, and a simulated epic.
+
+    Real closures elsewhere: Mon Sep 28 (the first), two on Tue Sep 29, Sat Oct 3 (counts on
+    Mon Oct 5) and Tue Oct 6; one today, Wednesday Oct 7, is unfinished.
+    """
+    milestone = Epic(
+        source="github",
+        external_id="milestone-5",
+        number=5,
+        name=MILESTONE,
+        due_on=date(2026, 10, 16),
+        created_at=datetime(2026, 9, 28, 9),
+    )
+    session.add_all(
+        [
+            milestone,
+            Epic(
+                source="github",
+                external_id="milestone-4",
+                number=4,
+                name="M4 Closed already",
+                state="closed",
+                created_at=datetime(2026, 9, 28, 9),
+            ),
+        ]
+    )
+    for number, closed_at in enumerate(
+        [
+            datetime(2026, 9, 28, 15),
+            datetime(2026, 9, 29, 10),
+            datetime(2026, 9, 29, 11),
+            datetime(2026, 10, 3, 12),
+            datetime(2026, 10, 6, 16),
+            datetime(2026, 10, 7, 9),
+        ],
+        start=1,
+    ):
+        _closed(session, number, closed_at, source="github", epic="M4 Closed already")
+    _issue(session, 10, source="github", epic=MILESTONE, estimate_points=3)
+    _issue(session, 11, source="github", epic=MILESTONE)  # no points
+    _issue(session, 12, source="github", epic=MILESTONE, estimate_points=2)
+
+    # The simulated epic: one closure on Mon Oct 5 and one on Sat Oct 3 (dropped, as v1),
+    # and synthetic closures outside the epic on every working day of the past week.
+    _closed(session, 20, datetime(2026, 10, 5, 10), epic="Billing")
+    _closed(session, 21, datetime(2026, 10, 3, 10), epic="Billing")
+    for k, day in enumerate(working_days(date(2026, 9, 30), date(2026, 10, 6))):
+        _closed(session, 30 + k, datetime.combine(day, datetime.min.time()).replace(hour=11))
+    _issue(session, 40, epic="Billing", estimate_points=5)
+    _issue(session, 41, epic="Billing", estimate_points=3)
+    session.flush()
+    return milestone
+
+
+def test_real_and_simulated_epics_are_listed(session, epics):
+    assert [epic.name for epic in real_epics(session)] == [MILESTONE]
+    assert simulated_epics(session) == ["Billing"]
+
+
+def test_the_real_pace_starts_at_the_first_real_closure_and_moves_weekends(session, epics):
+    # Sep 28 to Oct 6: the Saturday closure counts on Monday Oct 5; today's is unfinished.
+    assert real_throughput(session, today=WEDNESDAY) == [1, 2, 0, 0, 0, 1, 1]
+    # A shorter window starts at today - days when that is later than the first closure.
+    assert real_throughput(session, today=WEDNESDAY, days=3) == [0, 1]
+
+
+def test_no_real_closure_gives_no_real_pace(session):
+    _closed(session, 1, datetime(2026, 10, 5, 10))  # synthetic only
+    _issue(session, 2, source="github")
+    assert real_throughput(session, today=WEDNESDAY) == []
+
+
+def test_a_real_milestone_with_no_closed_stories_uses_the_agents_pace(session, epics):
+    result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=500)
+    assert result.source == "github"
+    assert result.as_of == WEDNESDAY
+    assert (result.remaining_items, result.remaining_real, result.closed_items) == (3, 3, 0)
+    assert result.remaining_points == 5  # the unestimated story counts 0
+    assert result.history_days == 7
+    assert result.throughput_mean == round(5 / 7, 2)
+    assert result.seed == epic_seed(MILESTONE, WEDNESDAY)
+    assert result.p50 is not None and WEDNESDAY <= result.p50 <= result.p85
+    assert result.end_date == date(2026, 10, 16)
+    assert 0.0 < result.on_time_probability <= 1.0
+
+
+def test_a_real_epic_with_no_real_closure_has_no_dates(session, epics):
+    result = epic_forecast(session, date(2026, 9, 28), MILESTONE, runs=50)
+    assert result.history_days == 0 and result.throughput_mean == 0.0
+    assert result.p50 is None and result.p85 is None
+    assert result.on_time_probability == 0.0
+
+
+def test_a_simulated_epic_uses_only_its_own_pace(session, epics):
+    result = epic_forecast(session, WEDNESDAY, "Billing", runs=200)
+    samples = daily_throughput(session, today=WEDNESDAY, epic="Billing")
+    assert sum(samples) == 1  # the Saturday closure is dropped, as v1
+    assert result.source == "synthetic"
+    assert (result.remaining_items, result.remaining_real, result.remaining_points) == (2, 0, 8)
+    assert result.closed_items == 2
+    assert result.history_days == HISTORY_DAYS
+    assert result.throughput_mean == round(1 / len(samples), 2)
+    assert result.end_date is None and result.on_time_probability is None
+
+
+def test_a_due_date_gives_an_on_time_probability_and_none_gives_none(session, epics):
+    far = epic_forecast(session, WEDNESDAY, MILESTONE, runs=500)
+    epics.due_on = WEDNESDAY
+    session.flush()
+    tight = epic_forecast(session, WEDNESDAY, MILESTONE, runs=500)
+    assert tight.end_date == WEDNESDAY
+    assert tight.on_time_probability < far.on_time_probability
+
+    epics.due_on = None
+    session.flush()
+    untargeted = epic_forecast(session, WEDNESDAY, MILESTONE, runs=500)
+    assert untargeted.end_date is None and untargeted.on_time_probability is None
+
+
+def test_adding_a_real_story_pushes_the_forecast_out(session, epics):
+    before = epic_forecast(session, WEDNESDAY, MILESTONE, runs=1000)
+    _issue(session, 13, source="github", epic=MILESTONE, estimate_points=1)
+    after = epic_forecast(session, WEDNESDAY, MILESTONE, runs=1000)
+    assert after.seed == before.seed
+    assert after.remaining_items == before.remaining_items + 1
+    assert after.p50 >= before.p50 and after.p85 >= before.p85
+    assert (after.p50, after.p85) != (before.p50, before.p85)
+    assert after.on_time_probability <= before.on_time_probability
+
+
+def test_a_real_epic_sharing_a_simulated_name_is_mixed_and_counts_only_real_stories(session, epics):
+    _issue(session, 50, epic=MILESTONE, estimate_points=8)  # synthetic
+    result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=50)
+    assert result.source == "mixed"
+    assert (result.remaining_items, result.remaining_real, result.remaining_points) == (3, 3, 5)
+
+
+def _epic(**values):
+    defaults = dict(
+        epic=MILESTONE,
+        source="github",
+        as_of=WEDNESDAY,
+        remaining_items=7,
+        remaining_real=7,
+        remaining_points=20,
+        closed_items=4,
+        end_date=date(2026, 10, 15),
+        p50=date(2026, 10, 14),
+        p85=date(2026, 10, 16),
+        on_time_probability=0.72,
+        throughput_mean=2.1,
+        history_days=10,
+        runs=10_000,
+        seed=1,
+    )
+    return EpicForecast(**{**defaults, **values})
+
+
+def test_describe_epic_for_a_real_epic():
+    assert describe_epic(_epic()) == (
+        "Delivery forecasting (M5): 7 items left; P50 Oct 14, P85 Oct 16; 72% chance by its "
+        "target, Oct 15 (agents' pace: 2.1 items per working day over the last 10 working days)."
+    )
+    assert describe_epic(_epic(end_date=None, on_time_probability=None, p85=None)) == (
+        "Delivery forecasting (M5): 7 items left; P50 Oct 14, P85 not within 260 working days "
+        "(agents' pace: 2.1 items per working day over the last 10 working days)."
+    )
+
+
+def test_describe_epic_for_a_simulated_epic():
+    simulated = _epic(
+        epic="Billing",
+        source="synthetic",
+        remaining_items=2,
+        remaining_real=0,
+        end_date=None,
+        on_time_probability=None,
+        p50=date(2026, 11, 2),
+        p85=date(2026, 11, 9),
+        throughput_mean=0.25,
+        history_days=84,
+    )
+    assert describe_epic(simulated) == (
+        "Billing: 2 items left; P50 Nov 2, P85 Nov 9 "
+        "(simulated pace: 0.2 items per working day over the last 84 days)."
+    )
 
 
 # Summary and command line
