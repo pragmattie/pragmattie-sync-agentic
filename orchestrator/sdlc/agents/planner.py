@@ -21,14 +21,15 @@ from sqlalchemy.orm import Session
 from sdlc.agents.llm import LLMError, LLMResult, StructuredLLM
 from sdlc.agents.pr_risk import prompt_hash
 from sdlc.config import get_settings
-from sdlc.epics import MILESTONE_TITLE, epic_label
+from sdlc.epics import epic_label, milestone_order
 from sdlc.forecast import (
     HORIZON,
     EpicForecast,
-    _started,
+    on_time_share,
     percentile_date,
     real_throughput,
     simulate,
+    started_on,
     working_days,
 )
 from sdlc.tables import Epic, Issue
@@ -123,7 +124,7 @@ def milestone_items(db: Session, epic: str) -> list[Item]:
             .order_by(Issue.number)
         )
     )
-    started = _started(db, [issue.id for issue in issues]) if issues else {}
+    started = started_on(db, [issue.id for issue in issues])
     return [
         Item(
             number=issue.number,
@@ -138,21 +139,15 @@ def milestone_items(db: Session, epic: str) -> list[Item]:
     ]
 
 
-def _milestone_order(name: str) -> tuple[int, str]:
-    """M5 before M6 before M10 (by the number after M); untitled milestones last, by name."""
-    match = MILESTONE_TITLE.match(name.strip())
-    return (int(match.group(1)[1:]) if match else 1 << 62, name)
-
-
 def next_milestone(db: Session, epic: Epic) -> str:
     """The label of the next open real milestone by milestone number, or "none"."""
-    current = _milestone_order(epic.name)
+    current = milestone_order(epic.name)
     later = [
         other.name
         for other in db.scalars(select(Epic).where(Epic.source == "github", Epic.state == "open"))
-        if _milestone_order(other.name) > current
+        if milestone_order(other.name) > current
     ]
-    return epic_label(min(later, key=_milestone_order)) if later else "none"
+    return epic_label(min(later, key=milestone_order)) if later else "none"
 
 
 def _iso(day: date | None) -> str | None:
@@ -198,16 +193,19 @@ def build_prompt(forecast: EpicForecast, items: list[Item], next_milestone: str)
 
 
 def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]) -> dict[str, Any]:
-    """The forecast's own simulation (same seed and pace samples) without ``deferred`` items."""
+    """The forecast's own simulation (same seed and pace samples) without ``deferred`` items.
+
+    Only numbers that are open items of the milestone count, so a caller can't overstate it.
+    """
     samples = real_throughput(db, today=forecast.as_of)
-    remaining = max(0, forecast.remaining_items - len(set(deferred)))
+    open_numbers = {item.number for item in milestone_items(db, forecast.epic)}
+    remaining = max(0, forecast.remaining_items - len(open_numbers & set(deferred)))
     results = simulate(
         remaining, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed
     )
     on_time = None
     if forecast.end_date is not None and forecast.runs and (any(samples) or not remaining):
-        hits = sum(1 for day in results if day is not None and day <= forecast.end_date)
-        on_time = hits / forecast.runs
+        on_time = on_time_share(results, forecast.end_date, remaining)
     return {
         "p50": _iso(percentile_date(results, 0.5)),
         "p85": _iso(percentile_date(results, 0.85)),

@@ -671,6 +671,15 @@ def _forget_small_history(db):
     db.commit()
 
 
+def _forget_test_rows(db, forecast_floor, audit_floor):
+    """Delete every forecast and forecaster audit row added after the given ids."""
+    db.execute(
+        delete(AgentDecision).where(AgentDecision.agent == AGENT, AgentDecision.id > audit_floor)
+    )
+    db.execute(delete(Forecast).where(Forecast.id > forecast_floor))
+    db.commit()
+
+
 def test_the_forecaster_saves_a_forecast_on_mysql():
     """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
     url = os.environ.get("DATABASE_URL", "")
@@ -683,10 +692,14 @@ def test_the_forecaster_saves_a_forecast_on_mysql():
         try:
             with Session(mysql) as db:
                 _forget_small_history(db)
+                # The database may already hold epics or milestones, whose forecasts are saved too.
+                # Read before _small_history commits, so this session sees the runner's rows.
+                forecast_floor = db.scalar(select(func.coalesce(func.max(Forecast.id), 0)))
+                audit_floor = db.scalar(select(func.coalesce(func.max(AgentDecision.id), 0)))
                 _small_history(db)
                 try:
                     summary = ForecastRunner("shadow", engine=mysql, runs=RUNS).poll_once(MYSQL_NOW)
-                    assert summary == {"mode": "shadow", "assessed": 1, "unchanged": 0}
+                    assert summary["mode"] == "shadow" and summary["assessed"] >= 1
                     row = db.scalars(select(Forecast).where(Forecast.subject == MYSQL_SPRINT)).one()
                     assert row.trigger == "schedule"
                     assert row.remaining_items == 3 and row.remaining_points == 9
@@ -699,6 +712,7 @@ def test_the_forecaster_saves_a_forecast_on_mysql():
                     assert audit.action_taken == {"saved_forecast": row.id}
                 finally:
                     db.rollback()
+                    _forget_test_rows(db, forecast_floor, audit_floor)
                     _forget_small_history(db)
         finally:
             mysql.dispose()

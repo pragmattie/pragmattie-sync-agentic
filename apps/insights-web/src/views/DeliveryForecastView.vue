@@ -46,18 +46,47 @@ const error = ref("");
 const feed = ref(null);
 const flashing = ref(new Set());
 let pollTimer = null;
-const flashTimers = [];
+// One pending flash per card: its end timer, and the frame that restarts it.
+const flashTimers = new Map();
 
+function setFlashing(subject, on) {
+  const next = new Set(flashing.value);
+  if (on) next.add(subject);
+  else next.delete(subject);
+  flashing.value = next;
+}
+
+function stopFlash(subject) {
+  const pending = flashTimers.get(subject);
+  if (!pending) return;
+  cancelAnimationFrame(pending.frame);
+  clearTimeout(pending.timer);
+  flashTimers.delete(subject);
+}
+
+function startFlash(subject, pending) {
+  setFlashing(subject, true);
+  pending.timer = setTimeout(() => {
+    setFlashing(subject, false);
+    flashTimers.delete(subject);
+  }, FLASH_MS);
+}
+
+// A card that changes again while it flashes restarts: the class goes, and comes back on the
+// next frame so the animation replays, with a fresh timer.
 function flash(subjects) {
-  if (!subjects.length) return;
-  flashing.value = new Set([...flashing.value, ...subjects]);
-  flashTimers.push(
-    setTimeout(() => {
-      const next = new Set(flashing.value);
-      for (const subject of subjects) next.delete(subject);
-      flashing.value = next;
-    }, FLASH_MS),
-  );
+  for (const subject of subjects) {
+    const restart = flashTimers.has(subject);
+    stopFlash(subject);
+    const pending = {};
+    flashTimers.set(subject, pending);
+    if (restart) {
+      setFlashing(subject, false);
+      pending.frame = requestAnimationFrame(() => startFlash(subject, pending));
+    } else {
+      startFlash(subject, pending);
+    }
+  }
 }
 
 async function load() {
@@ -81,7 +110,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(pollTimer);
-  flashTimers.forEach(clearTimeout);
+  for (const subject of [...flashTimers.keys()]) stopFlash(subject);
 });
 
 const epics = computed(() => splitFeed(feed.value));

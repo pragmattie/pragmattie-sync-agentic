@@ -19,6 +19,7 @@ from sdlc.forecast import (
     describe_epic,
     epic_forecast,
     epic_seed,
+    on_time_share,
     percentile_date,
     real_epics,
     real_throughput,
@@ -79,6 +80,30 @@ def test_the_same_seed_gives_identical_results():
     first = simulate(20, samples, start=WEDNESDAY, runs=500, seed=42)
     assert first == simulate(20, samples, start=WEDNESDAY, runs=500, seed=42)
     assert first != simulate(20, samples, start=WEDNESDAY, runs=500, seed=43)
+
+
+def test_each_run_has_its_own_sequence_whatever_the_number_of_runs():
+    samples = [0, 1, 2, 3]
+    many = simulate(12, samples, start=WEDNESDAY, runs=300, seed=7)
+    assert simulate(12, samples, start=WEDNESDAY, runs=40, seed=7) == many[:40]
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42, 2**31 + 5, 4_294_967_295])
+@pytest.mark.parametrize("samples", [[0, 1, 2], [1], [0, 0, 0, 3], [2, 1, 0, 1, 5]])
+def test_fewer_remaining_items_never_finish_later_in_any_run(seed, samples):
+    runs = [simulate(left, samples, start=WEDNESDAY, runs=200, seed=seed) for left in range(13)]
+    for fewer, more in zip(runs, runs[1:], strict=False):
+        assert all(
+            more_day is None or (fewer_day is not None and fewer_day <= more_day)
+            for fewer_day, more_day in zip(fewer, more, strict=True)
+        )
+
+
+def test_on_time_share_counts_runs_by_the_end_and_finished_work_as_on_time():
+    days = [date(2026, 10, 9), date(2026, 10, 12), None, date(2026, 10, 8)]
+    assert on_time_share(days, date(2026, 10, 9), remaining=3) == 0.5
+    assert on_time_share([date(2026, 10, 12)], date(2026, 10, 11), remaining=0) == 1.0
+    assert on_time_share([], date(2026, 10, 11), remaining=2) == 0.0
 
 
 @pytest.mark.parametrize("start", [WEDNESDAY, SATURDAY], ids=["weekday", "weekend"])
@@ -279,6 +304,60 @@ def test_an_item_just_under_the_overrun_bar_is_not_flagged(session, sprint_with_
     assert 10 not in [risk.number for risk in on_day_three.at_risk]
 
 
+def test_with_no_history_an_item_expects_one_working_day_per_point(session):
+    """v1's fallback: 1.0 working day a point when no estimated issue was ever closed."""
+    sprint = Sprint(
+        name="Sprint 9",
+        start_date=date(2026, 9, 28),
+        end_date=date(2026, 10, 11),
+        source="synthetic",
+    )
+    session.add(sprint)
+    session.flush()
+    started = _issue(session, 1, sprint_id=sprint.id, estimate_points=3)
+    session.add(
+        PullRequest(
+            number=10,
+            external_id="pr-10",
+            title=started.title,
+            issue_id=started.id,
+            created_at=datetime(2026, 10, 5, 10),  # two working days before Wednesday
+        )
+    )
+    _issue(session, 2, sprint_id=sprint.id, estimate_points=8)  # not started, can't fit
+    session.flush()
+    assert days_per_point(session, "synthetic") == {}
+
+    result = sprint_forecast(session, WEDNESDAY, sprint=sprint, runs=10)
+
+    assert [risk.number for risk in result.at_risk] == [2]
+    assert result.at_risk[0].reason == (
+        "8 pt, not started, about 8.0 working days of work left but 3 left in the sprint "
+        "(unassigned work has taken 1.0 working days per point)."
+    )
+
+
+def test_a_finished_sprint_on_the_weekend_before_its_end_is_certain(session):
+    """Sprint 13 ends Sunday Oct 11 with every item closed; on Saturday it can't be late."""
+    sprint = Sprint(
+        name="Sprint 13",
+        start_date=date(2026, 9, 28),
+        end_date=date(2026, 10, 11),
+        source="synthetic",
+    )
+    session.add(sprint)
+    session.flush()
+    for number in range(1, 4):
+        _closed(session, number, datetime(2026, 10, number + 5, 12), sprint_id=sprint.id)
+    session.flush()
+
+    result = sprint_forecast(session, date(2026, 10, 10), sprint=sprint, runs=100)
+
+    assert result.remaining_items == 0
+    assert result.on_time_probability == 1.0
+    assert result.p50 == result.p85 == date(2026, 10, 12)  # unchanged: the next working day
+
+
 def test_sprint_forecast_counts_the_sprints_open_items(session, sprint_with_risks):
     result = sprint_forecast(session, WEDNESDAY, sprint=sprint_with_risks, runs=50)
     assert result.sprint == "Sprint 9"
@@ -455,6 +534,15 @@ def test_a_forecast_on_sunday_or_monday_counts_the_weekend_on_friday(session, ep
     assert sum(samples) == len(real_closures)
 
 
+def test_a_first_real_closure_on_a_weekend_is_kept_on_the_friday_before(session):
+    # First closure Saturday Oct 3; on Monday Oct 5 it counts on Friday Oct 2, before it.
+    _closed(session, 1, datetime(2026, 10, 3, 12), source="github")
+    session.flush()
+    assert real_throughput(session, today=date(2026, 10, 5)) == [1]
+    assert real_throughput(session, today=date(2026, 10, 4)) == [1]
+    assert real_throughput(session, today=WEDNESDAY) == [1, 0]  # Mon Oct 5, Tue Oct 6
+
+
 def test_no_real_closure_gives_no_real_pace(session):
     _closed(session, 1, datetime(2026, 10, 5, 10))  # synthetic only
     _issue(session, 2, source="github")
@@ -473,6 +561,18 @@ def test_a_real_milestone_with_no_closed_stories_uses_the_agents_pace(session, e
     assert result.p50 is not None and WEDNESDAY <= result.p50 <= result.p85
     assert result.end_date == date(2026, 10, 16)
     assert 0.0 < result.on_time_probability <= 1.0
+
+
+def test_a_finished_milestone_due_on_a_weekend_is_certain(session, epics):
+    epics.due_on = date(2026, 10, 11)  # a Sunday
+    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+        issue.state = "closed"
+        issue.closed_at = datetime(2026, 10, 9, 12)
+    session.flush()
+    result = epic_forecast(session, date(2026, 10, 10), MILESTONE, runs=100)
+    assert result.remaining_items == 0
+    assert result.on_time_probability == 1.0
+    assert result.p50 == result.p85 == date(2026, 10, 12)
 
 
 def test_a_real_epic_with_no_real_closure_has_no_dates(session, epics):

@@ -128,10 +128,19 @@ REVIEWS = {
     21: [],
 }
 
-RUNS = [
-    {"id": 500, "path": ".github/workflows/ci.yml", "pull_requests": [{"number": 20}]},
-    {"id": 501, "path": ".github/workflows/deploy.yml", "pull_requests": []},
-    {"id": 502, "path": ".github/workflows/ci.yml", "pull_requests": [{"number": 99}]},
+RUNS = [  # the CI workflow's runs; run 501 belongs to another workflow and is never listed
+    {
+        "id": 500,
+        "path": ".github/workflows/ci.yml",
+        "status": "completed",
+        "pull_requests": [{"number": 20}],
+    },
+    {
+        "id": 502,
+        "path": ".github/workflows/ci.yml",
+        "status": "in_progress",
+        "pull_requests": [{"number": 99}],
+    },
 ]
 
 
@@ -172,6 +181,8 @@ def _handler(request):
     if path == f"{API}/pulls":
         return httpx.Response(200, json=[{"number": number} for number in PULLS])
     if path == f"{API}/actions/runs":
+        raise AssertionError("only the CI workflow's runs are listed")
+    if path == f"{API}/actions/workflows/ci.yml/runs":
         return httpx.Response(200, json={"total_count": len(RUNS), "workflow_runs": RUNS})
     parts = path.removeprefix(f"{API}/").split("/")
     if parts[0] == "pulls":
@@ -182,7 +193,7 @@ def _handler(request):
     if parts[:2] == ["actions", "runs"] and parts[3] == "jobs":
         assert request.url.params["filter"] == "all"
         if int(parts[2]) == 501:
-            raise AssertionError("deploy runs are never fetched")
+            raise AssertionError("other workflows' runs are never fetched")
         return httpx.Response(200, json={"jobs": JOBS[int(parts[2])]})
     return httpx.Response(404, json={"message": "Not Found"})
 
@@ -361,9 +372,122 @@ def test_ci_jobs(collected):
     assert _github(session, CIRun, "job-721").suite == "A very long custom job name that goes on"
 
 
-def test_deploy_workflow_runs_are_skipped(collected):
-    session, _ = collected
-    assert _github(session, CIRun, "job-710") is None
+def test_other_workflows_runs_are_never_requested_or_stored(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    spy, sent = _spy_client()
+    with Session(sqlite_engine) as session:
+        Collector(session, spy).run()
+        assert _github(session, CIRun, "job-710") is None
+    paths = [path for _, path in sent]
+    assert f"{API}/actions/workflows/ci.yml/runs" in paths
+    assert f"{API}/actions/runs" not in paths
+    assert f"{API}/actions/runs/501/jobs" not in paths
+
+
+def _jobs_requests(sent):
+    return [path for _, path in sent if path.endswith("/jobs")]
+
+
+def test_a_finished_run_already_stored_gets_no_jobs_request_on_the_next_pass(session):
+    spy, sent = _spy_client()
+    memory = github.CIMemory()
+    Collector(session, spy, memory).run()
+    assert _jobs_requests(sent) == [f"{API}/actions/runs/500/jobs", f"{API}/actions/runs/502/jobs"]
+    assert memory.finished_runs == {500}
+
+    sent.clear()
+    Collector(session, spy, memory).run()
+    # Run 500 is completed and stored; run 502 is still in progress, so it is asked again.
+    assert _jobs_requests(sent) == [f"{API}/actions/runs/502/jobs"]
+    assert _github(session, CIRun, "job-700").suite == "api"
+
+
+def test_without_memory_every_run_is_asked_again(session):
+    spy, sent = _spy_client()
+    Collector(session, spy).run()
+    Collector(session, spy).run()
+    assert len(_jobs_requests(sent)) == 4
+
+
+def test_a_failed_pass_does_not_remember_its_runs(session, monkeypatch):
+    spy, _ = _spy_client()
+    memory = github.CIMemory()
+
+    def fail():
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(session, "commit", fail)
+    with pytest.raises(RuntimeError):
+        Collector(session, spy, memory).run()
+    assert memory.finished_runs == set()
+
+
+def test_the_run_command_remembers_finished_runs_between_collections(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+    spy, sent = _spy_client()
+    github.main(
+        ["run", "--every", "1"], engine=sqlite_engine, client=spy, sleep=lambda _: None, runs=2
+    )
+    assert _jobs_requests(sent).count(f"{API}/actions/runs/500/jobs") == 1
+    assert _jobs_requests(sent).count(f"{API}/actions/runs/502/jobs") == 2
+
+
+def _stray(session, external_id, suite, source="github"):
+    row = CIRun(
+        source=source,
+        external_id=external_id,
+        suite=suite,
+        conclusion="skipped",
+        started_at=datetime(2026, 10, 9, 12, 0),
+        duration_seconds=0,
+    )
+    session.add(row)
+    return row
+
+
+def test_stray_rows_from_other_workflows_are_removed_and_ci_rows_kept(session, client):
+    _stray(session, "job-900", "implement")
+    _stray(session, "job-901", "sync")
+    _stray(session, "job-902", "api")  # an older CI job, from a run no longer listed
+    _stray(session, "syn-ci-1", "implement", source="synthetic")
+    session.commit()
+
+    Collector(session, client).run()
+
+    assert _github(session, CIRun, "job-900") is None
+    assert _github(session, CIRun, "job-901") is None
+    assert _github(session, CIRun, "job-902").suite == "api"
+    assert _github(session, CIRun, "job-700").suite == "api"
+    assert _github(session, CIRun, "job-720").suite == "migrations"
+    synthetic = session.scalar(select(CIRun).where(CIRun.external_id == "syn-ci-1"))
+    assert synthetic is not None and synthetic.source == "synthetic"
+
+    before = session.scalar(select(func.count()).select_from(CIRun))
+    Collector(session, client).run()  # safe to repeat
+    assert session.scalar(select(func.count()).select_from(CIRun)) == before
+
+
+def test_suites_remembered_from_earlier_passes_are_kept(session):
+    spy, _ = _spy_client()
+    memory = github.CIMemory()
+    Collector(session, spy, memory).run()
+    assert {"api", "web"} <= memory.suites
+    # Run 500 (api, web) is skipped now; only run 502's suites are collected this pass.
+    Collector(session, spy, memory).run()
+    assert _github(session, CIRun, "job-701").suite == "web"
+
+
+def test_a_pass_that_stores_no_ci_job_removes_nothing(session):
+    def no_runs(request):
+        if request.url.path == f"{API}/actions/workflows/ci.yml/runs":
+            return httpx.Response(200, json={"total_count": 0, "workflow_runs": []})
+        return _handler(request)
+
+    _stray(session, "job-900", "implement")
+    session.commit()
+    spy, _ = _spy_client(no_runs)
+    assert Collector(session, spy).run()["ci_jobs"] == 0
+    assert _github(session, CIRun, "job-900").suite == "implement"
 
 
 def test_rerunning_updates_rows_in_place(collected, client):

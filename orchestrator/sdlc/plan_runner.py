@@ -33,7 +33,7 @@ from sdlc.audit import TRIAL, decisions_for, record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
-from sdlc.epics import MILESTONE_TITLE, epic_label
+from sdlc.epics import MILESTONE_TITLE, epic_label, milestone_order
 from sdlc.forecast import EpicForecast, real_epics
 from sdlc.forecaster import latest
 from sdlc.tables import AgentDecision, Epic, Forecast
@@ -219,7 +219,7 @@ def _target(db: Session, value: str | None) -> tuple[Epic, Forecast] | str:
         if row is None:
             return f"{epic.name} has no saved forecast yet."
         return epic, row
-    for epic in sorted(real_epics(db), key=lambda epic: planner._milestone_order(epic.name)):
+    for epic in sorted(real_epics(db), key=lambda epic: milestone_order(epic.name)):
         row = latest(db, "epic", epic.name)
         if row is not None and planner.is_slipping(as_epic_forecast(row)):
             return epic, row

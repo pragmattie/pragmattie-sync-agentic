@@ -1,6 +1,10 @@
 """Real work from a GitHub repository: milestones (as epics), issues, pull requests with their
 files and reviews, CI jobs.
 
+CI jobs come only from the CI workflow (``CI_WORKFLOW``); the other workflows' jobs aren't CI.
+A finished run's jobs are read once per collector process (``CIMemory``), and each collection that
+stores CI jobs deletes this source's rows whose suite isn't one of the CI workflow's jobs.
+
 Every row is stored with ``source = "github"`` and matched on its ``external_id``, so running
 the collector again updates rows in place instead of adding new ones.
 
@@ -21,9 +25,10 @@ import re
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -36,7 +41,7 @@ from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
 
 log = logging.getLogger("sdlc.signals.github")
 
-DEPLOY_WORKFLOW = ".github/workflows/deploy.yml"
+CI_WORKFLOW = "ci.yml"
 LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s*#(\d+)", re.I)
 SUITES = {
     "CRM API (lint + tests)": "api",
@@ -80,13 +85,27 @@ def _points(value: str | None) -> int | None:
     return int(value) if value and value.isdigit() else None
 
 
+@dataclass
+class CIMemory:
+    """What this process has stored from CI: the finished runs and their jobs' suites.
+
+    It lives as long as the process, so a restart reads every finished run's jobs once again.
+    """
+
+    finished_runs: set[int] = field(default_factory=set)
+    suites: set[str] = field(default_factory=set)
+
+
 class Collector:
     source = "github"
 
-    def __init__(self, db: Session, client: GitHubClient):
+    def __init__(self, db: Session, client: GitHubClient, memory: CIMemory | None = None):
         self.db = db
         self.client = client
+        self.memory = memory if memory is not None else CIMemory()
         self._engineers: dict[str, Engineer] = {}
+        self._finished_runs: set[int] = set()
+        self._suites: set[str] = set()
 
     def run(self) -> dict[str, int]:
         counts = {
@@ -96,6 +115,9 @@ class Collector:
             "ci_jobs": self.collect_ci(),
         }
         self.db.commit()
+        # Remembered only once committed, so a failed pass reads those runs again.
+        self.memory.finished_runs |= self._finished_runs
+        self.memory.suites |= self._suites
         return counts
 
     def _row(self, table, external_id: str):
@@ -235,10 +257,16 @@ class Collector:
         return pr
 
     def collect_ci(self) -> int:
+        """Store the CI workflow's finished jobs, then remove rows of jobs that aren't CI.
+
+        A finished run whose jobs this process already stored gets no jobs request.
+        """
         count = 0
-        runs = self.client.paginate("/repos/{repo}/actions/runs", key="workflow_runs")
+        runs = self.client.paginate(
+            f"/repos/{{repo}}/actions/workflows/{CI_WORKFLOW}/runs", key="workflow_runs"
+        )
         for run in runs:
-            if (run.get("path") or "").split("@")[0] == DEPLOY_WORKFLOW:
+            if run["id"] in self.memory.finished_runs:
                 continue
             jobs = self.client.paginate(
                 f"/repos/{{repo}}/actions/runs/{run['id']}/jobs", key="jobs", filter="all"
@@ -248,9 +276,25 @@ class Collector:
                 if job.get("status") != "completed" or not job.get("conclusion"):
                     continue
                 self._ci_job(job, jobs, pull_request)
+                self._suites.add(suite_of(job["name"]))
                 count += 1
+            if run.get("status") == "completed":
+                self._finished_runs.add(run["id"])
         self.db.flush()
+        if count:
+            self._remove_other_suites(self._suites | self.memory.suites)
         return count
+
+    def _remove_other_suites(self, suites: set[str]) -> None:
+        """Delete this source's CI rows whose suite isn't one of the CI workflow's jobs.
+
+        Rows other workflows' jobs left before the collector read only ``CI_WORKFLOW`` go; a
+        pass that stored no CI job never calls it, so a failed listing deletes nothing.
+        """
+        self.db.execute(
+            delete(CIRun).where(CIRun.source == self.source, CIRun.suite.not_in(suites))
+        )
+        self.db.flush()
 
     def _run_pull_request(self, run: dict) -> PullRequest | None:
         linked = run.get("pull_requests") or []
@@ -285,13 +329,16 @@ class Collector:
         )
 
 
-def collect_once(engine: Engine, client: GitHubClient) -> dict[str, int]:
+def collect_once(
+    engine: Engine, client: GitHubClient, memory: CIMemory | None = None
+) -> dict[str, int]:
     """Collect, save fresh forecasts, then plan when ``PLANNER_MODE`` is on.
 
-    A failed forecast or plan is logged and leaves the counts.
+    ``memory`` carries the finished CI runs from one collection to the next. A failed forecast or
+    plan is logged and leaves the counts.
     """
     with Session(engine) as db:
-        counts = Collector(db, client).run()
+        counts = Collector(db, client, memory).run()
     from sdlc.forecaster import ALWAYS_ON, ForecastRunner
 
     try:
@@ -361,7 +408,14 @@ def main(
     if args.command == "run":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         log.info("Collecting from %s every %ss", client.repo, args.every)
-        run_every(args.every, lambda: collect_once(engine, client), sleep=sleep, now=now, runs=runs)
+        memory = CIMemory()
+        run_every(
+            args.every,
+            lambda: collect_once(engine, client, memory),
+            sleep=sleep,
+            now=now,
+            runs=runs,
+        )
         return 0
     try:
         counts = collect_once(engine, client)
