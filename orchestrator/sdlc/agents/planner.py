@@ -197,9 +197,7 @@ def build_prompt(forecast: EpicForecast, items: list[Item], next_milestone: str)
     )
 
 
-def effect_of_deferring(
-    db: Session, forecast: EpicForecast, deferred: list[int]
-) -> dict[str, Any]:
+def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]) -> dict[str, Any]:
     """The forecast's own simulation (same seed and pace samples) without ``deferred`` items."""
     samples = real_throughput(db, today=forecast.as_of)
     remaining = max(0, forecast.remaining_items - len(set(deferred)))
@@ -293,9 +291,7 @@ def _checked(
             dropped.append(f"Option {index + 1} dropped: it names no item in the milestone.")
             continue
         # A split is not measurable by the simulation, so it has no effect.
-        effect = (
-            effect_of_deferring(db, forecast, numbers) if option.action == "defer" else None
-        )
+        effect = effect_of_deferring(db, forecast, numbers) if option.action == "defer" else None
         kept_index[index] = len(kept)
         kept.append(
             {
