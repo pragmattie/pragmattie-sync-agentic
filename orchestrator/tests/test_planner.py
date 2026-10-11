@@ -1,5 +1,6 @@
 from dataclasses import fields, replace
 from datetime import date, datetime
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -333,6 +334,41 @@ def test_deferring_never_lowers_the_on_time_chance(session, forecast):
     assert chances[0] < chances[3] < chances[6]
 
 
+def _later(day: str | None) -> tuple[bool, str]:
+    """A sort key for an effect's date: not finished (``None``) is the latest."""
+    return (day is None, day or "")
+
+
+@pytest.mark.parametrize("seed", [0, 7, 99_991, 2**31 + 11, 4_294_967_295])
+@pytest.mark.parametrize(
+    ("as_of", "target"),
+    [(WEDNESDAY, TARGET), (WEDNESDAY, date(2026, 10, 14)), (date(2026, 10, 8), TARGET)],
+    ids=["wednesday", "later-target", "thursday"],
+)
+def test_deferring_any_subset_never_lowers_the_chance_or_moves_dates_later(
+    session, milestone, seed, as_of, target
+):
+    base = replace(epic_forecast(session, as_of, MILESTONE, runs=200), seed=seed, end_date=target)
+    before = effect_of_deferring(session, base, [])
+    numbers = [101, 102, 103, 104, 105, 106]
+    for size in range(1, len(numbers) + 1):
+        for deferred in combinations(numbers, size):
+            after = effect_of_deferring(session, base, list(deferred))
+            assert after["on_time_probability"] >= before["on_time_probability"]
+            assert _later(after["p50"]) <= _later(before["p50"])
+            assert _later(after["p85"]) <= _later(before["p85"])
+
+
+def test_only_the_milestones_open_items_count_as_deferred(session, forecast):
+    nothing = effect_of_deferring(session, forecast, [])
+    # 107 is closed, 108 is synthetic, 109 is in M6 and 999 doesn't exist.
+    strays = effect_of_deferring(session, forecast, [107, 108, 109, 999])
+    assert strays == nothing
+    assert effect_of_deferring(session, forecast, [102, 107, 999]) == effect_of_deferring(
+        session, forecast, [102]
+    )
+
+
 def test_the_effect_reuses_the_forecasts_seed_and_is_deterministic(session, forecast):
     effect = effect_of_deferring(session, forecast, [102, 104])
     assert effect == effect_of_deferring(session, forecast, [104, 102, 104])
@@ -376,6 +412,18 @@ def test_is_slipping_below_85_percent_with_a_target(forecast):
     assert not is_slipping(replace(forecast, on_time_probability=None))
     assert not is_slipping(replace(forecast, remaining_items=0))
     assert not is_slipping(replace(forecast, source="synthetic"))
+
+
+def test_a_finished_milestone_due_on_a_weekend_is_not_slipping(session, milestone):
+    milestone.due_on = date(2026, 10, 11)  # a Sunday
+    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+        issue.state = "closed"
+        issue.closed_at = datetime(2026, 10, 9, 12)
+    session.flush()
+    finished = epic_forecast(session, date(2026, 10, 10), MILESTONE, runs=RUNS)
+    assert finished.remaining_items == 0
+    assert finished.on_time_probability == 1.0
+    assert not is_slipping(finished)
 
 
 def test_the_planner_client_uses_the_planner_settings(monkeypatch):
