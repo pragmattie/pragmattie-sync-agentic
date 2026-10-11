@@ -70,10 +70,9 @@ describe("forecast helpers", () => {
   });
 
   it("reads a time without a zone marker as UTC", () => {
-    process.env.TZ = "Asia/Kolkata";
-    expect(clockTime("2026-10-06T09:00:00")).toMatch(/^(14|0?2):30/);
-    expect(clockTime("2026-10-06T09:00:00")).toBe(localTime(9, 0));
-    expect(clockTime("2026-10-06T09:00:00Z")).toBe(localTime(9, 0));
+    process.env.TZ = "Asia/Kolkata"; // UTC+5:30, so 09:00 UTC is 14:30 there
+    expect(clockTime("2026-10-06T09:00:00")).toBe("02:30 PM");
+    expect(clockTime("2026-10-06T09:00:00Z")).toBe("02:30 PM");
   });
 
   it("formats a calendar date without shifting it by the time zone", () => {

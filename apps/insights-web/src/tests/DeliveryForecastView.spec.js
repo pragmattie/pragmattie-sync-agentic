@@ -187,6 +187,48 @@ describe("DeliveryForecastView", () => {
     expect(wrapper.find(".flash").exists()).toBe(false);
   });
 
+  it("flashes twice for two changes a second apart, and ends with no flash", async () => {
+    vi.spyOn(api, "getJson")
+      .mockResolvedValueOnce(feed())
+      .mockRejectedValueOnce(new Error("Database is unavailable"))
+      .mockResolvedValueOnce(feed({ epics: [epic({ id: 15 })] }))
+      .mockResolvedValue(feed({ epics: [epic({ id: 16 })] }));
+    const wrapper = await mountView();
+    const flashes = () => wrapper.find("[data-test='real-card']").classes().includes("flash");
+
+    await vi.advanceTimersByTimeAsync(15000); // the poll fails
+    await vi.advanceTimersByTimeAsync(14000);
+    await wrapper.find("[data-test='retry']").trigger("click"); // 29 s: the first change
+    await flushPromises();
+    expect(flashes()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000); // 30 s: the poll brings the second change
+    await flushPromises();
+    expect(flashes()).toBe(false); // the class goes for a frame, so the animation replays
+    await vi.advanceTimersByTimeAsync(20);
+    expect(flashes()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1500); // past the first flash's end: still flashing
+    expect(flashes()).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(flashes()).toBe(false);
+    expect(vi.getTimerCount()).toBe(1); // only the poll is left
+  });
+
+  it("clears its flash timers when the page is left", async () => {
+    vi.spyOn(api, "getJson")
+      .mockResolvedValueOnce(feed())
+      .mockResolvedValue(feed({ epics: [epic({ id: 15 })] }));
+    const wrapper = await mountView();
+    await vi.advanceTimersByTimeAsync(15000);
+    await flushPromises();
+    expect(wrapper.find(".flash").exists()).toBe(true);
+
+    wrapper.unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows a proposal's effects, its recommended option and the out-of-date note", async () => {
     vi.spyOn(api, "getJson").mockResolvedValue(feed({ proposals: { M5: PROPOSAL } }));
 
