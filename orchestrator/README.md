@@ -43,6 +43,18 @@ everything; both follow `ORCHESTRATOR_MODE`. `python -m sdlc.synth --reset` forg
 forecasts and the forecaster's audit rows about them, and keeps real forecasts and every other
 agent's rows.
 
+The planner runner in `sdlc/plan_runner.py` asks the planner agent (`sdlc/agents/planner.py`) for
+options once per slipping forecast of an open milestone, and records one audit row per call. A
+failed call is retried up to three times, five minutes apart, and a milestone gets at most four
+calls a day (failed ones included, trial calls aside). It writes nothing else and never touches
+GitHub. It is the one part that spends money, so `PLANNER_MODE` (`off` by default) is its own
+switch: when `on`, it runs after the forecaster in the collector, and in `python -m sdlc.runner
+run` when `ORCHESTRATOR_MODE` isn't `off` either. `python -m sdlc.plan_runner dry-run
+[--milestone N]` prints the exact request and a cost ceiling without calling anything, `try --yes
+[--milestone N]` makes one real call and records only a trial row, and `once` polls once; `N` is
+the M-number in the milestone's title (`5` or `M5`) or the full title. The forecast page's
+`proposals` show each milestone's latest proposal, and `synth --reset` keeps every planner row.
+
 Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
 reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer
