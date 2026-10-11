@@ -8,12 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`board.yml`** (5.8): the delivery board follows events as well as its 10-minute schedule
-  (issues, pull requests, commit statuses, and the runs of "Implementer agent",
-  "Reviewer agent (shadow)" and "CI"); the schedule, `workflow_dispatch`, the `board`
-  concurrency group and the job are unchanged. A person moves it over
-  `.github/workflows/board.yml` and deletes this copy; `tests/test_board.py` reads whichever
-  file has the event triggers, so it passes before and after the move.
+Nothing pending.
 
 ## Applied
 
@@ -38,6 +33,11 @@ Nothing in this folder runs automatically.
   `alembic downgrade base`, runs `pytest tests/test_migrations.py tests/test_forecaster.py -k mysql`
   (a forecast seed above 2³¹, and a real forecast saved on MySQL). Applied over
   `.github/workflows/ci.yml` and the copy deleted; no required check changed.
+
+- **`board.yml`** (5.8): the delivery board follows events (issues, pull requests, commit
+  statuses, and the runs of "Implementer agent", "Reviewer agent (shadow)" and "CI") as well
+  as its 10-minute schedule. Applied over `.github/workflows/board.yml` with one addition: the
+  job skips pull requests from forks, which get no secrets. The copy is deleted.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
