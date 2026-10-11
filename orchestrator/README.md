@@ -18,6 +18,8 @@ every row `source = "github"`) comes from `sdlc/signals/github.py`: set `GITHUB_
 `run --every SECONDS` to collect on a schedule. Re-running updates rows in place. An issue's epic
 is its milestone's title, or its `epic:` label when it has no milestone; `sdlc.epics.epic_label`
 shows "M5 Delivery forecasting" as "Delivery forecasting (M5)". The collector only sends GETs.
+CI jobs come only from the CI workflow (`ci.yml`); with `run`, a finished run's jobs are read once
+per process, and a collection that stores CI jobs deletes the rows of jobs that aren't CI's.
 
 The risk score is graded against history by `sdlc/calibration.py`. `python -m sdlc.risk explain
 <pr>` shows one pull request's signals, score, tier and reasons (add `--source` when the number
@@ -28,7 +30,8 @@ exists in both sources); `python -m sdlc.risk calibrate` grades this database's 
 The delivery forecast in `sdlc/forecast.py` is a Monte Carlo simulation: it resamples the issues
 closed on each working day of the last 84 days and plays the open work forward 10,000 times for
 P50, P85 and the chance of finishing on time, seeded by the sprint and the day so the same day
-repeats. `python -m sdlc.forecast [--runs N]` prints the current simulated sprint's forecast,
+repeats. Each run draws from its own sequence (from the seed and the run's number), so fewer
+remaining items never finish later; with nothing remaining the chance is 100%. `python -m sdlc.forecast [--runs N]` prints the current simulated sprint's forecast,
 with the items at risk; it is read-only.
 
 The forecaster agent in `sdlc/forecaster.py` saves forecasts to `sdlc_forecasts` (append-only), so
@@ -140,6 +143,8 @@ in its risk comment (the one marked `<!-- pragmattie-risk-gate -->`); either is 
 is none. It adds open issues that aren't on the board, and never removes or archives an item,
 touches a pull-request item or edits an issue. `sync --dry-run` prints every change and sends
 nothing. It writes no audit rows and needs only `GITHUB_TOKEN` and `GITHUB_REPO`, not the database.
-It runs every 10 minutes as a GitHub Actions workflow, proposed in `ci/proposed/board.yml`.
+It runs every 10 minutes as a GitHub Actions workflow (`.github/workflows/board.yml`);
+`ci/proposed/board.yml` proposes running it on issue, pull-request, status and agent-run events
+too.
 
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
