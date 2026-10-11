@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 
 const DecisionLogView = () => import("../views/DecisionLogView.vue");
 const DeliveryFlowView = () => import("../views/DeliveryFlowView.vue");
+const DeliveryForecastView = () => import("../views/DeliveryForecastView.vue");
 const EngineeringSignalsView = () => import("../views/EngineeringSignalsView.vue");
 const NotFoundView = () => import("../views/NotFoundView.vue");
 
@@ -11,6 +12,7 @@ export const navItems = [
   { title: "Engineering signals", to: "/signals", name: "signals" },
   { title: "Decision log", to: "/decisions", name: "decisions" },
   { title: "Delivery flow", to: "/flow", name: "flow" },
+  { title: "Delivery forecast", to: "/forecast", name: "forecast" },
 ];
 
 export function pageTitle(route) {
@@ -39,6 +41,12 @@ export const router = createRouter({
       name: "flow",
       component: DeliveryFlowView,
       meta: { title: "Delivery flow" },
+    },
+    {
+      path: "/forecast",
+      name: "forecast",
+      component: DeliveryForecastView,
+      meta: { title: "Delivery forecast" },
     },
     {
       path: "/:pathMatch(.*)*",
