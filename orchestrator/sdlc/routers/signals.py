@@ -7,10 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from sdlc import audit, calibration, flow, metrics
+from sdlc import audit, calibration, flow, forecaster, metrics
 from sdlc.clock import utcnow
 from sdlc.db import get_session
-from sdlc.tables import AgentDecision, PullRequest
+from sdlc.tables import AgentDecision, Forecast, PullRequest
 from sdlc.tiers import load_policy
 
 router = APIRouter(prefix="/api/v1/signals", tags=["signals"])
@@ -159,3 +159,17 @@ def decision(decision_id: int, db: Session = Depends(get_session)) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail=f"No decision {decision_id}.")
     return audit.serialize_decision(row)
+
+
+@router.get("/forecast")
+def forecast(db: Session = Depends(get_session)) -> dict:
+    """The latest saved forecasts, how they moved and their trails; it never simulates."""
+    return forecaster.dashboard(db)
+
+
+@router.get("/forecast/{forecast_id}")
+def one_forecast(forecast_id: int, db: Session = Depends(get_session)) -> dict:
+    row = db.get(Forecast, forecast_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No forecast {forecast_id}.")
+    return forecaster.serialize(row)

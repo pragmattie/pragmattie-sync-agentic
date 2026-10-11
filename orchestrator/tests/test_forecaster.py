@@ -14,6 +14,8 @@ from sdlc.db import Base
 from sdlc.forecast import current_sprint
 from sdlc.forecaster import (
     AGENT,
+    REAL_NOTE,
+    SIMULATED_NOTE,
     TRAIL,
     ForecastRunner,
     _fingerprint,
@@ -420,28 +422,29 @@ def db(sqlite_engine):
         yield db
 
 
-def test_moved_with_a_single_forecast_has_no_previous(db):
+def test_moved_without_a_previous_forecast_is_all_none(db):
     only = _forecast(db, "sprint", "Sprint 1", date(2026, 10, 5), date(2026, 10, 9), None)
-    assert moved(db, "sprint", "Sprint 1") == {
-        "latest": serialize(only),
-        "previous": None,
-        "p50_moved_days": None,
-        "p85_moved_days": None,
+    assert moved(only, None) == {
+        "p50_days": None,
+        "p85_days": None,
+        "previous_p50": None,
+        "previous_p85": None,
+        "previous_at": None,
     }
-    assert moved(db, "sprint", "Sprint 2") is None
 
 
 def test_moved_counts_the_days_p50_and_p85_moved(db):
-    _forecast(db, "sprint", "Sprint 1", date(2026, 10, 5), date(2026, 10, 9), date(2026, 10, 12))
     before = _forecast(
         db, "sprint", "Sprint 1", date(2026, 10, 6), date(2026, 10, 8), date(2026, 10, 9)
     )
     after = _forecast(db, "sprint", "Sprint 1", date(2026, 10, 7), date(2026, 10, 12), None, hour=8)
-    result = moved(db, "sprint", "Sprint 1")
-    assert result["latest"]["id"] == after.id
-    assert result["previous"]["id"] == before.id
-    assert result["p50_moved_days"] == 4
-    assert result["p85_moved_days"] is None  # no P85 to compare against
+    assert moved(after, before) == {
+        "p50_days": 4,
+        "p85_days": None,  # no P85 to compare against
+        "previous_p50": "2026-10-08",
+        "previous_p85": "2026-10-09",
+        "previous_at": "2026-10-06T09:00:00",
+    }
 
 
 def test_serialize_gives_iso_dates_and_the_full_seed(db):
@@ -452,6 +455,19 @@ def test_serialize_gives_iso_dates_and_the_full_seed(db):
     assert data["p50"] == "2026-10-09" and data["p85"] is None
     assert data["seed"] == 2**32 - 1
     json.dumps(data)
+
+
+def _open_milestone(db, name, state="open"):
+    db.add(
+        Epic(
+            source="github",
+            external_id=f"milestone-{name.split()[0]}",
+            name=name,
+            state=state,
+            created_at=datetime(2026, 9, 1),
+        )
+    )
+    db.flush()
 
 
 def test_the_dashboard_shows_the_newest_sprint_and_every_epic_with_trails(db):
@@ -466,20 +482,59 @@ def test_the_dashboard_shows_the_newest_sprint_and_every_epic_with_trails(db):
     _forecast(db, "epic", "Leads", date(2026, 10, 6), date(2026, 11, 3), None)
 
     board = dashboard(db)
-    assert board["sprint"]["latest"]["subject"] == "Sprint 13"
-    assert board["sprint"]["previous"] is None
+    assert board["sprint"]["subject"] == "Sprint 13"
+    assert board["sprint"]["kind_note"] == SIMULATED_NOTE
+    assert board["sprint"]["moved"]["previous_at"] is None
     assert board["sprint"]["trail"] == [
-        {
-            "created_at": "2026-10-09T09:00:00",
-            "as_of": "2026-10-09",
-            "p50": "2026-10-09",
-            "p85": "2026-10-09",
-        }
+        {"at": "2026-10-09T09:00:00", "p50": "2026-10-09", "p85": "2026-10-09"}
     ]
-    assert [epic["latest"]["subject"] for epic in board["epics"]] == ["Leads", "Pipeline"]
+    assert "inputs_hash" not in board["sprint"] and "seed" not in board["sprint"]
+    assert board["sprint"]["at_risk"] == []
+    assert [epic["subject"] for epic in board["epics"]] == ["Leads", "Pipeline"]
     pipeline = board["epics"][1]
-    assert pipeline["p50_moved_days"] == 2 and pipeline["p85_moved_days"] == 0
-    assert [point["as_of"] for point in pipeline["trail"]] == ["2026-10-05", "2026-10-06"]
+    assert pipeline["moved"]["p50_days"] == 2 and pipeline["moved"]["p85_days"] == 0
+    assert [point["at"] for point in pipeline["trail"]] == [
+        "2026-10-05T09:00:00",
+        "2026-10-06T09:00:00",
+    ]
+    assert board["proposals"] == {}
+    assert board["saved"] == TRAIL + 5 + 4
+    assert board["as_of"] == "2026-10-09"
+
+
+def test_real_epics_come_first_in_milestone_order_then_simulated_by_name(db):
+    day = date(2026, 10, 6)
+    for name in ("M10 Launch", "M6 Accuracy", "M9 Planner", "M5 Forecasting"):
+        _open_milestone(db, name)
+    _forecast(db, "epic", "Pipeline", day, day, day)
+    _forecast(db, "epic", "M10 Launch", day, day, day, source="github")
+    _forecast(db, "epic", "Leads", day, day, day)
+    _forecast(db, "epic", "M6 Accuracy", day, day, day, source="mixed")
+    _forecast(db, "epic", "M9 Planner", day, day, day, source="github")
+    _forecast(db, "epic", "M5 Forecasting", day, day, day, source="github")
+
+    epics = dashboard(db)["epics"]
+    assert [(epic["label"], epic["source"], epic["kind_note"]) for epic in epics] == [
+        ("Forecasting (M5)", "github", REAL_NOTE),
+        ("Accuracy (M6)", "mixed", REAL_NOTE),
+        ("Planner (M9)", "github", REAL_NOTE),
+        ("Launch (M10)", "github", REAL_NOTE),
+        ("Leads", "synthetic", SIMULATED_NOTE),
+        ("Pipeline", "synthetic", SIMULATED_NOTE),
+    ]
+
+
+def test_a_closed_milestone_leaves_the_dashboard_but_its_forecasts_stay(db):
+    day = date(2026, 10, 6)
+    _open_milestone(db, "M5 Forecasting", state="closed")
+    _open_milestone(db, "M6 Accuracy")
+    _forecast(db, "epic", "M5 Forecasting", day, day, day, source="github")
+    _forecast(db, "epic", "M6 Accuracy", day, day, day, source="github")
+
+    board = dashboard(db)
+    assert [epic["subject"] for epic in board["epics"]] == ["M6 Accuracy"]
+    assert board["saved"] == 2
+    assert db.scalar(select(func.count()).where(Forecast.subject == "M5 Forecasting")) == 1
 
 
 def test_the_trail_keeps_the_newest_forecasts_oldest_first(db):
@@ -488,15 +543,21 @@ def test_the_trail_keeps_the_newest_forecasts_oldest_first(db):
         day = first + timedelta(days=offset)
         _forecast(db, "sprint", "Sprint 12", day, day + timedelta(days=3), None)
     trail = dashboard(db)["sprint"]["trail"]
-    days = [point["as_of"] for point in trail]
+    times = [point["at"] for point in trail]
     assert len(trail) == TRAIL
-    assert days == sorted(days)
-    assert days[0] == (first + timedelta(days=5)).isoformat()
-    assert days[-1] == (first + timedelta(days=TRAIL + 4)).isoformat()
+    assert times == sorted(times)
+    assert times[0].startswith((first + timedelta(days=5)).isoformat())
+    assert times[-1].startswith((first + timedelta(days=TRAIL + 4)).isoformat())
 
 
 def test_an_empty_dashboard(db):
-    assert dashboard(db) == {"sprint": None, "epics": []}
+    assert dashboard(db) == {
+        "epics": [],
+        "sprint": None,
+        "proposals": {},
+        "saved": 0,
+        "as_of": None,
+    }
 
 
 def test_the_dashboard_runs_no_simulation(db, monkeypatch):
@@ -507,7 +568,7 @@ def test_the_dashboard_runs_no_simulation(db, monkeypatch):
 
     monkeypatch.setattr(forecaster, "sprint_forecast", refuse)
     monkeypatch.setattr("sdlc.forecast.simulate", refuse)
-    assert dashboard(db)["sprint"]["latest"]["subject"] == "Sprint 1"
+    assert dashboard(db)["sprint"]["subject"] == "Sprint 1"
 
 
 # Reset
