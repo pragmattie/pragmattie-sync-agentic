@@ -10,7 +10,9 @@ The collector only reads: it sends GET requests and never writes to GitHub.
 the next one tries again; a spent rate limit waits until it resets.
 
 After each collection the forecaster agent saves fresh forecasts (``sdlc.forecaster``), whatever
-``ORCHESTRATOR_MODE`` says: it writes only its own tables and sends nothing to GitHub.
+``ORCHESTRATOR_MODE`` says: it writes only its own tables and sends nothing to GitHub. Then,
+when ``PLANNER_MODE`` is ``on``, the planner drafts options for slipping milestones
+(``sdlc.plan_runner``); it writes only audit rows and is never given the GitHub client.
 """
 
 import argparse
@@ -27,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from sdlc.changes import classify_files, infer_module
 from sdlc.clock import utcnow
+from sdlc.config import get_settings
 from sdlc.db import get_engine
 from sdlc.github_client import GitHubClient, GitHubError, RateLimited, parse_time
 from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
@@ -283,7 +286,10 @@ class Collector:
 
 
 def collect_once(engine: Engine, client: GitHubClient) -> dict[str, int]:
-    """Collect, then save fresh forecasts; a failed forecast is logged and leaves the counts."""
+    """Collect, save fresh forecasts, then plan when ``PLANNER_MODE`` is on.
+
+    A failed forecast or plan is logged and leaves the counts.
+    """
     with Session(engine) as db:
         counts = Collector(db, client).run()
     from sdlc.forecaster import ALWAYS_ON, ForecastRunner
@@ -292,6 +298,14 @@ def collect_once(engine: Engine, client: GitHubClient) -> dict[str, int]:
         log.info("Forecasts: %s", ForecastRunner(ALWAYS_ON, engine=engine).poll_once())
     except Exception:
         log.exception("The forecaster failed; the next collection runs it again")
+    if get_settings().planner_mode == "on":
+        from sdlc.agents.planner import planner_llm
+        from sdlc.plan_runner import PlannerRunner
+
+        try:
+            log.info("Plans: %s", PlannerRunner(planner_llm(), "on", engine=engine).poll_once())
+        except Exception:
+            log.exception("The planner failed; the next collection runs it again")
     return counts
 
 
