@@ -167,8 +167,9 @@ def test_run_builds_the_forecaster_with_the_runners_own_mode(mode, gh, llm, engi
     monkeypatch.setattr(issue_runner, "build", lambda m, gh=None, engine=None: None)
     seen = {}
 
-    def loop(runner, poll_seconds, *, issue_runner, forecast_runner):
+    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner):
         seen["runner"], seen["forecaster"] = runner, forecast_runner
+        seen["planner"] = plan_runner
 
     monkeypatch.setattr(runner_module, "run", loop)
     try:
@@ -182,6 +183,48 @@ def test_run_builds_the_forecaster_with_the_runners_own_mode(mode, gh, llm, engi
     assert forecaster.engine is engine
     if mode == "off":
         assert forecaster.poll_once() == {"mode": "off"}
+    assert seen["planner"] is None  # PLANNER_MODE defaults to off
+
+
+@pytest.mark.parametrize(
+    ("mode", "planner_mode", "runs"),
+    [
+        ("shadow", "on", True),
+        ("enforce", "on", True),
+        ("off", "on", False),
+        ("shadow", "off", False),
+    ],
+)
+def test_the_poll_loop_plans_only_with_both_switches_on(
+    mode, planner_mode, runs, gh, llm, engine, monkeypatch
+):
+    from sdlc import issue_runner
+    from sdlc.plan_runner import PlannerRunner
+
+    monkeypatch.setenv("ORCHESTRATOR_MODE", mode)
+    monkeypatch.setenv("PLANNER_MODE", planner_mode)
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        runner_module, "_build", lambda m: Runner(gh, llm, load_policy(), m, engine=engine)
+    )
+    monkeypatch.setattr(issue_runner, "build", lambda m, gh=None, engine=None: None)
+    seen = {}
+
+    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner):
+        seen["planner"] = plan_runner
+
+    monkeypatch.setattr(runner_module, "run", loop)
+    try:
+        assert main(["run"]) == 0
+    finally:
+        get_settings.cache_clear()
+
+    if runs:
+        assert isinstance(seen["planner"], PlannerRunner)
+        assert seen["planner"].mode == "on" and seen["planner"].engine is engine
+        assert not hasattr(seen["planner"], "gh")
+    else:
+        assert seen["planner"] is None
 
 
 @pytest.fixture(autouse=True)

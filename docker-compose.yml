@@ -60,6 +60,9 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITHUB_REPO: ${GITHUB_REPO:-}
       GITHUB_API_URL: ${GITHUB_API_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PLANNER_MODE: ${PLANNER_MODE:-off}
+      PLANNER_MODEL: ${PLANNER_MODEL:-claude-sonnet-5}
     volumes:
       - ./orchestrator:/orchestrator
     command: python -m sdlc.signals.github run --every ${COLLECT_SECONDS:-900}

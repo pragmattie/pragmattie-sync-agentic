@@ -334,8 +334,11 @@ def dashboard(db: Session) -> dict[str, Any]:
 
     ``epics`` holds each open milestone's latest forecast in milestone order, then each
     simulated epic's by name; a closed milestone's forecasts stay saved but are not listed.
-    ``sprint`` is the newest simulated sprint's. ``proposals`` stays empty until the planner.
+    ``sprint`` is the newest simulated sprint's. ``proposals`` holds the planner's latest
+    proposal for each listed milestone that has one (``plan_runner.latest_proposal``).
     """
+    from sdlc.plan_runner import latest_proposal
+
     newest = db.scalars(
         select(Forecast).order_by(Forecast.created_at.desc(), Forecast.id.desc()).limit(1)
     ).first()
@@ -353,13 +356,14 @@ def dashboard(db: Session) -> dict[str, Any]:
             simulated.append(subject)
         elif subject in open_milestones:
             real.append(subject)
+    proposals = {subject: latest_proposal(db, subject) for subject in real}
     return {
         "epics": [
             _entry(db, "epic", subject, REAL_NOTE) for subject in sorted(real, key=_milestone_order)
         ]
         + [_entry(db, "epic", subject, SIMULATED_NOTE) for subject in sorted(simulated)],
         "sprint": _entry(db, "sprint", sprint.subject, SIMULATED_NOTE) if sprint else None,
-        "proposals": {},
+        "proposals": {subject: entry for subject, entry in proposals.items() if entry},
         "saved": db.scalar(select(func.count(Forecast.id))),
         "as_of": _iso(newest.as_of) if newest else None,
     }
@@ -369,7 +373,8 @@ def reset(db: Session) -> None:
     """Forget the simulated forecasts and the forecaster's audit rows about them.
 
     Real forecasts (``github`` or ``mixed``), their audit rows and every other agent's rows are
-    kept: the real work they describe is unchanged. Flushes, never commits.
+    kept: the real work they describe is unchanged. The planner's rows are kept too: it plans
+    only real milestones, so its proposals are real decisions. Flushes, never commits.
     """
     db.execute(
         delete(AgentDecision).where(

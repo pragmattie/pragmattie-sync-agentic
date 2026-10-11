@@ -637,6 +637,39 @@ def test_the_collector_saves_forecasts_with_the_agents_off(sqlite_engine, client
         assert session.scalar(query) == 6
 
 
+@pytest.mark.parametrize(("planner_mode", "plans"), [("on", 1), ("off", 0)])
+def test_the_collector_plans_after_forecasting_when_planner_mode_is_on(
+    sqlite_engine, client, monkeypatch, planner_mode, plans
+):
+    from sdlc import forecaster, plan_runner
+    from sdlc.agents import planner
+    from sdlc.config import get_settings
+    from tests.fakes import FakeLLM
+
+    order = []
+    monkeypatch.setenv("ORCHESTRATOR_MODE", "off")  # the planner's own switch decides here
+    monkeypatch.setenv("PLANNER_MODE", planner_mode)
+    monkeypatch.setattr(planner, "planner_llm", lambda: order.append("llm") or FakeLLM())
+    monkeypatch.setattr(
+        forecaster.ForecastRunner, "poll_once", lambda self: order.append("forecast") or {}
+    )
+
+    def poll(self):
+        order.append("plan")
+        assert self.mode == "on" and self.engine is sqlite_engine
+        return {}
+
+    monkeypatch.setattr(plan_runner.PlannerRunner, "poll_once", poll)
+    Base.metadata.create_all(sqlite_engine)
+    get_settings.cache_clear()
+    try:
+        github.collect_once(sqlite_engine, client)
+    finally:
+        get_settings.cache_clear()
+
+    assert order == ["forecast"] + ["llm", "plan"] * plans
+
+
 def test_a_failed_forecast_is_logged_and_keeps_the_counts(
     sqlite_engine, client, caplog, monkeypatch
 ):

@@ -1,7 +1,8 @@
 """The shared poll loop: score each new commit once, then keep the ``risk-gate`` in step.
 
 The triage agent (``sdlc.issue_runner``) and then the forecaster (``sdlc.forecaster``) run in
-the same loop, after it, in the same mode.
+the same loop, after it, in the same mode. The planner (``sdlc.plan_runner``) runs last, only
+when ``PLANNER_MODE`` is ``on`` as well.
 
 ``ORCHESTRATOR_MODE`` switches all of it. ``off`` does nothing at all, not even a read. ``shadow``
 does everything, but the status always passes and says what it would be. ``enforce`` makes the
@@ -434,12 +435,13 @@ def run(
     polls: int | None = None,
     issue_runner: Any = None,
     forecast_runner: Any = None,
+    plan_runner: Any = None,
 ) -> None:
     """Poll every ``poll_seconds``, forever unless ``polls`` is given. Nothing stops the loop.
 
-    The triage agent's ``issue_runner``, when given, polls after the PR risk agent each time, and
-    the ``forecast_runner`` after that. It sends nothing to GitHub, so a spent rate limit doesn't
-    stop it.
+    The triage agent's ``issue_runner``, when given, polls after the PR risk agent each time, then
+    the ``forecast_runner`` and the ``plan_runner``. Those two send nothing to GitHub, so a spent
+    rate limit doesn't stop them.
     """
     stats_at = clock()
     limited_logged = None
@@ -467,6 +469,11 @@ def run(
                 log.info("Forecast poll: %s", forecast_runner.poll_once())
             except Exception:
                 log.exception("The forecast poll failed; the next one runs as usual")
+        if plan_runner is not None:
+            try:
+                log.info("Plan poll: %s", plan_runner.poll_once())
+            except Exception:
+                log.exception("The plan poll failed; the next one runs as usual")
         if clock() - stats_at >= STATS_EVERY_SECONDS:
             stats_at = clock()
             log.info(
@@ -560,6 +567,16 @@ def _build(mode: str) -> Runner:
     )
 
 
+def plan_runner_for(settings: Any, mode: str, *, engine: Engine | None = None) -> Any:
+    """The poll loop's planner: only when ``PLANNER_MODE`` is on and the loop's mode isn't off."""
+    if settings.planner_mode != "on" or mode == "off":
+        return None
+    from sdlc.agents.planner import planner_llm
+    from sdlc.plan_runner import PlannerRunner
+
+    return PlannerRunner(planner_llm(), "on", engine=engine)
+
+
 def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m sdlc.runner", description=__doc__.split("\n")[0]
@@ -587,7 +604,14 @@ def main(argv: list[str] | None = None, runner: Runner | None = None) -> int:
 
         issues = issue_runner.build(runner.mode, gh=runner.gh, engine=runner.engine)
         forecasts = ForecastRunner(runner.mode, engine=runner.engine)
-        run(runner, settings.poll_seconds, issue_runner=issues, forecast_runner=forecasts)
+        plans = plan_runner_for(settings, runner.mode, engine=runner.engine)
+        run(
+            runner,
+            settings.poll_seconds,
+            issue_runner=issues,
+            forecast_runner=forecasts,
+            plan_runner=plans,
+        )
         return 0
     if args.command == "once":
         print(json.dumps(runner.poll_once()))

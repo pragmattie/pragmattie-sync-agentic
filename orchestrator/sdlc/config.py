@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     risk_max_output_tokens: int = 1500
     planner_model: str = "claude-sonnet-5"
     planner_max_output_tokens: int = 2000
+    planner_mode: Literal["off", "on"] = "off"
     agent_timeout_seconds: float = 60
     orchestrator_mode: Literal["off", "shadow", "enforce"] = "off"
     poll_seconds: float = 30

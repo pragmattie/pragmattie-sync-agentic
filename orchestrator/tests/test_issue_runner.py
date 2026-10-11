@@ -313,7 +313,9 @@ def test_the_run_loop_polls_issues_after_pull_requests(gh, engine):
     assert order == ["prs", "issues", "prs", "issues"]
 
 
-def test_the_run_loop_forecasts_last_even_when_github_is_rate_limited(gh, engine, monkeypatch):
+def test_the_run_loop_forecasts_then_plans_even_when_github_is_rate_limited(
+    gh, engine, monkeypatch
+):
     order = []
 
     class Recorder:
@@ -332,8 +334,9 @@ def test_the_run_loop_forecasts_last_even_when_github_is_rate_limited(gh, engine
         polls=1,
         issue_runner=Recorder("issues"),
         forecast_runner=Recorder("forecasts"),
+        plan_runner=Recorder("plans"),
     )
-    assert order == ["prs", "issues", "forecasts"]
+    assert order == ["prs", "issues", "forecasts", "plans"]
 
     monkeypatch.setattr(gh, "rate_limited", lambda: True, raising=False)
     order.clear()
@@ -344,8 +347,9 @@ def test_the_run_loop_forecasts_last_even_when_github_is_rate_limited(gh, engine
         polls=1,
         issue_runner=Recorder("issues"),
         forecast_runner=Recorder("forecasts"),
+        plan_runner=Recorder("plans"),
     )
-    assert order == ["forecasts"]
+    assert order == ["forecasts", "plans"]
 
 
 def test_the_poll_loop_forecaster_does_nothing_when_off(engine):

@@ -100,3 +100,13 @@ def test_the_collector_only_collects(tmp_path):
     assert collector["command"] == ["python", "-m", "sdlc.signals.github", "run", "--every", "120"]
     assert collector["environment"]["ORCHESTRATOR_MODE"] == "off"
     assert "ports" not in collector
+
+
+def test_the_collector_plans_only_when_planner_mode_is_on(tmp_path):
+    unset = {"PLANNER_MODE": "", "PLANNER_MODEL": ""}
+    environment = _config(tmp_path, unset)["collector"]["environment"]
+    assert environment["PLANNER_MODE"] == "off"
+    assert "ANTHROPIC_API_KEY" in environment  # read only when PLANNER_MODE is on
+    assert environment["PLANNER_MODEL"] == "claude-sonnet-5"
+    environment = _config(tmp_path, {"PLANNER_MODE": "on"})["collector"]["environment"]
+    assert environment["PLANNER_MODE"] == "on"
