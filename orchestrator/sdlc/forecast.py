@@ -2,8 +2,10 @@
 
 The forecast resamples how many issues were actually closed on each recent working day and plays
 the remaining work forward ``RUNS`` times. The spread of finish dates gives P50 (a coin flip) and
-P85 (the date to promise). Every run is seeded from the sprint and the day, so the same day always
-gives the same numbers and a demo repeats.
+P85 (the date to promise). The forecast is seeded from the sprint and the day, so the same day
+always gives the same numbers and a demo repeats. Each run has its own random sequence, drawn from
+that seed and the run's number, so a run sees the same days whatever is remaining: fewer items can
+never finish later.
 
 Sprints are simulated only: nothing assigns real issues a sprint, so the sprint forecast covers the
 simulated history (calibration data). Real work is forecast by milestone: each open GitHub milestone
@@ -36,6 +38,8 @@ RUNS = 10_000
 HORIZON = 260  # working days, about a year
 OVERRUN_FACTOR = 1.5
 OVERRUN_SLACK_DAYS = 2
+DEFAULT_DAYS_PER_POINT = 1.0  # v1's rate when there is no history at all
+RUN_SEED_STEP = 1_000_003  # run i of seed s draws from random.Random(s * RUN_SEED_STEP + i)
 
 
 def is_workday(day: date) -> bool:
@@ -100,34 +104,42 @@ def real_throughput(db: Session, *, today: date, days: int = HISTORY_DAYS) -> li
     The window starts at the later of ``today - days`` and the earliest real closure, so the days
     before the real work existed aren't sampled. A weekend closure counts on the next working day,
     or, when that is today or later (a forecast made on a Sunday or Monday), on the last working
-    day before today, so no closure is left out.
+    day before today, so no closure is left out; the window then starts at the earliest day a
+    closure is counted on.
     """
     earliest = db.scalar(select(func.min(Issue.closed_at)).where(Issue.source == "github"))
     if earliest is None:
         return []
-    first = max(today - timedelta(days=days), earliest.date())
+    start = max(today - timedelta(days=days), earliest.date())
     query = select(Issue.closed_at).where(
         Issue.source == "github",
-        Issue.closed_at >= datetime.combine(first, time()),
+        Issue.closed_at >= datetime.combine(start, time()),
         Issue.closed_at < datetime.combine(today, time()),
     )
     last = previous_workday(today)
-    closed = Counter(min(_first_workday(closed_at.date()), last) for closed_at in db.scalars(query))
+    counted = [min(_first_workday(closed_at.date()), last) for closed_at in db.scalars(query)]
+    # A weekend closure moved back to Friday may fall before ``start``; the window starts there.
+    first = min([start, *counted])
+    closed = Counter(counted)
     return [closed[day] for day in working_days(first, today - timedelta(days=1))]
 
 
 def simulate(
     remaining: int, samples: list[int], *, start: date, runs: int, seed: int
 ) -> list[date | None]:
-    """Each run's finish date, or ``None`` when it is not done within ``HORIZON`` working days."""
+    """Each run's finish date, or ``None`` when it is not done within ``HORIZON`` working days.
+
+    Run ``i`` draws from its own sequence, seeded from ``(seed, i)``, so it sees the same days
+    whatever is remaining.
+    """
     first = _first_workday(start)
     if remaining <= 0:
         return [first] * runs
     if not any(samples):
         return [None] * runs
-    rng = random.Random(seed)
     results: list[date | None] = []
-    for _ in range(runs):
+    for run in range(runs):
+        rng = random.Random(seed * RUN_SEED_STEP + run)
         left = remaining
         day = first
         finished = None
@@ -139,6 +151,15 @@ def simulate(
             day = next_workday(day)
         results.append(finished)
     return results
+
+
+def on_time_share(results: list[date | None], end_date: date, remaining: int) -> float:
+    """The share of runs finished by ``end_date``; 1.0 with nothing remaining (already done)."""
+    if remaining <= 0:
+        return 1.0
+    if not results:
+        return 0.0
+    return sum(1 for day in results if day is not None and day <= end_date) / len(results)
 
 
 def percentile_date(results: list[date | None], pct: float) -> date | None:
@@ -195,8 +216,10 @@ class ItemRisk:
     reason: str
 
 
-def _started(db: Session, issue_ids: list[int]) -> dict[int, date]:
-    """The day each issue's first linked pull request was opened."""
+def started_on(db: Session, issue_ids: list[int]) -> dict[int, date]:
+    """The day each issue's first linked pull request was opened; unstarted issues are absent."""
+    if not issue_ids:
+        return {}
     rows = db.execute(
         select(PullRequest.issue_id, func.min(PullRequest.created_at))
         .where(PullRequest.issue_id.in_(issue_ids))
@@ -210,14 +233,14 @@ def _at_risk(
 ) -> list[ItemRisk]:
     """Open items that are well over their expected time or no longer fit in ``days_left``."""
     rates = days_per_point(db, source)
-    started_on = _started(db, [item.id for item in items])
+    opened = started_on(db, [item.id for item in items])
     flagged: list[ItemRisk] = []
     for item in items:
         points = item.estimate_points or 0
         module = item.module or "unassigned"
-        rate = rates.get(item.module, rates.get(None, 0.0))
+        rate = rates.get(item.module, rates.get(None, DEFAULT_DAYS_PER_POINT))
         expected = points * rate
-        started = started_on.get(item.id)
+        started = opened.get(item.id)
         elapsed = len(working_days(started, today - timedelta(days=1))) if started else 0
         remaining = max(0.0, expected - elapsed)
         history = f"{module} work has taken {rate:.1f} working days per point"
@@ -305,7 +328,6 @@ def sprint_forecast(
     seed = seed_for(sprint, today)
     results = simulate(len(items), samples, start=today, runs=runs, seed=seed)
     days_left = len(working_days(today, sprint.end_date))
-    on_time = sum(1 for day in results if day is not None and day <= sprint.end_date)
     return SprintForecast(
         sprint=sprint.name,
         source=sprint.source,
@@ -317,7 +339,7 @@ def sprint_forecast(
         working_days_left=days_left,
         p50=percentile_date(results, 0.5),
         p85=percentile_date(results, 0.85),
-        on_time_probability=on_time / runs if runs else 0.0,
+        on_time_probability=on_time_share(results, sprint.end_date, len(items)),
         throughput_mean=round(sum(samples) / len(samples), 2) if samples else 0.0,
         history_days=HISTORY_DAYS,
         runs=runs,
@@ -433,7 +455,7 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
     results = simulate(len(items), samples, start=today, runs=runs, seed=seed)
     on_time = None
     if end_date is not None and runs and (any(samples) or not items):
-        on_time = sum(1 for day in results if day is not None and day <= end_date) / runs
+        on_time = on_time_share(results, end_date, len(items))
     return EpicForecast(
         epic=epic,
         source=source,

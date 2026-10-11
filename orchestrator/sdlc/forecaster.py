@@ -32,7 +32,7 @@ from sdlc.audit import record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
-from sdlc.epics import MILESTONE_TITLE, epic_label
+from sdlc.epics import epic_label, milestone_order
 from sdlc.forecast import (
     RUNS,
     EpicForecast,
@@ -323,12 +323,6 @@ def _entry(db: Session, kind: str, subject: str, kind_note: str) -> dict[str, An
     }
 
 
-def _milestone_order(name: str) -> tuple[int, str]:
-    """M5 before M6 before M10 (by the number after M); untitled milestones last, by name."""
-    match = MILESTONE_TITLE.match(name.strip())
-    return (int(match.group(1)[1:]) if match else sys.maxsize, name)
-
-
 def dashboard(db: Session) -> dict[str, Any]:
     """Everything the forecast page shows, read from saved forecasts; it never simulates.
 
@@ -359,7 +353,7 @@ def dashboard(db: Session) -> dict[str, Any]:
     proposals = {subject: latest_proposal(db, subject) for subject in real}
     return {
         "epics": [
-            _entry(db, "epic", subject, REAL_NOTE) for subject in sorted(real, key=_milestone_order)
+            _entry(db, "epic", subject, REAL_NOTE) for subject in sorted(real, key=milestone_order)
         ]
         + [_entry(db, "epic", subject, SIMULATED_NOTE) for subject in sorted(simulated)],
         "sprint": _entry(db, "sprint", sprint.subject, SIMULATED_NOTE) if sprint else None,
