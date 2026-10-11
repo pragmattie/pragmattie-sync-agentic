@@ -736,8 +736,24 @@ def test_sync_never_sends_a_forbidden_mutation():
         assert forbidden not in source
 
 
+ROOT = Path(__file__).resolve().parents[2]
+LIVE_BOARD = ROOT / ".github" / "workflows" / "board.yml"
+PROPOSED_BOARD = ROOT / "ci" / "proposed" / "board.yml"
+BOARD_WORKFLOWS = ["Implementer agent", "Reviewer agent (shadow)", "CI"]
+
+
+def _event_board() -> dict:
+    """The board workflow with event triggers: the proposal (5.8) until a person moves it live."""
+    for path in (PROPOSED_BOARD, LIVE_BOARD):
+        if path.exists():
+            workflow = yaml.safe_load(path.read_text())
+            if "workflow_run" in workflow[True]:
+                return workflow
+    raise AssertionError("no board workflow has the event triggers")
+
+
 def test_the_board_workflow_runs_only_the_sync():
-    path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "board.yml"
+    path = LIVE_BOARD
     workflow = yaml.safe_load(path.read_text())
     triggers = workflow[True]  # YAML 1.1 reads the bare key "on" as true
     assert triggers["schedule"] == [{"cron": "*/10 * * * *"}]
@@ -751,3 +767,60 @@ def test_the_board_workflow_runs_only_the_sync():
     assert "ANTHROPIC" not in text and "claude-code" not in text and "API_KEY" not in text
     token = next(s for s in steps if s.get("uses", "").startswith("actions/create-github-app"))
     assert token["with"]["owner"] == "pragmattie"
+
+
+def test_the_event_board_keeps_the_schedule_dispatch_and_one_run_at_a_time():
+    workflow = _event_board()
+    triggers = workflow[True]
+    assert triggers["schedule"] == [{"cron": "*/10 * * * *"}]
+    assert "workflow_dispatch" in triggers
+    assert workflow["concurrency"] == {"group": "board", "cancel-in-progress": False}
+
+
+def test_the_event_board_follows_issues_pull_requests_statuses_and_agent_runs():
+    triggers = _event_board()[True]
+    assert set(triggers["issues"]["types"]) == {
+        "opened",
+        "edited",
+        "labeled",
+        "unlabeled",
+        "closed",
+        "reopened",
+        "milestoned",
+        "demilestoned",
+    }
+    assert set(triggers["pull_request"]["types"]) == {
+        "opened",
+        "reopened",
+        "synchronize",
+        "closed",
+        "labeled",
+        "unlabeled",
+    }
+    assert "status" in triggers
+    assert triggers["workflow_run"]["workflows"] == BOARD_WORKFLOWS
+    assert set(triggers["workflow_run"]["types"]) == {"requested", "completed"}
+    assert set(triggers) == {
+        "schedule",
+        "workflow_dispatch",
+        "issues",
+        "pull_request",
+        "status",
+        "workflow_run",
+    }
+
+
+def test_the_event_board_never_fires_on_its_own_runs():
+    workflow = _event_board()
+    assert workflow["name"] == "Delivery board"
+    assert workflow["name"] not in workflow[True]["workflow_run"]["workflows"]
+    names = {
+        yaml.safe_load(path.read_text())["name"]
+        for path in (ROOT / ".github" / "workflows").glob("*.yml")
+    }
+    assert set(BOARD_WORKFLOWS) <= names  # each named workflow exists, so each trigger fires
+
+
+def test_the_event_board_job_is_unchanged():
+    assert _event_board()["jobs"] == yaml.safe_load(LIVE_BOARD.read_text())["jobs"]
+    assert _event_board()["permissions"] == {"contents": "read"}

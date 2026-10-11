@@ -8,7 +8,12 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`board.yml`** (5.8): the delivery board follows events as well as its 10-minute schedule
+  (issues, pull requests, commit statuses, and the runs of "Implementer agent",
+  "Reviewer agent (shadow)" and "CI"); the schedule, `workflow_dispatch`, the `board`
+  concurrency group and the job are unchanged. A person moves it over
+  `.github/workflows/board.yml` and deletes this copy; `tests/test_board.py` reads whichever
+  file has the event triggers, so it passes before and after the move.
 
 ## Applied
 
