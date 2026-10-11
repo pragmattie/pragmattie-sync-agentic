@@ -46,6 +46,7 @@ describe("App", () => {
       { title: "Engineering signals", to: "/signals", name: "signals" },
       { title: "Decision log", to: "/decisions", name: "decisions" },
       { title: "Delivery flow", to: "/flow", name: "flow" },
+      { title: "Delivery forecast", to: "/forecast", name: "forecast" },
     ]);
     const drawer = wrapper.find("[data-test='nav-drawer']");
     const links = drawer.findAll("a");
@@ -53,11 +54,13 @@ describe("App", () => {
       "Engineering signals",
       "Decision log",
       "Delivery flow",
+      "Delivery forecast",
     ]);
     expect(links.map((link) => link.attributes("href"))).toEqual([
       "/signals",
       "/decisions",
       "/flow",
+      "/forecast",
     ]);
   });
 
@@ -96,6 +99,14 @@ describe("App", () => {
 
     expect(wrapper.find("h1").text()).toBe("Decision log");
     expect(document.title).toBe("Decision log · Delivery Insights · PragMattie Sync");
+  });
+
+  it("shows the delivery forecast page", async () => {
+    const { wrapper } = await mountApp("/forecast");
+    await flushPromises();
+
+    expect(wrapper.find("h1").text()).toBe("Delivery forecast");
+    expect(document.title).toBe("Delivery forecast · Delivery Insights · PragMattie Sync");
   });
 
   it("links nowhere in the CRM", async () => {
