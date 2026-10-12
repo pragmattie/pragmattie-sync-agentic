@@ -28,9 +28,10 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sdlc import agent_runs, gate_status
+from sdlc import agent_runs, gate_status, suite_selector
 from sdlc.agents import overrides, pr_risk, triage_comment
 from sdlc.agents.comment import Meta, comment_head, refresh, render, retier
+from sdlc.agents.suite_select import Selection, replace_section, section_lines
 from sdlc.agents.gate import Approvals, Gate, evaluate
 from sdlc.agents.github_effects import Effects
 from sdlc.agents.signoff import (
@@ -193,6 +194,18 @@ class Runner:
         floor = overrides.floor_of(self.policy, pr)
         # a raise made on an earlier commit sticks
         tier = overrides.effective_tier(assessment.assignment.tier, floor, rulings, sha)
+        paths = [file["filename"] for file in self.effects.read_files(pr.number)]
+        selection = suite_selector.recommend(
+            db,
+            pr,
+            sha,
+            paths,
+            tier=tier,
+            policy=self.policy,
+            assessed=assessment.ok,
+            now=now,
+            trigger="poll",
+        )
         self._request_if_covered(db, pr, tier, now)
         # a new commit starts with nothing signed off; the simulated approval is the PR's
         approvals = Approvals(simulated_approved=_simulated_approved(db, pr))
@@ -206,6 +219,7 @@ class Runner:
             meta,
             tier=tier,
             override_lines=_lines(rulings),
+            tests="\n".join(section_lines(selection)),
         )
         row.action_taken = {
             "comment": self.effects.upsert_comment(pr.number, COMMENT_MARKER, body),
@@ -264,12 +278,13 @@ class Runner:
             gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
         self._post_status(pr.number, sha, gate)
         body = (risk_comment.get("body") or "") if risk_comment else ""
+        selection, retested = self._retest(db, pr, sha, tier, decision, now)
         if risk_comment and comment_head(body) == sha:
-            refreshed = body
+            refreshed = replace_section(body, selection) if retested else body
             # every new ruling, accepted or rejected, is shown in the overrides block
             if tier != before or new:
                 refreshed = retier(
-                    body,
+                    refreshed,
                     self.policy,
                     tier=tier,
                     agent_tier=decision.tier,
@@ -284,11 +299,51 @@ class Runner:
             assessment = pr_risk.from_decision(db, pr, decision)
             meta = Meta(decision.id, self.mode, self._approver_name(), sha)
             lines = _lines(rulings)
+            tests = "\n".join(section_lines(selection)) if selection else None
             body = render(
-                assessment, gate, approvals, self.policy, meta, tier=tier, override_lines=lines
+                assessment,
+                gate,
+                approvals,
+                self.policy,
+                meta,
+                tier=tier,
+                override_lines=lines,
+                tests=tests,
             )
             self.effects.upsert_comment(pr.number, COMMENT_MARKER, body, comments)
         gate_status.upsert(db, pr, gate, tier=tier, mode=self.mode, now=now)
+
+    def _retest(
+        self,
+        db: Session,
+        pr: PullRequest,
+        sha: str,
+        tier: str,
+        decision: AgentDecision,
+        now: datetime,
+    ) -> tuple[Selection | None, bool]:
+        """The commit's test recommendation, and whether it was made again just now.
+
+        It is made again, from the stored paths, only when the tier in force has moved away from
+        the tier of the newest recommendation for this commit (a ``/tier`` command).
+        """
+        stored = suite_selector.latest(db, pr, sha)
+        if stored is None:
+            return None, False
+        if stored.tier == tier:
+            return Selection.from_record(stored.output), False
+        selection = suite_selector.recommend(
+            db,
+            pr,
+            sha,
+            stored.output.get("paths") or [],
+            tier=tier,
+            policy=self.policy,
+            assessed=decision.status == "ok",
+            now=now,
+            trigger="tier_change",
+        )
+        return selection, True
 
     def _rule_new(
         self,
