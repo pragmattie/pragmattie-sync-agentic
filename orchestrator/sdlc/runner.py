@@ -1,5 +1,8 @@
 """The shared poll loop: score each new commit once, then keep the ``risk-gate`` in step.
 
+After the open pull requests, at most every two minutes, the test selector's recommendations are
+graded against their commits' finished CI jobs (``sdlc.suite_selector.settle``; reads only).
+
 The triage agent (``sdlc.issue_runner``) and then the forecaster (``sdlc.forecaster``) run in
 the same loop, after it, in the same mode. The planner (``sdlc.plan_runner``) runs last, only
 when ``PLANNER_MODE`` is ``on`` as well.
@@ -55,6 +58,7 @@ from sdlc.audit import TRIAL, decisions_for, record_decision
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
+from sdlc.github_client import GitHubError
 from sdlc.signals.github import Collector
 from sdlc.tables import AgentDecision, Approval, PullRequest
 from sdlc.tiers import Policy, load_policy
@@ -65,6 +69,7 @@ MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=5)
 FIRST_LOOKBACK = timedelta(days=30)
 STATS_EVERY_SECONDS = 3600
+SETTLE_EVERY = timedelta(minutes=2)
 
 
 class Runner:
@@ -90,6 +95,7 @@ class Runner:
         self._posted: dict[int, tuple[str, str, str]] = {}  # the last status posted, per PR
         self._open: set[int] | None = None  # the open PRs at the last poll
         self._comments_since: datetime | None = None
+        self._settled_at: datetime | None = None  # when the test selector last read CI results
 
     def poll_once(self, now: datetime | None = None) -> dict[str, Any]:
         if self.mode == "off":
@@ -120,7 +126,20 @@ class Runner:
                     lambda number=number: collector.collect_pull_request({"number": number}),
                 )
             self._open = numbers
+            if self._settled_at is None or now - self._settled_at >= SETTLE_EVERY:
+                self._settled_at = now  # noted first, so a failure waits as well
+                self._settle(db, now, summary)
         return summary
+
+    def _settle(self, db: Session, now: datetime, summary: dict) -> None:
+        """Grade the test selector's recommendations whose commits have finished CI."""
+        try:
+            suite_selector.settle(db, self.gh, now)
+            db.commit()
+        except GitHubError as error:
+            db.rollback()
+            summary["errors"] += 1
+            log.warning("test selector: %s", error)
 
     def _record_runs(self, db: Session, now: datetime) -> None:
         """Record the implementer's and reviewer's runs from the workflow bot's new comments."""

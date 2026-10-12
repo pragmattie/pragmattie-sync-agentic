@@ -1,8 +1,8 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``) over in-memory pull requests, issues, comments, reviews, statuses and labels, and
-logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
+``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels and
+GitHub Actions runs with their jobs, and logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re
@@ -35,6 +35,8 @@ class FakeGitHub:
         self.repo_labels: dict[str, str] = {}
         self.statuses: list[dict] = []
         self.diffs: dict[int, str] = {}
+        self.runs: list[dict] = []  # Actions runs, each with its head_sha
+        self.jobs: dict[int, list[dict]] = {}  # each run's jobs, every attempt
         self.requests: list[tuple[str, str]] = []
         self.fail_writes: set[str] = set()  # methods that raise, e.g. {"POST"}
         self.limited_until = None
@@ -130,6 +132,14 @@ class FakeGitHub:
             {"user": dict(user), "state": state, "commit_id": sha, "submitted_at": None}
         )
 
+    def add_run(self, sha: str, jobs: list[dict], *, created_at=datetime(2026, 10, 1, 10, 0)):
+        """An Actions run on this commit with its jobs, each ``{"name", "status", ...}``."""
+        self._next_id += 1
+        run = {"id": self._next_id, "head_sha": sha, "created_at": iso(created_at)}
+        self.runs.append(run)
+        self.jobs[run["id"]] = jobs
+        return run
+
     def risk_comment(self, number: int) -> dict | None:
         return next(
             (c for c in self.comments if c["number"] == number and c["user"]["type"] == "Bot"),
@@ -159,6 +169,9 @@ class FakeGitHub:
         path = self._log("GET", path)
         if match := re.fullmatch(r"/pulls/(\d+)", path):
             return self._pr(int(match.group(1)))
+        if path == "/actions/runs":
+            sha = params.get("head_sha")
+            return {"workflow_runs": [run for run in self.runs if run["head_sha"] == sha]}
         if match := re.fullmatch(r"/issues/(\d+)", path):
             number = int(match.group(1))
             return self._issue(number) if number in self.issues else self._pr(number)
@@ -193,6 +206,8 @@ class FakeGitHub:
             return list((self.files if match.group(2) == "files" else self.reviews)[number])
         if match := re.fullmatch(r"/issues/(\d+)/comments", path):
             return [c for c in self.comments if c["number"] == int(match.group(1))]
+        if match := re.fullmatch(r"/actions/runs/(\d+)/jobs", path):
+            return list(self.jobs[int(match.group(1))])
         if match := re.fullmatch(r"/issues/(\d+)/labels", path):
             return [{"name": name} for name in self.issue_labels.get(int(match.group(1)), [])]
         if match := re.fullmatch(r"/issues/(\d+)/events", path):
