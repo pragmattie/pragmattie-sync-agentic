@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, delete, inspect, select, text
 from sqlalchemy.orm import Session
@@ -149,12 +150,31 @@ def _forecast_columns(engine) -> set[str]:
     return {column["name"] for column in inspect(engine).get_columns("sdlc_forecasts")}
 
 
+def _move_to_0007(config: Config, engine) -> None:
+    """Upgrades to 0007 from below it, or downgrades to it from above (CI's MySQL job is at head).
+
+    An upgrade to an older revision is a no-op in Alembic, so it can't be used alone.
+    """
+    with engine.connect() as connection:
+        context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
+        current = context.get_current_revision()
+    script = ScriptDirectory.from_config(config)
+    above = {
+        revision.revision for revision in script.iterate_revisions("heads", "0007_forecasts")
+    } - {"0007_forecasts"}
+    if current in above:
+        command.downgrade(config, "0007_forecasts")
+    else:
+        command.upgrade(config, "0007_forecasts")
+
+
 def _assert_ahead_items_round_trips(url: str) -> None:
     """From 0007, an old forecast row reads ``ahead_items`` 0 after 0008; downgrade drops it."""
     config = _alembic_config()
-    command.upgrade(config, "0007_forecasts")
     engine = create_engine(url)
     try:
+        _move_to_0007(config, engine)
+        assert "ahead_items" not in _forecast_columns(engine)
         with engine.begin() as connection:
             old_id = connection.execute(
                 text(
@@ -180,11 +200,15 @@ def _assert_ahead_items_round_trips(url: str) -> None:
         engine.dispose()
 
 
-def test_ahead_items_reads_0_on_old_rows_and_downgrades(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start", [None, "head"])
+def test_ahead_items_reads_0_on_old_rows_and_downgrades(tmp_path, monkeypatch, start):
+    """Starts from an empty database, and from head as CI's MySQL job does."""
     url = f"sqlite:///{tmp_path / 'ahead.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
     get_settings.cache_clear()
     try:
+        if start:
+            command.upgrade(_alembic_config(), start)
         _assert_ahead_items_round_trips(url)
     finally:
         get_settings.cache_clear()
