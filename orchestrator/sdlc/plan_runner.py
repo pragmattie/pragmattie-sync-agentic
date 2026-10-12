@@ -61,6 +61,7 @@ def as_epic_forecast(row: Forecast) -> EpicForecast:
         history_days=row.history_days,
         runs=row.runs,
         seed=row.seed,
+        ahead_items=row.ahead_items,
     )
 
 

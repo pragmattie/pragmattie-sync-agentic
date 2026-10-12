@@ -3,7 +3,8 @@
 Its subjects are the current simulated sprint and every epic: each open GitHub milestone (real
 work) and each simulated epic. For each it fingerprints the inputs (the day and the open items;
 for a sprint each item's id, points, module and first pull request, for an epic each story's id,
-points and source plus the epic's due date), and saves a forecast with ``sdlc.forecast`` when the
+points and source plus the epic's due date, and for a real milestone each open item ahead of it
+in an earlier milestone), and saves a forecast with ``sdlc.forecast`` when the
 fingerprint differs from the latest saved one: a new day, an item added, closed or re-estimated,
 work starting, or a target date moved. Each save is one ``sdlc_forecasts`` row and one audit row.
 It makes no model call and no GitHub request, so it costs nothing to run.
@@ -41,6 +42,7 @@ from sdlc.forecast import (
     describe,
     describe_epic,
     epic_forecast,
+    open_items_ahead,
     real_epic,
     real_epics,
     simulated_epics,
@@ -90,7 +92,8 @@ def sprint_inputs(db: Session, sprint: Sprint) -> list[dict[str, Any]]:
 
 
 def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
-    """Each open story of ``epic`` (its id, points and source), and the epic's due date."""
+    """Each open story of ``epic`` (its id, points and source), the epic's due date, and each
+    open item ahead of it in an earlier milestone (its id, points and milestone)."""
     rows = db.execute(
         select(Issue.id, Issue.estimate_points, Issue.source).where(
             Issue.epic == epic, Issue.state == "open"
@@ -98,9 +101,14 @@ def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
     ).all()
     milestone = real_epic(db, epic)
     due_on = milestone.due_on if milestone else None
-    return [
-        {"id": issue_id, "points": points, "source": source} for issue_id, points, source in rows
-    ] + [{"due_on": _iso(due_on)}]
+    return (
+        [{"id": issue_id, "points": points, "source": source} for issue_id, points, source in rows]
+        + [{"due_on": _iso(due_on)}]
+        + [
+            {"id": issue_id, "points": points, "milestone": name}
+            for issue_id, points, name in open_items_ahead(db, epic)
+        ]
+    )
 
 
 def latest(db: Session, kind: str, subject: str) -> Forecast | None:
@@ -130,10 +138,11 @@ def _save(
 ) -> Forecast:
     """Write one forecast row and the audit row that records it; flushes, never commits."""
     if isinstance(forecast, SprintForecast):
-        subject, remaining_real = forecast.sprint, 0
+        subject, remaining_real, ahead_items = forecast.sprint, 0, 0
         at_risk, rationale = [_risk(risk) for risk in forecast.at_risk], describe(forecast)
     else:
         subject, remaining_real = forecast.epic, forecast.remaining_real
+        ahead_items = forecast.ahead_items
         at_risk, rationale = [], describe_epic(forecast)
     row = Forecast(
         created_at=now.replace(microsecond=0),
@@ -155,6 +164,7 @@ def _save(
         runs=forecast.runs,
         seed=forecast.seed,
         at_risk=at_risk,
+        ahead_items=ahead_items,
     )
     db.add(row)
     db.flush()

@@ -196,6 +196,18 @@ def test_the_prompt_states_the_forecast_and_lists_each_item(session, milestone, 
     assert lines[-1] == "Next milestone: Planning (M6)"
 
 
+def test_the_prompt_says_when_items_in_earlier_milestones_come_first(session, milestone, forecast):
+    items = milestone_items(session, MILESTONE)
+    line = "10 items in earlier milestones are built first; only this milestone's items are listed."
+    lines = build_prompt(replace(forecast, ahead_items=10), items, "Planning (M6)").splitlines()
+    assert lines[1].startswith("Forecast: P50 ")
+    assert lines[2] == line
+    assert lines[3] == "" and lines[4] == "<items>"
+    plain = build_prompt(forecast, items, "Planning (M6)").splitlines()
+    assert "earlier milestones" not in "\n".join(plain)
+    assert plain[2] == "" and plain[3] == "<items>"
+
+
 def test_an_injected_title_appears_only_inside_items_and_cannot_act(session, milestone, forecast):
     llm = FakeLLM(data=_answer())
     before = session.scalar(select(func.count(Issue.id)))
@@ -383,6 +395,21 @@ def test_the_effect_reuses_the_forecasts_seed_and_is_deterministic(session, fore
         "p85": forecast.p85.isoformat(),
         "on_time_probability": forecast.on_time_probability,
     }
+
+
+def test_the_effect_keeps_the_items_ahead_in_the_queue(session, forecast):
+    ahead = replace(forecast, ahead_items=10)
+    effect = effect_of_deferring(session, ahead, [102, 104])
+    samples = real_throughput(session, today=WEDNESDAY)
+    results = simulate(14, samples, start=WEDNESDAY, runs=RUNS, seed=forecast.seed)  # 10 + 6 - 2
+    assert effect["p50"] == percentile_date(results, 0.5).isoformat()
+    assert effect["p85"] == percentile_date(results, 0.85).isoformat()
+    on_time = sum(1 for day in results if day is not None and day <= TARGET) / RUNS
+    assert effect["on_time_probability"] == on_time
+    # Deferring everything of its own still leaves the items ahead: not certain.
+    everything = effect_of_deferring(session, ahead, list(range(101, 107)))
+    assert everything["on_time_probability"] < 1.0
+    assert everything["p50"] > WEDNESDAY.isoformat()
 
 
 def test_deferring_every_item_finishes_on_the_first_working_day(session, forecast):

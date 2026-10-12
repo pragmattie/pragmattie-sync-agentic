@@ -172,6 +172,9 @@ const trailOptions = {
           >
             <v-card-title data-test="card-label">{{ epic.label }}</v-card-title>
             <v-card-subtitle>{{ epic.remaining_items }} items left</v-card-subtitle>
+            <v-card-subtitle v-if="epic.ahead_items > 0" data-test="ahead">
+              After {{ epic.ahead_items }} items in earlier milestones
+            </v-card-subtitle>
             <v-card-text>
               <v-row>
                 <v-col cols="12" md="6">

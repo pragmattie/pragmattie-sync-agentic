@@ -19,6 +19,7 @@ from sdlc.forecast import (
     describe_epic,
     epic_forecast,
     epic_seed,
+    items_ahead,
     on_time_share,
     percentile_date,
     real_epics,
@@ -557,7 +558,8 @@ def test_a_real_milestone_with_no_closed_stories_uses_the_agents_pace(session, e
     assert result.remaining_points == 5  # the unestimated story counts 0
     assert result.history_days == 7
     assert result.throughput_mean == round(5 / 7, 2)
-    assert result.seed == epic_seed(MILESTONE, WEDNESDAY)
+    assert result.seed == epic_seed("github", WEDNESDAY)  # shared by every real milestone
+    assert result.ahead_items == 0
     assert result.p50 is not None and WEDNESDAY <= result.p50 <= result.p85
     assert result.end_date == date(2026, 10, 16)
     assert 0.0 < result.on_time_probability <= 1.0
@@ -631,6 +633,102 @@ def test_a_real_epic_sharing_a_simulated_name_is_mixed_and_counts_only_real_stor
     assert (result.remaining_items, result.remaining_real, result.remaining_points) == (3, 3, 5)
 
 
+M6 = "M6 Safe releases"
+M7 = "M7 Self-governance"
+
+
+def _milestone(session, number, name, **values):
+    epic = Epic(
+        source="github",
+        external_id=f"milestone-{number}",
+        number=number,
+        name=name,
+        created_at=datetime(2026, 9, 28, 9),
+        **values,
+    )
+    session.add(epic)
+    session.flush()
+    return epic
+
+
+@pytest.fixture
+def in_sequence(session, epics):
+    """M5 (0 open), M6 (10 open) and M7 (4 open), all open, on the epics fixture's history."""
+    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+        issue.state = "closed"  # no closing day, so the real pace is unchanged
+    _milestone(session, 6, M6, due_on=date(2026, 10, 30))
+    _milestone(session, 7, M7, due_on=date(2026, 11, 13))
+    for k in range(10):
+        _issue(session, 600 + k, source="github", epic=M6, estimate_points=2)
+    for k in range(4):
+        _issue(session, 700 + k, source="github", epic=M7, estimate_points=3)
+    session.flush()
+
+
+def test_items_ahead_count_the_open_items_of_earlier_open_milestones(session, in_sequence):
+    assert items_ahead(session, MILESTONE) == 0
+    assert items_ahead(session, M6) == 0  # M5's 0 count
+    assert items_ahead(session, M7) == 10
+    # A closed milestone's open issues, and open synthetic issues, are not ahead.
+    _issue(session, 400, source="github", epic="M4 Closed already")
+    _issue(session, 610, epic=M6)  # synthetic
+    session.flush()
+    assert items_ahead(session, M6) == 0
+    assert items_ahead(session, M7) == 10
+
+
+def test_m10_comes_after_m9_and_an_unnumbered_milestone_has_nothing_ahead(session, in_sequence):
+    _milestone(session, 9, "M9 Later")
+    _milestone(session, 10, "M10 Even later")
+    _milestone(session, 11, "Backlog")
+    _issue(session, 900, source="github", epic="M9 Later")
+    _issue(session, 1000, source="github", epic="M10 Even later")
+    _issue(session, 1100, source="github", epic="Backlog")
+    session.flush()
+    assert items_ahead(session, "M9 Later") == 14
+    assert items_ahead(session, "M10 Even later") == 15
+    assert items_ahead(session, "Backlog") == 0
+    assert items_ahead(session, M7) == 10  # the unnumbered milestone is never ahead
+
+
+def test_a_later_milestone_is_forecast_after_the_earlier_ones(session, in_sequence):
+    m6 = epic_forecast(session, WEDNESDAY, M6, runs=500)
+    m7 = epic_forecast(session, WEDNESDAY, M7, runs=500)
+    assert (m6.ahead_items, m7.ahead_items) == (0, 10)
+    assert (m7.remaining_items, m7.remaining_real, m7.remaining_points) == (4, 4, 12)
+    assert m6.seed == m7.seed == epic_seed("github", WEDNESDAY)
+    assert m7.p50 >= m6.p50 and m7.p85 >= m6.p85
+    # M7's forecast is a forecast of 14 items with the shared seed, judged on all 14.
+    results = simulate(
+        14, real_throughput(session, today=WEDNESDAY), start=WEDNESDAY, runs=500, seed=m7.seed
+    )
+    assert m7.p50 == percentile_date(results, 0.5)
+    assert m7.p85 == percentile_date(results, 0.85)
+    assert m7.on_time_probability == on_time_share(results, date(2026, 11, 13), 14)
+
+
+def test_a_milestone_with_nothing_of_its_own_left_but_items_ahead_is_not_certain(
+    session, in_sequence
+):
+    for issue in session.scalars(select(Issue).where(Issue.epic == M7)):
+        issue.state = "closed"
+    session.flush()
+    m7 = epic_forecast(session, WEDNESDAY, M7, runs=500)
+    assert (m7.remaining_items, m7.ahead_items) == (0, 10)
+    assert m7.on_time_probability < 1.0
+
+
+def test_simulated_epics_have_nothing_ahead_and_are_unchanged(session, epics):
+    before = epic_forecast(session, WEDNESDAY, "Billing", runs=200)
+    _milestone(session, 6, M6)
+    _issue(session, 600, source="github", epic=M6)
+    session.flush()
+    after = epic_forecast(session, WEDNESDAY, "Billing", runs=200)
+    assert after.ahead_items == 0
+    assert after == before
+    assert after.seed == epic_seed("Billing", WEDNESDAY)
+
+
 def _epic(**values):
     defaults = dict(
         epic=MILESTONE,
@@ -661,6 +759,14 @@ def test_describe_epic_for_a_real_epic():
         "Delivery forecasting (M5): 7 items left; P50 Oct 14, P85 not within 260 working days "
         "(agents' pace: 2.1 items per working day over the last 10 working days)."
     )
+
+
+def test_describe_epic_names_the_items_in_earlier_milestones():
+    sequenced = _epic(epic=M7, remaining_items=4, remaining_real=4, ahead_items=10)
+    assert describe_epic(sequenced).startswith(
+        "Self-governance (M7): 4 items left, after 10 items in earlier milestones; P50 Oct 14, "
+    )
+    assert "earlier milestones" not in describe_epic(_epic(epic=M7, ahead_items=0))
 
 
 def test_describe_epic_for_a_simulated_epic():

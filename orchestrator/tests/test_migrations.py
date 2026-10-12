@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, delete, inspect, select
+from sqlalchemy import create_engine, delete, inspect, select, text
 from sqlalchemy.orm import Session
 
 from sdlc.config import get_settings
@@ -64,7 +65,8 @@ def _alembic_config() -> Config:
 def test_history_has_a_single_head():
     script = ScriptDirectory.from_config(_alembic_config())
 
-    assert script.get_heads() == ["0007_forecasts"]
+    assert script.get_heads() == ["0008_forecast_ahead"]
+    assert script.get_revision("0008_forecast_ahead").down_revision == "0007_forecasts"
     assert script.get_revision("0007_forecasts").down_revision == "0006_epics"
     assert script.get_revision("0006_epics").down_revision == "0005_approvals"
     assert script.get_revision("0005_approvals").down_revision == "0004_gate_status"
@@ -140,5 +142,85 @@ def test_a_seed_above_2_31_is_stored_on_mysql():
             _assert_seed_round_trips(engine)
         finally:
             engine.dispose()
+    finally:
+        get_settings.cache_clear()
+
+
+def _forecast_columns(engine) -> set[str]:
+    return {column["name"] for column in inspect(engine).get_columns("sdlc_forecasts")}
+
+
+def _move_to_0007(config: Config, engine) -> None:
+    """Upgrades to 0007 from below it, or downgrades to it from above (CI's MySQL job is at head).
+
+    An upgrade to an older revision is a no-op in Alembic, so it can't be used alone.
+    """
+    with engine.connect() as connection:
+        context = MigrationContext.configure(connection, opts={"version_table": VERSION_TABLE})
+        current = context.get_current_revision()
+    script = ScriptDirectory.from_config(config)
+    above = {
+        revision.revision for revision in script.iterate_revisions("heads", "0007_forecasts")
+    } - {"0007_forecasts"}
+    if current in above:
+        command.downgrade(config, "0007_forecasts")
+    else:
+        command.upgrade(config, "0007_forecasts")
+
+
+def _assert_ahead_items_round_trips(url: str) -> None:
+    """From 0007, an old forecast row reads ``ahead_items`` 0 after 0008; downgrade drops it."""
+    config = _alembic_config()
+    engine = create_engine(url)
+    try:
+        _move_to_0007(config, engine)
+        assert "ahead_items" not in _forecast_columns(engine)
+        with engine.begin() as connection:
+            old_id = connection.execute(
+                text(
+                    "INSERT INTO sdlc_forecasts (created_at, as_of, kind, subject, source, "
+                    "`trigger`, inputs_hash, remaining_items, remaining_points, throughput_mean, "
+                    "history_days, runs, seed) VALUES ('2026-10-11 09:00:00', '2026-10-11', "
+                    "'epic', 'Ahead check', 'github', 'schedule', :hash, 4, 8, 1.0, 5, 1, 1)"
+                ),
+                {"hash": "0" * 64},
+            ).lastrowid
+        try:
+            command.upgrade(config, "0008_forecast_ahead")
+            assert "ahead_items" in _forecast_columns(engine)
+            with Session(engine) as db:
+                assert db.get(Forecast, old_id).ahead_items == 0
+            command.downgrade(config, "0007_forecasts")
+            assert "ahead_items" not in _forecast_columns(engine)
+            command.upgrade(config, "head")
+        finally:
+            with engine.begin() as connection:
+                connection.execute(delete(Forecast.__table__).where(Forecast.id == old_id))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("start", [None, "head"])
+def test_ahead_items_reads_0_on_old_rows_and_downgrades(tmp_path, monkeypatch, start):
+    """Starts from an empty database, and from head as CI's MySQL job does."""
+    url = f"sqlite:///{tmp_path / 'ahead.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    get_settings.cache_clear()
+    try:
+        if start:
+            command.upgrade(_alembic_config(), start)
+        _assert_ahead_items_round_trips(url)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_ahead_items_upgrades_and_downgrades_on_mysql():
+    """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("mysql"):
+        pytest.skip("DATABASE_URL is not MySQL")
+    get_settings.cache_clear()
+    try:
+        _assert_ahead_items_round_trips(url)
     finally:
         get_settings.cache_clear()

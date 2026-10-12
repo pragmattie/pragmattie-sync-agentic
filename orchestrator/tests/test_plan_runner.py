@@ -98,6 +98,14 @@ def save_forecast(engine, subject=MILESTONE, *, on_time=0.4, key="a", at=NOW, so
         return row.id
 
 
+def test_the_planner_takes_the_saved_rows_items_ahead(engine):
+    with Session(engine) as db:
+        row = db.get(Forecast, save_forecast(engine))
+        assert plan_runner.as_epic_forecast(row).ahead_items == 0
+        row.ahead_items = 10
+        assert plan_runner.as_epic_forecast(row).ahead_items == 10
+
+
 def planner_rows(engine):
     with Session(engine) as db:
         query = select(AgentDecision).where(AgentDecision.agent == planner.AGENT)

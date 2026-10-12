@@ -26,6 +26,7 @@ function epic(overrides = {}) {
     subject: "M5",
     source: "github",
     remaining_items: 6,
+    ahead_items: 0,
     end_date: "2026-10-30",
     p50: "2026-10-20",
     p85: "2026-10-27",
@@ -154,6 +155,21 @@ describe("DeliveryForecastView", () => {
       "Agents' pace: 1.2 items per working day over the last 20 working days",
     );
     expect(wrapper.findAllComponents(ChartStub)).toHaveLength(2);
+  });
+
+  it("says how many items in earlier milestones come first, only when there are some", async () => {
+    const epics = [
+      epic(),
+      epic({ id: 11, subject: "M6", label: "Release gate (M6)", ahead_items: 10 }),
+    ];
+    vi.spyOn(api, "getJson").mockResolvedValue(feed({ epics }));
+
+    const wrapper = await mountView();
+
+    const [first, second] = wrapper.findAll("[data-test='real-card']");
+    expect(first.find("[data-test='ahead']").exists()).toBe(false);
+    expect(first.text()).not.toContain("earlier milestones");
+    expect(second.find("[data-test='ahead']").text()).toBe("After 10 items in earlier milestones");
   });
 
   it("shows a card's target chance, or No target set", async () => {
