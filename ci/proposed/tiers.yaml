@@ -1,0 +1,106 @@
+# Governance policy: tiers, score bands, floors, caps, the objection window and the build model.
+# People edit this file; the orchestrator's loader (orchestrator/sdlc/tiers.py) checks it and
+# refuses a bad one, so no pull request is ever gated on a broken policy.
+
+# Score bands: a 0-100 risk score lands in the highest band whose `min` it reaches.
+score_bands:
+  - {tier: T0, min: 0}
+  - {tier: T1, min: 20}
+  - {tier: T2, min: 50}
+  - {tier: T3, min: 80}
+
+# Floors: a minimum tier, whatever the score says. When several match, the highest wins.
+floors:
+  - name: billing_auth
+    tier: T3
+    when: {modules: [billing_auth]}
+  - name: schema_migration
+    tier: T3
+    when: {touches_migration: true}
+  - name: pipeline_or_forecasting
+    tier: T2
+    when: {modules: [pipeline, forecasting]}
+  # The change edits .github/workflows/ or orchestrator/policies/.
+  - name: governance_files
+    tier: T2
+    when: {touches_governance: true}
+
+# Caps: a maximum tier, applied only when no floor matches.
+caps:
+  - name: docs_or_config_only
+    tier: T0
+    when: {docs_only: true}
+
+# Objection window: a pull request at a listed tier, changing only files under the listed paths,
+# that the AI reviewer approved, counts as signed off once that approval is `minutes` old, unless
+# a person comments /hold. A person's approval still merges it at once. T2 and T3 can never be
+# listed.
+objection_window:
+  tiers: [T1]
+  minutes: 60
+  paths: [apps/crm-web/, apps/insights-web/]
+
+# Fallback tier: if the risk agent fails, a pull request gets its floor tier, or this one when no
+# floor applies. It fails closed, never open.
+fallback_tier: T2
+
+# Tiers, lowest to highest: who must approve, what is tested, how it deploys, what the agent's
+# own check means, and what a release needs.
+tiers:
+  T0:
+    name: Auto
+    humans: 0
+    senior_human: false
+    code_owner: false
+    tests: selected suites
+    deploy: automatic
+    agent_check: passes_alone
+    release: automatic
+  T1:
+    name: Light
+    humans: 1
+    senior_human: false
+    code_owner: false
+    tests: selected suites
+    deploy: automatic after merge
+    agent_check: passes_after_approvals
+    release: automatic
+  T2:
+    name: Standard
+    humans: 1
+    senior_human: true
+    code_owner: false
+    tests: full suite
+    deploy: release gate checks
+    agent_check: passes_after_approvals
+    release: checks
+  T3:
+    name: Critical
+    humans: 2
+    senior_human: true
+    code_owner: true
+    tests: full suite + manual QA
+    deploy: human sign-off required
+    agent_check: reports_only
+    release: signoff
+
+# The release gate: what a release needs before it deploys. A release is everything merged since
+# the last deploy, at the highest tier among its PRs; each tier's `release` says which of these
+# apply: automatic (none), checks, or signoff (the checks, then a person approves the deployment).
+release_gate:
+  environment: production  # the GitHub environment a deploy uses
+  signoff_environment: production-signoff  # the same, with a required reviewer
+  failure_rate:  # hold when too many recent deploys caused an incident
+    window_days: 7
+    max: 0.3
+    min_deploys: 3  # fewer deploys than this in the window: too few to judge, don't hold
+  synthetic_signoff_hours: 4  # simulated history: how long after merge a T3 sign-off arrives
+
+# Models the implementer workflow uses to build and review. A `model:` label on the issue wins.
+# .github/workflows/implement.yml still holds its own copy of this rule until you change it.
+models:
+  build: claude-opus-5-5
+  review: claude-opus-5-5
+  label_overrides:
+    "model:sonnet": claude-sonnet-5
+    "model:opus": claude-opus-5-5

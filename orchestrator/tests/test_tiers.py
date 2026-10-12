@@ -6,13 +6,28 @@ import yaml
 
 from sdlc.tiers import (
     POLICY,
+    RELEASE_DEFAULTS,
     TIER_IDS,
     Models,
     ObjectionWindow,
     PolicyError,
+    ReleaseRules,
     Rule,
     Tier,
     load_policy,
+)
+
+# The release gate section waits in ci/proposed/ until a person applies it; read it from there
+# while it exists, else from the live policy.
+PROPOSED = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "tiers.yaml"
+RELEASE_POLICY = PROPOSED if PROPOSED.exists() else POLICY
+V1_RELEASE = ReleaseRules(
+    environment="production",
+    signoff_environment="production-signoff",
+    failure_window_days=7,
+    failure_max=0.3,
+    failure_min_deploys=3,
+    synthetic_signoff_hours=4.0,
 )
 
 VALID = {
@@ -206,3 +221,60 @@ def test_unparseable_yaml_is_refused(tmp_path):
 
     with pytest.raises(PolicyError, match=r"^policy: "):
         load_policy(path)
+
+
+def test_release_defaults_are_v1_values_when_the_section_is_absent(tmp_path):
+    assert ReleaseRules(**RELEASE_DEFAULTS) == V1_RELEASE
+    assert load_policy(_write(tmp_path, VALID)).release == V1_RELEASE
+
+
+def test_the_release_gate_section_loads_the_same_values():
+    policy = load_policy(RELEASE_POLICY)
+
+    assert policy.release == V1_RELEASE
+    assert [policy.tiers[tier].release for tier in TIER_IDS] == [
+        "automatic", "automatic", "checks", "signoff",
+    ]  # fmt: skip
+
+
+def test_the_release_gate_section_overrides_the_defaults(tmp_path):
+    data = copy.deepcopy(VALID)
+    data["release_gate"] = {
+        "environment": "prod",
+        "signoff_environment": "prod-approval",
+        "failure_rate": {"window_days": 14, "max": 0.5, "min_deploys": 5},
+        "synthetic_signoff_hours": 8,
+    }
+
+    assert load_policy(_write(tmp_path, data)).release == ReleaseRules(
+        "prod", "prod-approval", 14, 0.5, 5, 8.0
+    )
+
+
+MISSING_OR_INVALID = r"^release_gate: missing or invalid setting \("
+SAME_ENVIRONMENT = r"^release_gate: the sign-off environment must be a separate environment$"
+BAD_FAILURE_RATE = r"^release_gate: failure_rate needs window_days >= 1 and max from 0 to 1$"
+RELEASE_REFUSALS = {
+    "section not a mapping": ("production", MISSING_OR_INVALID),
+    "failure_rate not a mapping": ({"failure_rate": [7]}, MISSING_OR_INVALID),
+    "environment empty": ({"environment": ""}, MISSING_OR_INVALID),
+    "signoff environment not text": ({"signoff_environment": 3}, MISSING_OR_INVALID),
+    "window_days fractional": ({"failure_rate": {"window_days": 1.5}}, MISSING_OR_INVALID),
+    "min_deploys text": ({"failure_rate": {"min_deploys": "three"}}, MISSING_OR_INVALID),
+    "max text": ({"failure_rate": {"max": "a third"}}, MISSING_OR_INVALID),
+    "signoff hours bool": ({"synthetic_signoff_hours": True}, MISSING_OR_INVALID),
+    "signoff hours negative": ({"synthetic_signoff_hours": -1}, MISSING_OR_INVALID),
+    "same environment": ({"signoff_environment": "production"}, SAME_ENVIRONMENT),
+    "window_days below 1": ({"failure_rate": {"window_days": 0}}, BAD_FAILURE_RATE),
+    "max below 0": ({"failure_rate": {"max": -0.1}}, BAD_FAILURE_RATE),
+    "max above 1": ({"failure_rate": {"max": 1.5}}, BAD_FAILURE_RATE),
+}
+
+
+@pytest.mark.parametrize(("section", "message"), RELEASE_REFUSALS.values(), ids=RELEASE_REFUSALS)
+def test_bad_release_gate_settings_are_refused(tmp_path, section, message):
+    data = copy.deepcopy(VALID)
+    data["release_gate"] = section
+
+    with pytest.raises(PolicyError, match=message):
+        load_policy(_write(tmp_path, data))

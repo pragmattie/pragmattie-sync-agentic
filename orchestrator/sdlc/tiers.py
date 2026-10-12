@@ -16,6 +16,15 @@ AGENT_CHECKS = ("passes_alone", "passes_after_approvals", "reports_only")
 RELEASES = ("automatic", "checks", "signoff")  # lowest demand to highest
 WHEN_KEYS = ("modules", "touches_migration", "docs_only", "touches_governance")
 NEVER_IN_WINDOW = ("T2", "T3")
+# v1's release gate settings, used for any value the policy's ``release_gate`` section leaves out.
+RELEASE_DEFAULTS = {
+    "environment": "production",
+    "signoff_environment": "production-signoff",
+    "failure_window_days": 7,
+    "failure_max": 0.3,
+    "failure_min_deploys": 3,
+    "synthetic_signoff_hours": 4.0,
+}
 
 
 class PolicyError(ValueError):
@@ -57,6 +66,16 @@ class Models:
 
 
 @dataclass(frozen=True)
+class ReleaseRules:
+    environment: str
+    signoff_environment: str
+    failure_window_days: int
+    failure_max: float
+    failure_min_deploys: int
+    synthetic_signoff_hours: float
+
+
+@dataclass(frozen=True)
 class Policy:
     bands: tuple[tuple[int, str], ...]
     floors: tuple[Rule, ...]
@@ -65,6 +84,7 @@ class Policy:
     tiers: dict[str, Tier]
     objection_window: ObjectionWindow | None
     models: Models
+    release: ReleaseRules
 
 
 def load_policy(path: Path = POLICY) -> Policy:
@@ -85,6 +105,7 @@ def load_policy(path: Path = POLICY) -> Policy:
         tiers=_tiers(data.get("tiers")),
         objection_window=_window(data.get("objection_window")),
         models=_models(data.get("models")),
+        release=_release(data.get("release_gate")),
     )
 
 
@@ -209,3 +230,45 @@ def _models(raw) -> Models:
         if not isinstance(label, str) or not label.startswith("model:"):
             raise PolicyError(f"models: override key {label!r} must start with 'model:'")
     return Models(build=raw["build"], review=raw["review"], label_overrides=dict(overrides))
+
+
+def _release(raw) -> ReleaseRules:
+    """The ``release_gate`` section over v1's defaults; no section gives the defaults."""
+    try:
+        raw = {} if raw is None else raw
+        failure_rate = raw.get("failure_rate") or {}
+        values = {
+            "environment": raw.get("environment", RELEASE_DEFAULTS["environment"]),
+            "signoff_environment": raw.get(
+                "signoff_environment", RELEASE_DEFAULTS["signoff_environment"]
+            ),
+            "failure_window_days": failure_rate.get(
+                "window_days", RELEASE_DEFAULTS["failure_window_days"]
+            ),
+            "failure_max": failure_rate.get("max", RELEASE_DEFAULTS["failure_max"]),
+            "failure_min_deploys": failure_rate.get(
+                "min_deploys", RELEASE_DEFAULTS["failure_min_deploys"]
+            ),
+            "synthetic_signoff_hours": raw.get(
+                "synthetic_signoff_hours", RELEASE_DEFAULTS["synthetic_signoff_hours"]
+            ),
+        }
+        for key in ("environment", "signoff_environment"):
+            if not isinstance(values[key], str) or not values[key].strip():
+                raise ValueError(f"{key} must be a name")
+        for key in ("failure_window_days", "failure_min_deploys"):
+            if not _is_whole(values[key]):
+                raise ValueError(f"{key.removeprefix('failure_')} must be a whole number")
+        for key in ("failure_max", "synthetic_signoff_hours"):
+            if isinstance(values[key], bool) or not isinstance(values[key], int | float):
+                raise ValueError(f"{key.removeprefix('failure_')} must be a number")
+            values[key] = float(values[key])
+        if values["failure_min_deploys"] < 0 or values["synthetic_signoff_hours"] < 0:
+            raise ValueError("min_deploys and synthetic_signoff_hours must not be negative")
+    except (AttributeError, ValueError) as err:
+        raise PolicyError(f"release_gate: missing or invalid setting ({err})") from err
+    if values["signoff_environment"] == values["environment"]:
+        raise PolicyError("release_gate: the sign-off environment must be a separate environment")
+    if values["failure_window_days"] < 1 or not 0 <= values["failure_max"] <= 1:
+        raise PolicyError("release_gate: failure_rate needs window_days >= 1 and max from 0 to 1")
+    return ReleaseRules(**values)
