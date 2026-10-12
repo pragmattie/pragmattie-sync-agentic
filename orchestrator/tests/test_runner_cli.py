@@ -106,7 +106,11 @@ def test_try_yes_makes_one_call_records_one_trial_row_and_writes_nothing_to_gith
     # A later poll still assesses the commit: a trial never counts as an attempt.
     runner.poll_once(datetime(2026, 10, 6, 12, 0))
     assert len(llm.calls) == 2
-    assert [(r.trigger, r.attempt) for r in _decisions(engine)] == [("trial", 4), ("poll", 1)]
+    assert [(r.agent, r.trigger, r.attempt) for r in _decisions(engine)] == [
+        ("pr_risk", "trial", 4),
+        ("pr_risk", "poll", 1),
+        ("test_selector", "poll", 1),
+    ]
 
 
 def _counts(engine):
