@@ -2,7 +2,8 @@
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
 ``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels and
-GitHub Actions runs with their jobs, and logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
+GitHub Actions runs with their jobs, and logs every request it is sent. ``FakeLLM`` answers with
+a fixed adjustment or raises a given error.
 """
 
 import re
