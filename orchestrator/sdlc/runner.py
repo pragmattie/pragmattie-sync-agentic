@@ -31,7 +31,6 @@ from sqlalchemy.orm import Session
 from sdlc import agent_runs, gate_status, suite_selector
 from sdlc.agents import overrides, pr_risk, triage_comment
 from sdlc.agents.comment import Meta, comment_head, refresh, render, retier
-from sdlc.agents.suite_select import Selection, replace_section, section_lines
 from sdlc.agents.gate import Approvals, Gate, evaluate
 from sdlc.agents.github_effects import Effects
 from sdlc.agents.signoff import (
@@ -44,6 +43,7 @@ from sdlc.agents.signoff import (
     ticked,
     window_signoff_fields,
 )
+from sdlc.agents.suite_select import Selection, replace_section, section_lines
 from sdlc.approver import (
     Approver,
     ApproverError,
