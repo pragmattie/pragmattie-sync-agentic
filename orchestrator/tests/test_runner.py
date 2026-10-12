@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -747,7 +748,11 @@ def test_settling_runs_at_most_every_two_minutes(gh, engine, policy):
     assert _runs_read(gh) == 2
 
 
-def test_a_github_error_while_settling_is_counted_and_waits(gh, engine, policy, caplog):
+def test_a_github_error_while_settling_is_counted_and_waits(
+    gh, engine, policy, caplog, monkeypatch
+):
+    # alembic's fileConfig (the migration tests) disables loggers that already exist
+    monkeypatch.setattr(logging.getLogger("sdlc.runner"), "disabled", False)
     gh.add_pr(1, SHA, additions=T1_SIZE)
     _ci_run(gh)
     fetch = gh.get
@@ -760,7 +765,8 @@ def test_a_github_error_while_settling_is_counted_and_waits(gh, engine, policy, 
 
     gh.get = failing
     runner = _runner(gh, engine, policy)
-    summary = runner.poll_once(NOON)
+    with caplog.at_level(logging.WARNING, "sdlc.runner"):
+        summary = runner.poll_once(NOON)
     assert summary["errors"] == 1
     assert "test selector: GitHub 502 on /actions/runs: bad gateway" in caplog.text
     assert _ci_results(engine) == []
