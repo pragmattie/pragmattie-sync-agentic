@@ -8,7 +8,11 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`tiers.yaml`** (6.3): the whole live policy with a `release_gate:` section added (the
+  release gate's environments, failure-rate hold and simulated sign-off delay). Its values equal
+  the defaults in `sdlc/tiers.py`, so behaviour is the same before and after. Apply it over
+  `orchestrator/policies/tiers.yaml` and delete this copy; the tests read this copy while it
+  exists, else the live one.
 
 ## Applied
 

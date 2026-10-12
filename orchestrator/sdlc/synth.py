@@ -14,7 +14,8 @@ Patterns built in on purpose, which the later models should rediscover:
   reviews and more rework.
 
 Merged work ships in near-daily releases of ``main``, and about 3% of merged pull requests (mostly
-the risky ones) cause a production incident after their release.
+the risky ones) cause a production incident after their release. Every release goes through the
+release gate's rules (6.3), with one audit row per verdict, so a held release ships on a later day.
 
 Recent feature work belongs to four epics, and each epic still has unscheduled stories to do, so
 every epic has a pace and a remaining backlog.
@@ -40,10 +41,23 @@ from sqlalchemy import delete, exists, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sdlc import forecaster
+from sdlc import forecaster, scoring
+from sdlc.agents import release_gate
+from sdlc.audit import record_decision
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
-from sdlc.tables import CIRun, Deployment, Engineer, Incident, Issue, PullRequest, Sprint
+from sdlc.governance import assign_tier, facts_of
+from sdlc.tables import (
+    AgentDecision,
+    CIRun,
+    Deployment,
+    Engineer,
+    Incident,
+    Issue,
+    PullRequest,
+    Sprint,
+)
+from sdlc.tiers import load_policy
 
 SOURCE = "synthetic"
 
@@ -258,15 +272,6 @@ def _past_weekend(moment: datetime) -> datetime:
     return datetime.combine(monday, time(9, 30))
 
 
-def may_ship(deploy_at: datetime, pull_requests: list[PullRequest]) -> bool:
-    """Whether a release of ``pull_requests`` may ship at ``deploy_at``.
-
-    Always yes for now; the release gate (6.3) replaces this, and a hold only moves the work to a
-    later deploy.
-    """
-    return True
-
-
 def _pick(rng: random.Random, items, weights):
     return rng.choices(items, weights=weights)[0]
 
@@ -296,6 +301,10 @@ class _Builder:
         self.pr_number = 0
         self.issues: list[Issue] = []
         self.merged: list[tuple[PullRequest, float]] = []
+        self.policy = load_policy()
+        self.tiers: dict[int, str] = {}
+        self.shipped: list[tuple[datetime, list[Incident]]] = []
+        self.incidents: list[Incident] = []
         self.counts = {
             "engineers": len(self.engineers),
             "sprints": 0,
@@ -599,7 +608,10 @@ class _Builder:
             pr.reverted = rng.random() < 0.5
 
     def _deploys(self) -> None:
-        """Walks day by day from the first merge to today, releasing ``main`` on most weekdays."""
+        """Walks day by day from the first merge to today, releasing ``main`` on most weekdays.
+
+        Each release goes through the release gate; a held one leaves its PRs for a later day.
+        """
         waiting = sorted((pr for pr, _ in self.merged), key=lambda pr: (pr.merged_at, pr.number))
         if not waiting:
             return
@@ -609,18 +621,82 @@ class _Builder:
             deploy_at = _after(datetime.combine(day, DEPLOY_TIME), rng.uniform(0, 1))
             wants = rng.random() < DEPLOY_CHANCE
             ready = [pr for pr in waiting if pr.merged_at < deploy_at]
-            if (
-                day.weekday() < 5
-                and wants
-                and deploy_at <= self.now
-                and ready
-                and may_ship(deploy_at, ready)
-            ):
-                waiting = waiting[len(ready) :]
-                self._deploy(day, deploy_at, ready)
+            if day.weekday() < 5 and wants and deploy_at <= self.now and ready:
+                if self._release(day, deploy_at, ready):
+                    waiting = waiting[len(ready) :]
             day += timedelta(days=1)
 
-    def _deploy(self, day: date, deploy_at: datetime, prs: list[PullRequest]) -> None:
+    def _tier(self, pr: PullRequest) -> str:
+        """The PR's tier by the rubric, scored once, when it is first considered for a release."""
+        if pr.number not in self.tiers:
+            score = scoring.score_pull_request(self.db, pr).total
+            self.tiers[pr.number] = assign_tier(self.policy, score, facts_of(pr)).tier
+        return self.tiers[pr.number]
+
+    def _release_facts(
+        self, deploy_at: datetime, prs: list[PullRequest]
+    ) -> release_gate.ReleaseFacts:
+        rules = self.policy.release
+        tier = release_gate.release_tier([self._tier(pr) for pr in prs], self.policy.fallback_tier)
+        modules = sorted({pr.module for pr in prs if pr.module})
+        open_incidents = tuple(
+            release_gate.OpenIncident(incident.module, title=incident.title)
+            for incident in self.incidents
+            if incident.module in modules
+            and incident.opened_at <= deploy_at
+            and (incident.resolved_at is None or incident.resolved_at > deploy_at)
+        )
+        window_start = deploy_at - timedelta(days=rules.failure_window_days)
+        recent = [
+            incidents for deployed_at, incidents in self.shipped if deployed_at >= window_start
+        ]
+        failed = sum(
+            any(incident.opened_at <= deploy_at for incident in incidents) for incidents in recent
+        )
+        signoff = None
+        if self.policy.tiers[tier].release == "signoff":
+            signoff_after = timedelta(hours=rules.synthetic_signoff_hours)
+            signoff = all(
+                pr.merged_at + signoff_after <= deploy_at
+                for pr in prs
+                if self.policy.tiers[self._tier(pr)].release == "signoff"
+            )
+        return release_gate.ReleaseFacts(
+            tier=tier,
+            prs=tuple(sorted(pr.number for pr in prs)),
+            modules=tuple(modules),
+            ci="passed",
+            open_incidents=open_incidents,
+            recent_deploys=len(recent),
+            failed_deploys=failed,
+            signoff=signoff,
+        )
+
+    def _release(self, day: date, deploy_at: datetime, prs: list[PullRequest]) -> bool:
+        """Puts the release through the gate, deploys it if it may ship, and audits the verdict."""
+        facts = self._release_facts(deploy_at, prs)
+        verdict = release_gate.evaluate(self.policy, facts, mode="enforce")
+        if verdict.verdict == "release":
+            action = {"deployed": self._deploy(day, deploy_at, prs).version}
+        else:
+            action = {"held": True, "state": verdict.state}
+        record_decision(
+            self.db,
+            agent=release_gate.AGENT,
+            agent_version=release_gate.AGENT_VERSION,
+            subject_type="release",
+            subject_source=SOURCE,
+            subject_id=max(facts.prs),
+            head_sha=f"syn-{day.isoformat()}",
+            trigger="schedule",
+            now=deploy_at,
+            tier=facts.tier,
+            output=release_gate.output_of(facts, verdict, description=verdict.description),
+            action_taken=action,
+        )
+        return verdict.verdict == "release"
+
+    def _deploy(self, day: date, deploy_at: datetime, prs: list[PullRequest]) -> Deployment:
         self.counts["deployments"] += 1
         number = self.counts["deployments"]
         deployment = Deployment(
@@ -636,11 +712,15 @@ class _Builder:
             ),
         )
         self.db.add(deployment)
-        for pr in sorted(prs, key=lambda pr: pr.number):
-            if pr.caused_incident:
-                self._incident(pr, deployment)
+        incidents = [
+            self._incident(pr, deployment)
+            for pr in sorted(prs, key=lambda pr: pr.number)
+            if pr.caused_incident
+        ]
+        self.shipped.append((deploy_at, [incident for incident in incidents if incident]))
+        return deployment
 
-    def _incident(self, pr: PullRequest, deployment: Deployment) -> None:
+    def _incident(self, pr: PullRequest, deployment: Deployment) -> Incident | None:
         """The incident ``pr`` caused after ``deployment``, from the PR's own stream.
 
         An incident that would open after ``now`` is not written yet.
@@ -653,22 +733,23 @@ class _Builder:
         restore_hours = rng.uniform(0.5, 3) if pr.reverted else rng.uniform(2, 14)
         resolved_at = _after(opened_at, restore_hours)
         if opened_at > self.now:
-            return
+            return None
         module = MODULE_DISPLAY_NAMES[pr.module]
-        self.db.add(
-            Incident(
-                source=SOURCE,
-                external_id=f"syn-incident-{pr.number}",
-                title=f"{module} degraded after {deployment.version}",
-                severity=severity,
-                module=pr.module,
-                opened_at=opened_at,
-                resolved_at=resolved_at if resolved_at <= self.now else None,
-                caused_by_pr=pr,
-                deployment=deployment,
-            )
+        incident = Incident(
+            source=SOURCE,
+            external_id=f"syn-incident-{pr.number}",
+            title=f"{module} degraded after {deployment.version}",
+            severity=severity,
+            module=pr.module,
+            opened_at=opened_at,
+            resolved_at=resolved_at if resolved_at <= self.now else None,
+            caused_by_pr=pr,
+            deployment=deployment,
         )
+        self.db.add(incident)
+        self.incidents.append(incident)
         self.counts["incidents"] += 1
+        return incident
 
 
 def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, int]:
@@ -678,8 +759,17 @@ def build(db: Session, now: datetime | None = None, seed: int = 7) -> dict[str, 
 
 
 def reset(db: Session) -> None:
-    """Deletes every synthetic row, children first, and the forecasts made from them."""
+    """Deletes every synthetic row, children first, and the forecasts made from them.
+
+    The simulated release verdicts go too (they are regenerated with the history); every other
+    audit row is kept.
+    """
     forecaster.reset(db)
+    db.execute(
+        delete(AgentDecision).where(
+            AgentDecision.agent == release_gate.AGENT, AgentDecision.subject_source == SOURCE
+        )
+    )
     synthetic_prs = select(PullRequest.id).where(PullRequest.source == SOURCE)
     synthetic_issues = select(Issue.id).where(Issue.source == SOURCE)
     synthetic_sprints = select(Sprint.id).where(Sprint.source == SOURCE)
