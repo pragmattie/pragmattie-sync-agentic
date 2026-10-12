@@ -387,6 +387,80 @@ def test_a_change_to_a_real_epic_re_forecasts_it(engine, runner, milestone, chan
         assert rows[1].p50 >= rows[0].p50 and rows[1].p85 >= rows[0].p85
 
 
+NEXT = "M6 Safe releases"
+
+
+@pytest.fixture
+def next_milestone(engine, milestone):
+    """M6, after M5's two open stories, with one open story of its own."""
+    with Session(engine) as db:
+        db.add(
+            Epic(
+                source="github",
+                external_id="milestone-6",
+                number=6,
+                name=NEXT,
+                due_on=date(2026, 10, 30),
+                created_at=datetime(2026, 9, 28, 9),
+            )
+        )
+        db.add(
+            Issue(
+                source="github",
+                external_id="real-next",
+                number=300,
+                title="Next",
+                estimate_points=2,
+                epic=NEXT,
+                created_at=datetime(2026, 9, 28, 9),
+            )
+        )
+        db.commit()
+    return NEXT
+
+
+def test_epic_inputs_include_the_open_items_ahead(engine, next_milestone):
+    with Session(engine) as db:
+        rows = epic_inputs(db, NEXT)
+        ahead = list(db.scalars(select(Issue.id).where(Issue.epic == MILESTONE).order_by(Issue.id)))
+    assert {"due_on": "2026-10-30"} in rows
+    assert [row for row in rows if "milestone" in row] == [
+        {"id": ahead[0], "points": 3, "milestone": MILESTONE},
+        {"id": ahead[1], "points": None, "milestone": MILESTONE},
+    ]
+
+
+def test_closing_an_item_ahead_re_forecasts_the_later_milestone(engine, runner, next_milestone):
+    runner.poll_once(WEDNESDAY)
+    (first,) = _epic_rows(engine, NEXT)
+    assert (first.remaining_items, first.ahead_items) == (1, 2)
+    assert "1 items left, after 2 items in earlier milestones" in _rationale(engine, first.id)
+    (m5,) = _epic_rows(engine, MILESTONE)
+    assert m5.ahead_items == 0
+    assert first.seed == m5.seed
+    assert first.p50 >= m5.p50 and first.p85 >= m5.p85
+
+    with Session(engine) as db:
+        story = db.scalars(select(Issue).where(Issue.epic == MILESTONE).order_by(Issue.id)).first()
+        story.state = "closed"
+        story.closed_at = WEDNESDAY
+        db.commit()
+    summary = runner.poll_once(WEDNESDAY + timedelta(minutes=5))
+    assert (summary["assessed"], summary["unchanged"]) == (2, 5)  # M5 and M6
+    rows = _epic_rows(engine, NEXT)
+    assert [row.trigger for row in rows] == ["schedule", "change"]
+    assert (rows[1].remaining_items, rows[1].ahead_items) == (1, 1)
+
+
+def _rationale(engine, forecast_id):
+    with Session(engine) as db:
+        return db.scalars(
+            select(AgentDecision.output).where(
+                AgentDecision.subject_type == "epic", AgentDecision.subject_id == forecast_id
+            )
+        ).one()["rationale"]
+
+
 # moved and the dashboard
 
 
@@ -454,6 +528,9 @@ def test_serialize_gives_iso_dates_and_the_full_seed(db):
     assert data["created_at"] == "2026-10-05T09:00:00"
     assert data["p50"] == "2026-10-09" and data["p85"] is None
     assert data["seed"] == 2**32 - 1
+    assert data["ahead_items"] == 0
+    row.ahead_items = 10
+    assert serialize(row)["ahead_items"] == 10
     json.dumps(data)
 
 
