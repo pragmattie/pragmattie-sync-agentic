@@ -1,5 +1,6 @@
 import time
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timedelta
 from statistics import mean
 from unittest import mock
@@ -9,8 +10,18 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from sdlc import synth
+from sdlc.agents import release_gate
 from sdlc.db import Base
-from sdlc.tables import CIRun, Deployment, Engineer, Incident, Issue, PullRequest, Sprint
+from sdlc.tables import (
+    AgentDecision,
+    CIRun,
+    Deployment,
+    Engineer,
+    Incident,
+    Issue,
+    PullRequest,
+    Sprint,
+)
 
 EVEN_WEEK_NOW = datetime(2026, 10, 2, 15, 30)  # ISO week 40, a Friday
 ODD_WEEK_NOW = datetime(2026, 7, 15, 11, 0)  # ISO week 29, a Wednesday
@@ -494,22 +505,103 @@ def test_ongoing_incidents_have_no_resolution_and_nothing_is_after_now(session, 
         assert incident.resolved_at is None or incident.resolved_at <= now
 
 
+def _release_rows(session):
+    return session.scalars(
+        select(AgentDecision)
+        .where(AgentDecision.agent == "release_gate")
+        .order_by(AgentDecision.created_at)
+    ).all()
+
+
 def test_a_held_release_ships_later_with_the_work_that_waited(session):
-    held_day = None
+    evaluate = release_gate.evaluate
+    held = []
 
-    def hold_first(deploy_at, pull_requests):
-        nonlocal held_day
-        if held_day is None:
-            held_day = deploy_at.date()
-        return deploy_at.date() != held_day
+    def hold_first(policy, facts, *, mode):
+        verdict = evaluate(policy, facts, mode=mode)
+        if not held:
+            held.append(facts.prs)
+            return replace(verdict, verdict="hold", state="pending", reasons=("held",))
+        return verdict
 
-    with mock.patch.object(synth, "may_ship", side_effect=hold_first):
+    with mock.patch.object(release_gate, "evaluate", side_effect=hold_first):
         synth.build(session, now=EVEN_WEEK_NOW)
+    first, second = _release_rows(session)[:2]
+    assert first.action_taken == {"held": True, "state": "pending"}
+    assert first.output["reasons"] == ["held"]
+    assert second.action_taken.get("deployed")
+    assert set(held[0]) <= set(second.output["prs"])
     deployments = _deployments(session)
-    assert deployments[0].deployed_at.date() > held_day
+    assert deployments[0].deployed_at == second.created_at > first.created_at
     merged = _merged(session)
     last = deployments[-1].deployed_at
     assert sum(d.pr_count for d in deployments) == sum(pr.merged_at < last for pr in merged)
+
+
+def test_every_release_is_judged_by_the_gate_and_some_are_held(built):
+    rows = _release_rows(built)
+    deployments = _deployments(built)
+    held = [row for row in rows if row.action_taken.get("held")]
+
+    assert len(rows) == len(deployments) + len(held)
+    assert held
+    assert [row.action_taken for row in rows if not row.action_taken.get("held")] == [
+        {"deployed": deployment.version} for deployment in deployments
+    ]
+    for row in rows:
+        assert (row.agent_version, row.subject_type, row.subject_source) == (
+            "v1", "release", "synthetic",
+        )  # fmt: skip
+        assert row.trigger == "schedule"
+        assert row.head_sha == f"syn-{row.created_at.date().isoformat()}"
+        assert row.subject_id == max(row.output["prs"])
+        assert row.output["ci"] == "passed"
+        assert row.output["description"].startswith(f"{row.tier} · ")
+    for row in held:
+        assert row.output["verdict"] == "hold"
+        assert row.action_taken == {"held": True, "state": "pending"}
+        assert row.output["reasons"]
+
+
+def test_a_held_releases_prs_ship_with_the_next_deploy(built):
+    rows = _release_rows(built)
+    shipped_later = 0
+    for index, row in enumerate(rows):
+        if not row.action_taken.get("held"):
+            continue
+        following = [r for r in rows[index + 1 :] if r.action_taken.get("deployed")]
+        if following:
+            assert set(row.output["prs"]) <= set(following[0].output["prs"])
+            shipped_later += 1
+    assert shipped_later
+
+
+def test_every_incident_follows_its_deploy(built):
+    incidents = built.scalars(select(Incident)).all()
+
+    assert incidents
+    for incident in incidents:
+        assert incident.opened_at > incident.deployment.deployed_at
+        assert incident.caused_by_pr.merged_at < incident.deployment.deployed_at
+
+
+def test_a_t3_release_waits_for_its_simulated_signoff(built):
+    merged_at = {pr.number: pr.merged_at for pr in _merged(built)}
+    rows = [row for row in _release_rows(built) if row.output["signoff"] is not None]
+
+    assert any(row.output["signoff"] for row in rows)
+    for row in rows:
+        assert row.tier == "T3"
+        assert row.output["environment"] == "production-signoff"
+        waiting = "waiting for sign-off (simulated)" in row.output["reasons"]
+        assert waiting is (row.output["signoff"] is False)
+        if waiting:
+            newest = max(merged_at[number] for number in row.output["prs"])
+            assert newest + timedelta(hours=4) > row.created_at
+    for row in _release_rows(built):
+        if row.tier != "T3":
+            assert row.output["signoff"] is None
+            assert row.output["environment"] == "production"
 
 
 def test_deploys_and_incidents_never_change_issues_prs_or_ci_runs(tmp_path):
@@ -638,6 +730,7 @@ def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
 
     assert session.scalar(select(func.count(CIRun.id))) > 0
     assert session.scalar(select(func.count(Incident.id))) > 0
+    assert _release_rows(session)
 
     synth.reset(session)
     session.commit()
@@ -645,6 +738,7 @@ def test_reset_leaves_no_synthetic_rows_and_keeps_github_rows(built):
     assert not synth.has_synthetic(session)
     for table in (Engineer, Sprint, Issue, PullRequest, CIRun, Deployment, Incident):
         assert session.scalar(select(func.count()).where(table.source == "synthetic")) == 0
+    assert _release_rows(session) == []
     assert session.scalars(select(PullRequest.title)).all() == ["Real change"]
 
 
