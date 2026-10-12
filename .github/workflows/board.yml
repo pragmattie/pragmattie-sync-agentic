@@ -1,5 +1,5 @@
-# Keeps the delivery board current (4.16). Proposed by an agent in ci/proposed/ and applied here
-# by a person.
+# Keeps the delivery board current (4.16; event triggers 5.8). Proposed by an agent in
+# ci/proposed/ and applied here by a person (with a guard for pull requests from forks).
 #
 # Every run recomputes every issue's card from GitHub alone (labels, the pull requests that close
 # the issue, their risk-gate status and risk comment) and sets each value that differs. It needs
@@ -8,20 +8,39 @@
 
 name: Delivery board
 
+# It follows events as well as the schedule, which GitHub runs late or not at all when busy. The
+# schedule stays as a safety net and workflow_dispatch for a run by hand. No trigger fires on this
+# workflow's own runs, and the sync writes only to the project (no labels, comments or statuses),
+# so it never starts itself.
+
 on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+  issues:
+    types: [opened, edited, labeled, unlabeled, closed, reopened, milestoned, demilestoned]
+  pull_request:
+    types: [opened, reopened, synchronize, closed, labeled, unlabeled]
+  status:  # v1 posts risk-gate as a commit status, which decides Gated
+  # The implementer's comments and labels use the workflow token, which starts no workflow, so
+  # its runs are the signal that work started or finished.
+  workflow_run:
+    workflows: ["Implementer agent", "Reviewer agent (shadow)", "CI"]
+    types: [requested, completed]
 
 permissions:
   contents: read
 
+# One run at a time: a burst of events gives one run and at most one waiting.
 concurrency:
   group: board
   cancel-in-progress: false
 
 jobs:
   sync:
+    # A fork's pull request gets no secrets, so the app token step would fail; the board reads
+    # nothing from a fork's PR that its next scheduled or event run won't pick up anyway.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
