@@ -594,3 +594,75 @@ def test_nothing_in_the_runner_ever_approves(gh, engine, policy, approver):
         runner.poll_once(NOON + timedelta(minutes=minute))
     assert _approvals(engine) == [(1, "T3", "pending", None)]
     assert gh.statuses[-1]["description"].endswith("simulated second approval")
+
+
+def _selector(engine):
+    return _rows(engine, "test_selector")
+
+
+def test_the_risk_comment_carries_the_tests_section_and_one_poll_row(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    _runner(gh, engine, policy).poll_once(NOON)
+    body = gh.risk_comment(1)["body"]
+    assert "<!-- tests -->\n**Tests** (the test selector's recommendation" in body
+    assert "- Would run: **CRM web**" in body
+    assert "  - CRM web: code changed in apps/crm-web/src/App.vue" in body
+    assert "- Would skip: CRM API, Orchestrator, Migrations, Insights web" in body
+    [row] = _selector(engine)
+    assert (row.trigger, row.head_sha, row.attempt, row.tier) == ("poll", SHA, 1, "T1")
+    assert row.output["suites"] == ["web"]
+    assert row.output["paths"] == ["apps/crm-web/src/App.vue"]
+    assert ("GET", "/pulls/1/files") in gh.requests
+    assert not [path for _, path in gh.writes() if "/actions" in path]
+
+
+def test_a_tier_t3_command_writes_one_tier_change_row_and_rewrites_the_section(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    gh.comment(1, "/tier T3 this touches the forecast maths")
+    runner.poll_once(NOON + timedelta(minutes=1))
+    runner.poll_once(NOON + timedelta(minutes=2))  # the tier stays the same: no new row
+    poll, change = _selector(engine)
+    assert (change.trigger, change.attempt, change.tier) == ("tier_change", 2, "T3")
+    assert change.output["suites"] == ["api", "orchestrator", "migrations", "web", "insights-web"]
+    assert change.output["paths"] == poll.output["paths"]
+    body = gh.risk_comment(1)["body"]
+    assert "- Would run every job: T3 runs the full suite (full suite + manual QA)." in body
+    assert "- Would skip" not in body
+    assert body.count("<!-- tests -->") == 1
+    assert "## Risk review: T3 (Critical), raised from T1 by a person" in body
+    assert not [path for _, path in gh.writes() if "/actions" in path]
+
+
+def test_a_failed_then_successful_assessment_writes_two_selector_rows(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    llm = FakeLLM(error=LLMError("timeout", "slow"))
+    runner = _runner(gh, engine, policy, llm=llm)
+    runner.poll_once(NOON)
+    assert (
+        "- Would run every job: the risk agent couldn't score this commit"
+        in (gh.risk_comment(1)["body"])
+    )
+    llm.error = None
+    runner.poll_once(NOON + timedelta(minutes=5))
+    failed, scored = _selector(engine)
+    assert (failed.attempt, failed.output["full"]) == (
+        1,
+        "the risk agent couldn't score this commit, so nothing is skipped",
+    )
+    assert len(failed.output["suites"]) == 5
+    assert (scored.attempt, scored.tier, scored.output["suites"]) == (2, "T1", ["web"])
+    assert "- Would run: **CRM web**" in gh.risk_comment(1)["body"]
+    assert not [path for _, path in gh.writes() if "/actions" in path]
+
+
+def test_a_repaired_risk_comment_keeps_the_tests_section_without_a_new_row(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    gh.fail_writes = {"POST"}
+    runner.poll_once(NOON)
+    gh.fail_writes = set()
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert "- Would run: **CRM web**" in gh.risk_comment(1)["body"]
+    assert len(_selector(engine)) == 1
