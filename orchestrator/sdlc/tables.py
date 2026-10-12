@@ -312,7 +312,8 @@ class Forecast(Base):
     """One saved sprint or epic forecast. Append-only: a fresh forecast is a new row.
 
     ``source`` is "synthetic", "github" or "mixed"; ``end_date`` is a sprint's last day or an
-    epic's target.
+    epic's target. ``ahead_items`` is how many open items in earlier milestones a real milestone
+    was forecast after (0 for sprints and simulated epics).
     """
 
     __tablename__ = "sdlc_forecasts"
@@ -337,3 +338,4 @@ class Forecast(Base):
     runs: Mapped[int]
     seed: Mapped[int] = mapped_column(BigInteger)
     at_risk: Mapped[list | None] = mapped_column(JSON)
+    ahead_items: Mapped[int] = _count()

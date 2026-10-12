@@ -181,12 +181,19 @@ def build_prompt(forecast: EpicForecast, items: list[Item], next_milestone: str)
         else "an unknown"
     )
     lines = "\n".join(_item_line(item) for item in items) or "(no open items)"
+    ahead = ""
+    if forecast.ahead_items > 0:
+        ahead = (
+            f"{forecast.ahead_items} items in earlier milestones are built first; only this "
+            "milestone's items are listed.\n"
+        )
     return (
         f"Milestone: {epic_label(forecast.epic)}, target {_day(forecast.end_date)}, "
         f"{days_left} working days left (today {forecast.as_of.isoformat()}).\n"
         f"Forecast: P50 {_day(forecast.p50)}, P85 {_day(forecast.p85)}, {chance} chance of "
         f"meeting the target. The agents finish about {forecast.throughput_mean} items per "
-        "working day.\n\n"
+        "working day.\n"
+        f"{ahead}\n"
         f"<items>\n{lines}\n</items>\n\n"
         f"Next milestone: {next_milestone}\n"
     )
@@ -195,17 +202,18 @@ def build_prompt(forecast: EpicForecast, items: list[Item], next_milestone: str)
 def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]) -> dict[str, Any]:
     """The forecast's own simulation (same seed and pace samples) without ``deferred`` items.
 
-    Only numbers that are open items of the milestone count, so a caller can't overstate it.
+    Only numbers that are open items of the milestone count, so a caller can't overstate it. The
+    items ahead in earlier milestones stay: deferring moves items to the next milestone, so it
+    never changes what is built first.
     """
     samples = real_throughput(db, today=forecast.as_of)
     open_numbers = {item.number for item in milestone_items(db, forecast.epic)}
     remaining = max(0, forecast.remaining_items - len(open_numbers & set(deferred)))
-    results = simulate(
-        remaining, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed
-    )
+    total = forecast.ahead_items + remaining
+    results = simulate(total, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed)
     on_time = None
-    if forecast.end_date is not None and forecast.runs and (any(samples) or not remaining):
-        on_time = on_time_share(results, forecast.end_date, remaining)
+    if forecast.end_date is not None and forecast.runs and (any(samples) or not total):
+        on_time = on_time_share(results, forecast.end_date, total)
     return {
         "p50": _iso(percentile_date(results, 0.5)),
         "p85": _iso(percentile_date(results, 0.85)),

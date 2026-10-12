@@ -9,8 +9,10 @@ never finish later.
 
 Sprints are simulated only: nothing assigns real issues a sprint, so the sprint forecast covers the
 simulated history (calibration data). Real work is forecast by milestone: each open GitHub milestone
-is an epic, forecast at the agents' pace across all real work. The simulated history's epics are
-forecast at their own pace.
+is an epic, forecast at the agents' pace across all real work and in sequence: the agents finish one
+milestone before the next starts, so a milestone's forecast plays forward the open items in the
+earlier open milestones and then its own, with one seed per day shared by every milestone. The
+simulated history's epics are forecast at their own pace, each alone.
 
 Run ``python -m sdlc.forecast`` to print the current simulated sprint's forecast.
 """
@@ -30,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
-from sdlc.epics import epic_label
+from sdlc.epics import epic_label, milestone_order
 from sdlc.tables import Epic, Issue, PullRequest, Sprint
 
 HISTORY_DAYS = 84  # six two-week sprints
@@ -404,6 +406,32 @@ def real_epic(db: Session, name: str) -> Epic | None:
     ).first()
 
 
+def open_items_ahead(db: Session, epic: str) -> list[tuple[int, int | None, str]]:
+    """The open real issues in the open real milestones before ``epic``: (id, points, milestone).
+
+    Milestones are ordered by the number after M; a milestone with no number, and every
+    simulated epic, has nothing ahead.
+    """
+    milestone = real_epic(db, epic)
+    number = milestone_order(epic)[0]
+    if milestone is None or number == sys.maxsize:
+        return []
+    earlier = [other.name for other in real_epics(db) if milestone_order(other.name)[0] < number]
+    if not earlier:
+        return []
+    rows = db.execute(
+        select(Issue.id, Issue.estimate_points, Issue.epic)
+        .where(Issue.epic.in_(earlier), Issue.source == "github", Issue.state == "open")
+        .order_by(Issue.id)
+    ).all()
+    return [(issue_id, points, name) for issue_id, points, name in rows]
+
+
+def items_ahead(db: Session, epic: str) -> int:
+    """How many open real issues are built before ``epic``'s (``open_items_ahead``)."""
+    return len(open_items_ahead(db, epic))
+
+
 @dataclass
 class EpicForecast:
     epic: str
@@ -421,13 +449,16 @@ class EpicForecast:
     history_days: int
     runs: int
     seed: int
+    ahead_items: int = 0
 
 
 def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> EpicForecast:
     """``epic``'s forecast: a real milestone at the agents' pace, a simulated epic at its own.
 
     A real epic counts only its real stories; its source is mixed if open synthetic stories share
-    its name. Items without points count as 0 points.
+    its name. Items without points count as 0 points. A real milestone is forecast after the items
+    ahead of it (``items_ahead``), with the seed every real milestone shares that day, so a later
+    milestone is never forecast earlier than one before it.
     """
     milestone = real_epic(db, epic)
     story_source = "github" if milestone else "synthetic"
@@ -446,16 +477,20 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
             .limit(1)
         ).first()
         source = "mixed" if shared is not None else "github"
+        ahead = items_ahead(db, epic)
+        seed = epic_seed("github", today)
     else:
         samples = daily_throughput(db, today=today, epic=epic)
         history_days = HISTORY_DAYS
         end_date = None
         source = "synthetic"
-    seed = epic_seed(epic, today)
-    results = simulate(len(items), samples, start=today, runs=runs, seed=seed)
+        ahead = 0
+        seed = epic_seed(epic, today)
+    total = ahead + len(items)
+    results = simulate(total, samples, start=today, runs=runs, seed=seed)
     on_time = None
-    if end_date is not None and runs and (any(samples) or not items):
-        on_time = on_time_share(results, end_date, len(items))
+    if end_date is not None and runs and (any(samples) or not total):
+        on_time = on_time_share(results, end_date, total)
     return EpicForecast(
         epic=epic,
         source=source,
@@ -472,6 +507,7 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         history_days=history_days,
         runs=runs,
         seed=seed,
+        ahead_items=ahead,
     )
 
 
@@ -499,8 +535,11 @@ def describe_epic(forecast: EpicForecast) -> str:
             f"agents' pace: {forecast.throughput_mean:.1f} items per working day over the last "
             f"{forecast.history_days} working days"
         )
+    ahead = ""
+    if forecast.ahead_items > 0:
+        ahead = f", after {forecast.ahead_items} items in earlier milestones"
     return (
-        f"{epic_label(forecast.epic)}: {forecast.remaining_items} items left; "
+        f"{epic_label(forecast.epic)}: {forecast.remaining_items} items left{ahead}; "
         f"P50 {_short(forecast.p50)}, P85 {_short(forecast.p85)}{target} ({pace})."
     )
 
