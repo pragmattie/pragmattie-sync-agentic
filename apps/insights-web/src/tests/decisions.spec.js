@@ -12,7 +12,9 @@ import {
   prettyJson,
   signalRows,
   STATUS_OPTIONS,
+  STATUS_VALUES,
   statusColor,
+  statusLabel,
   subjectLabel,
   TIME_FORMAT,
   totalsLine,
@@ -107,7 +109,7 @@ describe("statusColor", () => {
   });
 
   it("offers every status as its own filter option", () => {
-    expect(STATUS_OPTIONS).toEqual([
+    expect(STATUS_VALUES).toEqual([
       "ok",
       "error",
       "timeout",
@@ -117,6 +119,15 @@ describe("statusColor", () => {
       "rejected",
       "missed",
     ]);
+    expect(STATUS_OPTIONS.map((option) => option.value)).toEqual(STATUS_VALUES);
+  });
+
+  it("labels missed with what it means and the rest by name", () => {
+    const missed = "CI failed a job the test selector would have skipped";
+    expect(statusLabel("missed")).toBe(missed);
+    expect(statusLabel("error")).toBe("error");
+    expect(STATUS_OPTIONS.at(-1)).toEqual({ title: missed, value: "missed" });
+    expect(STATUS_OPTIONS[0]).toEqual({ title: "ok", value: "ok" });
   });
 });
 

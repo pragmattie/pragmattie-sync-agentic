@@ -10,6 +10,7 @@ import {
   MISSING,
   prettyJson,
   signalRows,
+  STATUS_LABELS,
   statusColor,
   subjectLabel,
 } from "../decisions";
@@ -112,6 +113,13 @@ const signals = computed(() => signalRows(props.decision?.signals));
           >
             {{ decision.status }}
           </v-chip>
+          <div
+            v-if="STATUS_LABELS[decision.status]"
+            class="text-caption text-medium-emphasis mt-1"
+            data-test="drawer-status-label"
+          >
+            {{ STATUS_LABELS[decision.status] }}
+          </div>
         </div>
         <v-btn
           icon="mdi-close"

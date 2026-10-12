@@ -52,6 +52,7 @@ describe("DecisionDrawer", () => {
 
     expect(wrapper.find("[data-test='drawer-title']").text()).toBe("PR risk · PR #42");
     expect(wrapper.find("[data-test='drawer-status']").text()).toBe("ok");
+    expect(wrapper.find("[data-test='drawer-status-label']").exists()).toBe(false);
     const details = wrapper.find("[data-test='drawer-details']").text();
     expect(details).toContain("claude-sonnet-5-5");
     expect(details).toContain("v3 · fedcba987654");
@@ -70,6 +71,15 @@ describe("DecisionDrawer", () => {
     expect(wrapper.find("[data-test='drawer-override']").exists()).toBe(false);
     expect(wrapper.find("[data-test='drawer-supersedes'] a").attributes("href")).toBe(
       "/decisions?decision=4",
+    );
+  });
+
+  it("says what a missed test selector result means", async () => {
+    const wrapper = await mountDrawer({ ...DECISION, agent: "test_selector", status: "missed" });
+
+    expect(wrapper.find("[data-test='drawer-status']").text()).toBe("missed");
+    expect(wrapper.find("[data-test='drawer-status-label']").text()).toBe(
+      "CI failed a job the test selector would have skipped",
     );
   });
 

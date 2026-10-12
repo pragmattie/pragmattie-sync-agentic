@@ -118,8 +118,17 @@ export const SUBJECT_OPTIONS = [
   { title: "Release", value: "release" },
 ];
 
+// What a status means, where its name alone doesn't say.
+export const STATUS_LABELS = {
+  missed: "CI failed a job the test selector would have skipped",
+};
+
+export function statusLabel(status) {
+  return STATUS_LABELS[status] ?? status;
+}
+
 // The API matches status exactly, so every failure kind is its own option.
-export const STATUS_OPTIONS = [
+export const STATUS_VALUES = [
   "ok",
   "error",
   "timeout",
@@ -129,6 +138,8 @@ export const STATUS_OPTIONS = [
   "rejected",
   "missed",
 ];
+
+export const STATUS_OPTIONS = STATUS_VALUES.map((value) => ({ title: statusLabel(value), value }));
 
 export const TIER_OPTIONS = ["T0", "T1", "T2", "T3"];
 
