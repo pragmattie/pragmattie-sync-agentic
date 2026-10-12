@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sdlc import suite_selector
 from sdlc.agents.suite_select import (
     CI_SUITES,
     TESTS_END,
@@ -18,9 +19,10 @@ from sdlc.agents.suite_select import (
     with_flaky,
 )
 from sdlc.db import Base
-from sdlc.suite_selector import recommend
+from sdlc.suite_selector import ci_results, describe, recommend, report, settle, unsettled
 from sdlc.tables import AgentDecision, CIRun, PullRequest
 from sdlc.tiers import load_policy
+from tests.fakes import FakeGitHub, iso
 
 NOW = datetime(2026, 10, 6, 12, 0)
 SHA = "a" * 40
@@ -221,3 +223,239 @@ def test_recommend_records_one_row_per_attempt(db, policy):
     assert first.action_taken == {"shown_in": "the risk comment's Tests section"}
     assert (second.attempt, second.tier, second.trigger) == (2, "T3", "tier_change")
     assert second.output["suites"] == list(CI_SUITES)
+
+
+JOB_NAMES = {
+    "api": "CRM API (lint + tests)",
+    "web": "CRM web (tests + build)",
+    "insights-web": "Insights web (tests + build)",
+    "orchestrator": "Orchestrator (lint + tests)",
+    "migrations": "Migrations on MySQL",
+}
+
+
+def _job(suite, conclusion="success", *, attempt=1, seconds=60, status="completed"):
+    start = NOW - timedelta(hours=1)
+    return {
+        "name": JOB_NAMES.get(suite, suite),
+        "status": status,
+        "conclusion": conclusion if status == "completed" else None,
+        "run_attempt": attempt,
+        "started_at": iso(start),
+        "completed_at": iso(start + timedelta(seconds=seconds)) if status == "completed" else None,
+    }
+
+
+def _ci(gh, sha=SHA, **overrides):
+    """One CI run on the commit with every job passing, 60 seconds each, but for ``overrides``."""
+    jobs = []
+    for suite in CI_SUITES:
+        jobs += overrides.get(suite, [_job(suite)])
+    return gh.add_run(sha, jobs)
+
+
+def _pr(db, number=7):
+    pr = PullRequest(
+        source="github",
+        external_id=f"pr-{number}",
+        number=number,
+        title="x",
+        created_at=NOW - timedelta(1),
+    )
+    db.add(pr)
+    return pr
+
+
+def _recommend(db, policy, pr, sha=SHA, paths=("apps/crm-web/a.vue",), *, now=NOW, tier="T1"):
+    return recommend(db, pr, sha, list(paths), tier=tier, policy=policy, assessed=True, now=now)
+
+
+def _results(db):
+    query = select(AgentDecision).where(AgentDecision.trigger == "ci_result")
+    return list(db.scalars(query.order_by(AgentDecision.id)))
+
+
+def test_ci_results_waits_for_every_job_and_then_reads_each_final_attempt():
+    gh = FakeGitHub()
+    assert ci_results(gh, SHA) is None
+    _ci(gh, web=[_job("web", status="in_progress")])
+    assert ci_results(gh, SHA) is None
+    gh.jobs[gh.runs[0]["id"]][CI_SUITES.index("web")] = _job("web", seconds=95)
+    results = ci_results(gh, SHA)
+    assert set(results) == set(CI_SUITES)
+    assert results["web"] == {"conclusion": "success", "flaky": False, "seconds": 95}
+    assert ("GET", "/actions/runs") in gh.requests
+
+
+def test_ci_results_waits_while_a_job_is_missing_or_cancelled():
+    gh = FakeGitHub()
+    gh.add_run(SHA, [_job(suite) for suite in CI_SUITES if suite != "api"])
+    assert ci_results(gh, SHA) is None
+    gh.runs.clear()
+    _ci(gh, api=[_job("api", "cancelled")])
+    assert ci_results(gh, SHA) is None
+    _ci(gh, api=[_job("api", "skipped")])
+    assert ci_results(gh, SHA) is None
+
+
+def test_ci_results_takes_the_last_attempt_across_runs_and_flags_a_failed_then_passed_job():
+    gh = FakeGitHub()
+    gh.add_run(
+        SHA,
+        [_job(s) for s in CI_SUITES if s != "api"]
+        + [_job("api", attempt=2), _job("api", "failure", attempt=1), _job("Deploy", "failure")],
+    )
+    results = ci_results(gh, SHA)
+    assert results["api"]["flaky"] is True
+    assert results["api"]["conclusion"] == "success"
+    _ci(gh, migrations=[_job("migrations", "failure")])  # a newer run: its result wins
+    gh.runs[-1]["created_at"] = iso(NOW)
+    results = ci_results(gh, SHA)
+    assert results["migrations"] == {"conclusion": "failure", "flaky": False, "seconds": 60}
+    assert results["api"]["flaky"] is True  # an earlier run's failure still counts
+
+
+def test_a_job_without_times_counts_no_seconds():
+    gh = FakeGitHub()
+    _ci(gh, web=[{**_job("web"), "started_at": None}])
+    assert ci_results(gh, SHA)["web"]["seconds"] == 0
+
+
+def test_settle_records_one_ok_row_once_every_job_finishes_and_then_nothing(db, policy):
+    gh = FakeGitHub()
+    pr = _pr(db)
+    recommendation = _recommend(db, policy, pr)
+    rows = list(db.scalars(select(AgentDecision)))
+    later = NOW + timedelta(minutes=30)
+    _ci(gh, api=[_job("api", status="queued")])
+    assert settle(db, gh, later) == 0
+    gh.jobs[gh.runs[0]["id"]][0] = _job("api", seconds=120)
+    assert settle(db, gh, later) == 1
+    [row] = _results(db)
+    assert (row.agent, row.trigger, row.status) == ("test_selector", "ci_result", "ok")
+    assert row.tier == "T1"
+    assert (row.subject_id, row.head_sha, row.attempt) == (7, SHA, 2)
+    assert row.created_at == later
+    assert row.output["recommendation_id"] == rows[0].id
+    assert row.output["suites"] == list(recommendation.suites) == ["web"]
+    assert row.output["skipped"] == ["api", "orchestrator", "migrations", "insights-web"]
+    assert (row.output["missed"], row.output["caught"]) == ([], [])
+    assert row.output["saved_seconds"] == 120 + 60 * 3
+    assert row.output["results"]["api"]["seconds"] == 120
+    assert settle(db, gh, later + timedelta(minutes=2)) == 0
+    assert [path for method, path in gh.requests if method != "GET"] == []
+
+
+def test_a_failed_skipped_job_is_a_miss_and_a_failed_selected_job_is_caught(db, policy):
+    gh = FakeGitHub()
+    _recommend(db, policy, _pr(db))
+    _ci(
+        gh,
+        web=[_job("web", "failure")],
+        api=[_job("api", "failure")],
+        orchestrator=[_job("orchestrator", "failure"), _job("orchestrator", attempt=2)],
+    )
+    settle(db, gh, NOW)
+    [row] = _results(db)
+    assert row.status == "missed"
+    assert (row.output["missed"], row.output["caught"]) == (["api"], ["web"])
+    assert row.output["results"]["orchestrator"]["flaky"] is True
+
+
+def test_the_newest_recommendation_is_graded_and_old_commits_are_not_read(db, policy):
+    gh = FakeGitHub()
+    pr = _pr(db)
+    _recommend(db, policy, pr, now=NOW - timedelta(days=8), sha="b" * 40)
+    _recommend(db, policy, pr, now=NOW - timedelta(hours=2))
+    newest = _recommend(db, policy, pr, now=NOW - timedelta(hours=1), tier="T3")
+    assert [(row.head_sha, row.tier) for row in unsettled(db, NOW)] == [(SHA, "T3")]
+    _ci(gh)
+    _ci(gh, sha="b" * 40)
+    assert settle(db, gh, NOW) == 1
+    [row] = _results(db)
+    assert (row.tier, row.attempt, row.output["suites"]) == ("T3", 3, list(newest.suites))
+    assert row.output["saved_seconds"] == 0
+    assert unsettled(db, NOW) == []
+    runs_read = [path for _, path in gh.requests if path == "/actions/runs"]
+    assert len(runs_read) == 1
+
+
+def _settled(db, number, sha, *, missed=(), caught=(), flaky=(), saved=0, suites=("web",)):
+    skipped = [suite for suite in CI_SUITES if suite not in suites]
+    results = {
+        suite: {
+            "conclusion": "failure" if suite in missed or suite in caught else "success",
+            "flaky": suite in flaky,
+            "seconds": 60,
+        }
+        for suite in CI_SUITES
+    }
+    db.add(
+        AgentDecision(
+            created_at=NOW,
+            agent="test_selector",
+            agent_version="v1",
+            subject_type="pr",
+            subject_source="github",
+            subject_id=number,
+            trigger="ci_result",
+            head_sha=sha,
+            attempt=2,
+            status="missed" if missed else "ok",
+            output={
+                "recommendation_id": 1,
+                "suites": list(suites),
+                "skipped": skipped,
+                "results": results,
+                "missed": list(missed),
+                "caught": list(caught),
+                "saved_seconds": saved,
+            },
+        )
+    )
+    db.flush()
+
+
+def test_nothing_settled_says_so(db):
+    assert report(db)["commits"] == 0
+    assert describe(report(db)) == (
+        "No commits have finished CI since the test selector started recommending."
+    )
+
+
+def test_report_counts_every_settled_commit(db):
+    _settled(db, 7, "a" * 40, missed=("api",), caught=("web",), saved=240)
+    _settled(db, 8, "b" * 40, flaky=("web", "orchestrator"), saved=130, suites=CI_SUITES)
+    assert report(db) == {
+        "commits": 2,
+        "run": 6,
+        "skipped": 4,
+        "misses": [(7, "api")],
+        "caught": 1,
+        "flaky": 2,
+        "saved_minutes": 6.2,
+    }
+    assert describe(report(db)) == (
+        "Test selector track record: 2 commits with CI results.\n"
+        "  Would have run 6 jobs and skipped 4, saving about 6.2 CI minutes.\n"
+        "  Skipped jobs that really failed (misses): 1\n"
+        "    PR #7: api\n"
+        "  Failures caught by jobs it would have run: 1\n"
+        "  Jobs that failed and then passed on a re-run (flaky): 2\n"
+        "  CI still runs every job, so these are what skipping would have done, not what it did."
+    )
+
+
+def test_one_commit_is_singular(db):
+    _settled(db, 7, SHA, saved=240)
+    text = describe(report(db))
+    assert text.startswith("Test selector track record: 1 commit with CI results.\n")
+    assert "  Skipped jobs that really failed (misses): 0\n  Failures caught" in text
+
+
+def test_the_report_command_prints_the_track_record(sqlite_engine, capsys):
+    Base.metadata.create_all(sqlite_engine)
+    assert suite_selector.main(["report"], engine=sqlite_engine) == 0
+    assert capsys.readouterr().out == (
+        "No commits have finished CI since the test selector started recommending.\n"
+    )

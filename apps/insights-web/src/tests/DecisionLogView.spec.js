@@ -260,7 +260,8 @@ describe("DecisionLogView", () => {
     mockApi();
     const { wrapper, router } = await mountView();
 
-    expect(filter(wrapper, "status").props("items")).toEqual([
+    const items = filter(wrapper, "status").props("items");
+    expect(items.map((item) => item.value)).toEqual([
       "ok",
       "error",
       "timeout",
@@ -270,6 +271,7 @@ describe("DecisionLogView", () => {
       "rejected",
       "missed",
     ]);
+    expect(items.at(-1).title).toBe("CI failed a job the test selector would have skipped");
 
     await navigate(router, () =>
       filter(wrapper, "status").vm.$emit("update:modelValue", "rate_limited"),

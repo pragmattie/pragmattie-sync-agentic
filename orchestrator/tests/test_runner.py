@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -9,12 +10,14 @@ from sdlc import approver as approver_module
 from sdlc import runner as runner_module
 from sdlc.agents.llm import LLMError
 from sdlc.agents.signoff import WINDOW_AGENT
+from sdlc.agents.suite_select import CI_SUITES
 from sdlc.approver import load_approvers
 from sdlc.db import Base
+from sdlc.github_client import GitHubError
 from sdlc.runner import Runner
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
 from sdlc.tiers import load_policy
-from tests.fakes import WORKFLOW_BOT, FakeGitHub, FakeLLM
+from tests.fakes import WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
 
 NOON = datetime(2026, 10, 6, 12, 0)
 SHA = "a" * 40
@@ -666,3 +669,117 @@ def test_a_repaired_risk_comment_keeps_the_tests_section_without_a_new_row(gh, e
     runner.poll_once(NOON + timedelta(minutes=1))
     assert "- Would run: **CRM web**" in gh.risk_comment(1)["body"]
     assert len(_selector(engine)) == 1
+
+
+JOB_NAMES = {
+    "api": "CRM API (lint + tests)",
+    "web": "CRM web (tests + build)",
+    "insights-web": "Insights web (tests + build)",
+    "orchestrator": "Orchestrator (lint + tests)",
+    "migrations": "Migrations on MySQL",
+}
+
+
+def _ci_run(gh, sha=SHA, running=(), failed=()):
+    """One CI run on the commit: 90 seconds per job, ``running`` jobs not finished yet."""
+    jobs = []
+    for suite in CI_SUITES:
+        done = suite not in running
+        jobs.append(
+            {
+                "name": JOB_NAMES[suite],
+                "status": "completed" if done else "in_progress",
+                "conclusion": ("failure" if suite in failed else "success") if done else None,
+                "run_attempt": 1,
+                "started_at": iso(NOON - timedelta(minutes=10)),
+                "completed_at": iso(NOON - timedelta(minutes=10, seconds=-90)) if done else None,
+            }
+        )
+    return gh.add_run(sha, jobs)
+
+
+def _ci_results(engine):
+    return [row for row in _selector(engine) if row.trigger == "ci_result"]
+
+
+def test_a_commit_is_graded_once_every_ci_job_has_finished(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    run = _ci_run(gh, running=("api",))
+    runner = _runner(gh, engine, policy)
+    summary = runner.poll_once(NOON)
+    assert summary["errors"] == 0
+    assert _ci_results(engine) == []
+    api = gh.jobs[run["id"]][0]
+    api.update(
+        status="completed", conclusion="success", completed_at=iso(NOON - timedelta(minutes=8.5))
+    )
+    runner.poll_once(NOON + timedelta(minutes=2))
+    [row] = _ci_results(engine)
+    assert (row.status, row.attempt, row.tier) == ("ok", 2, "T1")
+    assert row.output["missed"] == []
+    assert row.output["saved_seconds"] == 4 * 90
+    for minutes in (4, 6, 8):
+        runner.poll_once(NOON + timedelta(minutes=minutes))
+    assert len(_ci_results(engine)) == 1
+    assert not [path for _, path in gh.writes() if "/actions" in path]
+
+
+def test_a_failed_skipped_job_is_recorded_as_missed(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    _ci_run(gh, failed=("api",))
+    _runner(gh, engine, policy).poll_once(NOON)
+    [row] = _ci_results(engine)
+    assert (row.status, row.output["missed"]) == ("missed", ["api"])
+
+
+def _runs_read(gh):
+    return len([path for _, path in gh.requests if path == "/actions/runs"])
+
+
+def test_settling_runs_at_most_every_two_minutes(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    _ci_run(gh, running=("web",))
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    assert _runs_read(gh) == 1
+    runner.poll_once(NOON + timedelta(seconds=60))
+    assert _runs_read(gh) == 1
+    runner.poll_once(NOON + timedelta(seconds=120))
+    assert _runs_read(gh) == 2
+
+
+def test_a_github_error_while_settling_is_counted_and_waits(
+    gh, engine, policy, caplog, monkeypatch
+):
+    # alembic's fileConfig (the migration tests) disables loggers that already exist
+    monkeypatch.setattr(logging.getLogger("sdlc.runner"), "disabled", False)
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    _ci_run(gh)
+    fetch = gh.get
+
+    def failing(path, **params):
+        if path.endswith("/actions/runs"):
+            fetch(path, **params)
+            raise GitHubError("GitHub 502 on /actions/runs: bad gateway")
+        return fetch(path, **params)
+
+    gh.get = failing
+    runner = _runner(gh, engine, policy)
+    with caplog.at_level(logging.WARNING, "sdlc.runner"):
+        summary = runner.poll_once(NOON)
+    assert summary["errors"] == 1
+    assert "test selector: GitHub 502 on /actions/runs: bad gateway" in caplog.text
+    assert _ci_results(engine) == []
+    assert len(_selector(engine)) == 1  # the recommendation itself was kept
+    gh.get = fetch
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert _ci_results(engine) == []
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert len(_ci_results(engine)) == 1
+
+
+def test_off_never_reads_ci_results(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    _ci_run(gh)
+    _runner(gh, engine, policy, mode="off").poll_once(NOON)
+    assert gh.requests == []
