@@ -31,16 +31,16 @@ TOP_DECILE_CAPTURE = 0.5
 THRESHOLD_TIERS = ("T1", "T2", "T3")
 
 
-# The locked pooled grading (PR #162, 2026-10-05): ``calibrate_many`` over seeds 1..30.
+# The locked pooled grading (PR #205, 2026-10-12): ``calibrate_many`` over seeds 1..30.
 POOLED_RESULT = {
-    "graded_on": "2026-10-05",
-    "pull_request": 162,
+    "graded_on": "2026-10-12",
+    "pull_request": 205,
     "histories": 30,
     "merged_prs": 15044,
     "incident_prs": 451,
     "overall_rate": 0.03,
-    "t0_rate": 0.0018,
-    "top_decile": {"capture": 0.5787, "lowest": 0.375, "highest": 0.8},
+    "t0_rate": 0.0017,
+    "top_decile": {"capture": 0.5854, "lowest": 0.375, "highest": 0.8666666666666667},
     "bars": {
         "t0_rate_at_most_a_quarter_of_overall": True,
         "top_decile_captures_majority_pooled": True,
@@ -49,7 +49,7 @@ POOLED_RESULT = {
 """The pooled grading is the judge of the risk score; one history is noisy.
 
 A single history holds about 500 merged PRs and 15 incident PRs, so its bars swing with
-chance: across the 30 histories the top decile caught anywhere from 37.5% to 80.0% of incident
+chance: across the 30 histories the top decile caught anywhere from 37.5% to 86.7% of incident
 PRs. Read a single history's report beside this one, never instead of it.
 """
 
