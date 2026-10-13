@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from sdlc import metrics, synth
 from sdlc.db import Base
+from sdlc.signals.github import Collector
 from sdlc.tables import CIRun, Deployment, Incident, Issue, PullRequest, Sprint
+from tests.fakes import FakeGitHub, iso
 
 NOW = datetime(2026, 10, 2, 12, 0)  # a Friday
 EPOCH = datetime(2026, 1, 1)
@@ -350,3 +352,28 @@ def test_the_simulated_history_shows_its_designed_patterns(session):
     assert len(velocity) == 13
     assert [row["in_progress"] for row in velocity].count(True) == 1
     assert metrics.sources(session)["pull_requests"]["github"] == 0
+
+
+def test_dora_counts_the_collected_deployments_and_their_linked_incidents(session):
+    gh = FakeGitHub()
+    day = NOW - timedelta(days=5)
+    for hour, sha in enumerate(("a", "b", "c", "d")):
+        deployment = gh.add_deployment(sha * 40, "production" if hour % 2 else "production-signoff")
+        gh.deployment_status(deployment["id"], "success", day + timedelta(hours=hour))
+    gh.add_deployment("e" * 40)  # never succeeded: not a deploy
+    gh.add_issue(40, "Leads list is empty", labels=("incident", "module:leads", "sev1"))
+    gh.issues[40].update(created_at=iso(day + timedelta(hours=1, minutes=30)))
+    gh.close_issue(40, day + timedelta(hours=4, minutes=30))
+    gh.add_issue(41, "Old outage", labels=("incident",))
+    gh.issues[41]["created_at"] = iso(day + timedelta(days=3))  # too long after any deploy
+
+    collector = Collector(session, gh)
+    collector.collect_deployments(("production", "production-signoff"))
+    collector.collect_incidents()
+    session.commit()
+
+    current = metrics.dora_summary(session, NOW)["current"]
+    assert current["deployments"] == 4
+    assert current["incidents"] == 2
+    assert current["change_failure_rate"] == 25.0  # one of four deploys has an incident linked
+    assert current["time_to_restore_hours"] == 3.0
