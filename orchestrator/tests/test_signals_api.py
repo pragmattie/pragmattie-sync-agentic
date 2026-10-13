@@ -22,6 +22,7 @@ ENDPOINTS = [
     "sources",
     "calibration",
     "flow",
+    "accuracy",
 ]
 
 
