@@ -214,7 +214,7 @@ class FakeGitHub:
         self.requests.append((method, path))
         self.sent += 1
         if method in self.fail_writes:
-            raise GitHubError(f"GitHub 500 on {path}: fake failure")
+            raise GitHubError(f"GitHub 500 on {path}: fake failure", status=500)
         return path
 
     def get(self, path: str, **params):
@@ -230,7 +230,7 @@ class FakeGitHub:
             return listed[: params.get("per_page", 30)]
         if match := re.fullmatch(r"/actions/workflows/([\w.-]+)/runs", path):
             if match.group(1) not in self.workflow_runs:
-                raise GitHubError(f"GitHub 404 on {path}: Not Found")
+                raise GitHubError(f"GitHub 404 on {path}: Not Found", status=404)
             return {"workflow_runs": [dict(run) for run in self.workflow_runs[match.group(1)]]}
         if path == "/actions/runs":
             sha = params.get("head_sha")
@@ -248,7 +248,7 @@ class FakeGitHub:
             on_default = params.get("ref", self.default_branch) == self.default_branch
             if on_default and match.group(1) in self.contents:
                 return {"path": match.group(1), "type": "file"}
-        raise GitHubError(f"GitHub 404 on {path}: Not Found")
+        raise GitHubError(f"GitHub 404 on {path}: Not Found", status=404)
 
     def get_text(self, path: str, accept: str = "application/vnd.github.diff") -> str:
         path = self._log("GET", path)
@@ -307,7 +307,7 @@ class FakeGitHub:
             return [{"name": name} for name in self.issue_labels.get(int(match.group(1)), [])]
         if match := re.fullmatch(r"/issues/(\d+)/events", path):
             return list(self.issue_events.get(int(match.group(1)), []))
-        raise GitHubError(f"GitHub 404 on {path}: Not Found")
+        raise GitHubError(f"GitHub 404 on {path}: Not Found", status=404)
 
     def post(self, path: str, body: dict):
         path = self._log("POST", path)
@@ -326,7 +326,7 @@ class FakeGitHub:
         if match := re.fullmatch(r"/deployments/(\d+)/statuses", path):
             self.deployment_statuses[int(match.group(1))].insert(0, dict(body))
             return body
-        raise GitHubError(f"GitHub 404 on {path}: Not Found")
+        raise GitHubError(f"GitHub 404 on {path}: Not Found", status=404)
 
     def patch(self, path: str, body: dict):
         path = self._log("PATCH", path)
@@ -351,13 +351,13 @@ class FakeGitHub:
         elif match := re.fullmatch(r"/git/refs/heads/(.+)", path):
             name = unquote(match.group(1))
             if name not in self.branches:
-                raise GitHubError(f"GitHub 422 on {path}: Reference does not exist")
+                raise GitHubError(f"GitHub 422 on {path}: Reference does not exist", status=422)
             self.branches.remove(name)
         elif match := re.fullmatch(r"/deployments/(\d+)", path):
             deployment_id = int(match.group(1))
             statuses = self.deployment_statuses.get(deployment_id) or [{"state": "inactive"}]
             if statuses[0]["state"] != "inactive":  # GitHub deletes only inactive deployments
-                raise GitHubError(f"GitHub 422 on {path}: deployment is still active")
+                raise GitHubError(f"GitHub 422 on {path}: deployment is still active", status=422)
             self.delete_deployment(deployment_id)
         else:
             match = re.fullmatch(r"/issues/(\d+)/labels/(.+)", path)
@@ -369,7 +369,7 @@ class FakeGitHub:
 
     def _pr(self, number: int) -> dict:
         if number not in self.prs:
-            raise GitHubError(f"GitHub 404 on /pulls/{number}: Not Found")
+            raise GitHubError(f"GitHub 404 on /pulls/{number}: Not Found", status=404)
         labels = [{"name": name} for name in self.issue_labels.get(number, [])]
         return {**self.prs[number], "labels": labels}
 

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sdlc import release_runner
 from sdlc.audit import record_decision
 from sdlc.db import Base
+from sdlc.github_client import GitHubError
 from sdlc.governance import assign_tier, facts_of
 from sdlc.release_runner import DEPLOY_WORKFLOW, ReleaseRunner
 from sdlc.scoring import score_pull_request
@@ -221,6 +222,21 @@ def test_no_deploy_workflow_means_nothing_to_judge(gh, engine, policy):
     assert summary == {"mode": "enforce", "releases": 0, "assessed": 0, "errors": 0}
     assert ("GET", f"/actions/workflows/{DEPLOY_WORKFLOW}/runs") in gh.requests
     assert gh.writes() == []
+
+
+def test_waiting_commits_reads_a_404_by_its_status_not_its_message(gh, engine, policy):
+    def failing(status):
+        def get(path, **params):
+            raise GitHubError("the workflow's runs couldn't be read", status=status)
+
+        return get
+
+    runner = _runner(gh, engine, policy)
+    gh.get = failing(404)
+    assert runner.waiting_commits() == []
+    gh.get = failing(500)
+    with pytest.raises(GitHubError):
+        runner.waiting_commits()
 
 
 def test_waiting_commits_are_distinct_and_newest_first(gh, engine, policy):

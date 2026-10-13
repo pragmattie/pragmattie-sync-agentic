@@ -30,7 +30,11 @@ DEFAULT_LIMIT_SECONDS = 60
 
 
 class GitHubError(Exception):
-    pass
+    """A refused or failed request; ``status`` is the HTTP status when GitHub answered."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class RateLimited(GitHubError):
@@ -100,7 +104,8 @@ class GitHubClient:
         if _limit_spent(response):
             raise RateLimited(self.limited_until)
         if response.is_error:
-            raise GitHubError(f"GitHub {response.status_code} on {path}: {_message(response)}")
+            message = f"GitHub {response.status_code} on {path}: {_message(response)}"
+            raise GitHubError(message, status=response.status_code)
         return response
 
     def _reset_time(self, response: httpx.Response) -> datetime:
