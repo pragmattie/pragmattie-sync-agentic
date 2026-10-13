@@ -1,6 +1,7 @@
 // Pure calculations behind the Delivery flow page, kept apart from the view so
 // they can be unit-tested.
 
+import { formatTime } from "./decisions";
 import { MISSING } from "./signals";
 
 export const DAY_OPTIONS = [30, 60, 90, 180];
@@ -96,4 +97,31 @@ export function flowTiles(result) {
     { key: "median", title: "Cycle time, median", value: days(cycle.median) },
     { key: "p85", title: "Cycle time, 85th percentile", value: days(cycle.p85) },
   ];
+}
+
+// The release verdict's posted state as a chip: held, blocked or releasing.
+export const RELEASE_CHIPS = {
+  pending: { text: "Release held", color: "warning" },
+  failure: { text: "Release blocked", color: "error" },
+  error: { text: "Release blocked", color: "error" },
+  success: { text: "Releasing", color: "success" },
+};
+
+// The chip for a merged item, with the verdict's description as its tooltip,
+// or null when no release verdict names it.
+export function releaseChip(item) {
+  const chip = RELEASE_CHIPS[item?.release?.state];
+  return chip ? { ...chip, tooltip: item.release.description ?? "" } : null;
+}
+
+// The "Recently merged" list's rows, newest first as the API sends them.
+export function mergedRows(result) {
+  return (result?.recently_merged ?? []).map((item) => ({
+    key: `${item.source}-${item.number}`,
+    number: item.number,
+    title: item.title,
+    merged: formatTime(item.merged_at),
+    simulated: item.source === "synthetic",
+    chip: releaseChip(item),
+  }));
 }
