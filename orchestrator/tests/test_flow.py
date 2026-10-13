@@ -8,6 +8,7 @@ from sdlc.flow import STAGES, available, flow
 from sdlc.main import app
 from sdlc.routers.signals import get_now
 from sdlc.tables import AgentDecision, Deployment, Issue, PullRequest
+from tests.shipping_cases import CASES, IDS, MERGES, SHIPPED
 
 TODAY = date(2026, 10, 2)  # a Friday
 
@@ -315,3 +316,29 @@ def test_flow_route_days_edges(api, days):
 
 def test_flow_route_rejects_unknown_source(api):
     assert api.get("/api/v1/signals/flow", params={"source": "v1"}).status_code == 422
+
+
+@pytest.mark.parametrize("case", CASES, ids=IDS)
+def test_production_follows_the_shipping_rule(db, case):
+    """The same cases as the board's (``tests/shipping_cases.py``), so the two agree."""
+    issue = _issue(db, 1, datetime(2026, 9, 20))
+    for number, (sha, merged_at) in enumerate(MERGES.items(), start=1):
+        pr = _pr(db, issue, 10 + number, datetime(2026, 9, 21), merged_at=merged_at)
+        pr.merge_commit_sha = sha
+        pr.issue_id = issue.id if sha == SHIPPED else None  # only the middle PR is this issue's
+    for deploy in case.deploys:
+        db.add(
+            Deployment(
+                source=deploy.source,
+                sha=deploy.sha,
+                version=deploy.sha[:7],
+                deployed_at=deploy.at,
+                status="success" if deploy.succeeded else "failure",
+            )
+        )
+    db.flush()
+
+    result = flow(db, source="github", days=14, today=TODAY)
+
+    in_production = [row["date"] for row in result["series"] if row["counts"]["Production"]]
+    assert in_production[:1] == ([case.shipped.date()] if case.shipped else [])

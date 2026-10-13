@@ -1,6 +1,7 @@
 import io
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from sdlc import board
 from sdlc.board import FIELDS, STATUSES, check, load_board, main, setup
 from sdlc.github_client import GitHubError
 from sdlc.tables import MODULES
+from tests.shipping_cases import CASES, IDS, MERGES, OLDER, SHIPPED
 
 FORBIDDEN = (
     "deleteProjectV2Field",
@@ -476,7 +478,16 @@ def _issue_node(number, labels=(), state="OPEN", reason=None, comments=(), prs=(
     }
 
 
-def _pr_node(gate_state=None, draft=False, merged=False, labels=(), comments=(), check_run=False):
+def _pr_node(
+    gate_state=None,
+    draft=False,
+    merged=False,
+    labels=(),
+    comments=(),
+    check_run=False,
+    merged_at=None,
+    merge_commit=None,
+):
     contexts = [{"__typename": "StatusContext", "context": "CI", "state": "SUCCESS"}]
     if gate_state and check_run:
         contexts.append(
@@ -496,6 +507,8 @@ def _pr_node(gate_state=None, draft=False, merged=False, labels=(), comments=(),
         "state": "MERGED" if merged else "OPEN",
         "isDraft": draft,
         "merged": merged,
+        "mergedAt": f"{merged_at.isoformat()}Z" if merged_at else None,
+        "mergeCommit": {"oid": merge_commit} if merge_commit else None,
         "labels": {"nodes": [{"name": label} for label in labels]},
         "comments": {"nodes": [{"body": body} for body in comments]},
         "commits": {
@@ -525,10 +538,12 @@ class FakeBoard(FakeGraphQL):
 
     repo = "pragmattie/pragmattie-sync-agentic"
 
-    def __init__(self, items, open_issues, closed_issues=()):
+    def __init__(self, items, open_issues, closed_issues=(), deployments=()):
         super().__init__(_ready_fields())
         self.items = list(items)
         self.issues = {"is:open": list(open_issues), "is:closed": list(closed_issues)}
+        self.deployments = list(deployments)
+        self.refuse_deployments = None  # an error message, when the token can't read them
 
     @staticmethod
     def _page(nodes, after):
@@ -555,6 +570,14 @@ class FakeBoard(FakeGraphQL):
             self.calls.append((query, variables))
             page = self._page(self.items, variables["after"])
             return {"organization": {"projectV2": {"items": page}}}
+        if "deployments(" in query:
+            self.calls.append((query, variables))
+            assert (variables["owner"], variables["name"]) == tuple(self.repo.split("/"))
+            assert variables["environments"] == ["production", "production-signoff"]
+            if self.refuse_deployments:
+                raise GitHubError(self.refuse_deployments)
+            page = self._page(self.deployments, variables["after"])
+            return {"repository": {"deployments": page}}
         return super().graphql(query, **variables)
 
 
@@ -713,6 +736,7 @@ def test_sync_reads_every_page_with_one_query_per_page():
     queries = [q for q, _ in fake.calls]
     assert sum("items(" in q for q in queries) == 6  # six items, one per page
     assert sum("search(" in q for q in queries) == 3 + 2
+    assert sum("deployments(" in q for q in queries) == 1
 
 
 def test_sync_never_sends_a_forbidden_mutation():
@@ -824,3 +848,121 @@ def test_the_event_board_never_fires_on_its_own_runs():
 def test_the_event_board_job_is_unchanged():
     assert _event_board()["jobs"] == yaml.safe_load(LIVE_BOARD.read_text())["jobs"]
     assert _event_board()["permissions"] == {"contents": "read"}
+
+
+# Production (6.4)
+
+
+def _deployment_node(sha, at, state="SUCCESS", merged_at=None):
+    """A deployment of ``sha``; ``merged_at`` is when the PR whose merge commit it is merged."""
+    statuses = [{"state": "IN_PROGRESS", "createdAt": f"{at.isoformat()}Z"}]
+    statuses.append({"state": state, "createdAt": f"{at.isoformat()}Z"})
+    if state == "SUCCESS":  # GitHub marks it inactive once a newer deploy succeeds
+        statuses.append({"state": "INACTIVE", "createdAt": "2026-12-01T00:00:00Z"})
+    # An open PR whose branch holds the commit too: only the PR it is the merge commit of counts.
+    prs = [{"merged": False, "mergedAt": None, "mergeCommit": None}]
+    if merged_at is not None:
+        stamp = f"{merged_at.isoformat()}Z"
+        prs.append({"merged": True, "mergedAt": stamp, "mergeCommit": {"oid": sha}})
+    commit = {"associatedPullRequests": {"nodes": prs}}
+    return {"commitOid": sha, "commit": commit, "statuses": {"nodes": statuses}}
+
+
+def _merged_pr(sha, merged_at):
+    return _pr_node(merged=True, merged_at=merged_at, merge_commit=sha)
+
+
+@pytest.mark.parametrize("case", CASES, ids=IDS)
+def test_production_follows_the_shipping_rule(case):
+    """The same cases as Delivery flow's (``tests/shipping_cases.py``), so the two agree."""
+    issues = [
+        _issue_node(number, READY, prs=[_merged_pr(sha, merged_at)])
+        for number, (sha, merged_at) in enumerate(MERGES.items(), start=1)
+    ]
+    deployments = [  # the board reads GitHub's deployments only, never simulated ones
+        _deployment_node(d.sha, d.at, "SUCCESS" if d.succeeded else "FAILURE", MERGES.get(d.sha))
+        for d in case.deploys
+        if d.source == "github"
+    ]
+    fake = FakeBoard([], issues, deployments=deployments)
+    loaded = board.load_issues(fake)
+    deploys = board.load_deployments(fake, ("production", "production-signoff"))
+    issue, prs = next(pair for pair in loaded if pair[1][0]["merge_commit"] == SHIPPED)
+    expected = "Production" if case.shipped else "Merged"
+    assert board.column_for(issue, prs, deploys) == expected
+    closed = {**issue, "state": "CLOSED", "state_reason": "COMPLETED"}
+    assert board.column_for(closed, prs, deploys) == expected
+
+
+def _shipped_board():
+    """``_current_board`` with #3's merged PR deployed, and #2's PR merged but not deployed."""
+    fake = _current_board()
+    merged_at = MERGES[SHIPPED]
+    fake.issues["is:closed"][0]["closedByPullRequestsReferences"]["nodes"][0].update(
+        mergedAt=f"{merged_at.isoformat()}Z", mergeCommit={"oid": SHIPPED}
+    )
+    fake.deployments = [_deployment_node(SHIPPED, merged_at.replace(hour=16), merged_at=merged_at)]
+    return fake
+
+
+def test_the_board_moves_a_shipped_issue_to_production():
+    fake = _shipped_board()
+    report = board.sync(fake)
+    updates = [v for q, v in fake.mutations if "updateProjectV2ItemFieldValue" in q]
+    assert updates == [
+        {
+            "project": "PVT_1",
+            "item": "PVTI_3",
+            "field": "F-status",
+            "value": {"singleSelectOptionId": "S-6"},
+        }
+    ]
+    assert dict(report.changed) == {"Status": 1}
+
+
+def test_a_merged_unshipped_issue_stays_in_merged():
+    fake = _shipped_board()
+    fake.deployments = [_deployment_node("0" * 40, datetime(2026, 9, 1))]  # before the merge
+    board.sync(fake)
+    assert fake.mutations == []
+
+
+def test_a_deploy_of_an_older_commit_whose_pr_closes_no_issue_ships_no_later_merge():
+    """The deployed commit's own PR decides, even when the board reads no issue it closes."""
+    fake = _shipped_board()
+    deployed_at = MERGES[SHIPPED].replace(hour=18)  # after #3's merge, but of an older commit
+    fake.deployments = [_deployment_node(OLDER, deployed_at, merged_at=MERGES[OLDER])]
+    board.sync(fake)
+    assert fake.mutations == []  # #3 stays in Merged
+
+
+def test_refused_deployments_keep_production_cards_and_the_run_goes_on(capsys):
+    fake = _shipped_board()
+    fake.items[1] = _item("PVTI_2", 2, status="Backlog")
+    fake.refuse_deployments = "GitHub GraphQL: Resource not accessible by integration"
+    report = board.sync(fake)
+    out = capsys.readouterr().out
+    assert "Warning: can't read the deployments" in out
+    assert "no other card moves to Production" in out
+    updates = [v for q, v in fake.mutations if "updateProjectV2ItemFieldValue" in q]
+    assert {v["item"] for v in updates} == {"PVTI_2"}  # #3 stays in Merged; #2 is still synced
+    status = next(v for v in updates if v["field"] == "F-status")
+    assert status["value"] == {"singleSelectOptionId": "S-4"}
+    assert report.changed["Status"] == 1
+
+
+def test_refused_deployments_keep_a_production_card_in_production():
+    fake = _shipped_board()
+    fake.items[2] = _item(
+        "PVTI_3", 3, status="Production", points=2, module="leads", tier="T1", risk=12
+    )
+    fake.refuse_deployments = "GitHub GraphQL: Resource not accessible by integration"
+    board.sync(fake)
+    assert fake.mutations == []
+
+
+def test_other_deployment_errors_still_fail_the_run():
+    fake = _shipped_board()
+    fake.refuse_deployments = "GitHub 502 on /graphql: Bad Gateway"
+    with pytest.raises(GitHubError, match="Bad Gateway"):
+        board.sync(fake)

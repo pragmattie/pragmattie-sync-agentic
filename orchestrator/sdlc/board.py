@@ -10,24 +10,33 @@ with where to fix it in GitHub, and ``setup`` exits 1.
 ``python -m sdlc.board sync`` keeps every issue's card current. The board is computed, not edited
 by people: each run works out every card's Status, Points, Module, Forecast tier, Tier and Risk
 from GitHub alone (labels, the pull requests that close the issue, their ``risk-gate`` status and
-risk comment) and sets each value that differs, so a card dragged by hand is moved back on the
+risk comment, and the successful deployments to the policy's release environments) and sets
+each value that differs, so a card dragged by hand is moved back on the
 next run. It adds open issues that aren't on the board, and never removes or archives an item,
 touches a pull-request item or edits an issue. It writes no audit rows and needs no database.
 
-The token needs Organization → Projects: read and write.
+An issue moves to Production when a deployment ships its deciding pull request, by the same rule
+as Delivery flow (``sdlc.shipping``). When GitHub refuses to list the deployments (the token has
+no Deployments: read), the run says so, leaves every card already in Production there and moves
+no other card to Production.
+
+The token needs Organization → Projects: read and write, and Repository → Deployments: read.
 """
 
 import argparse
 import re
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
-from sdlc.github_client import GitHubClient, GitHubError
+from sdlc.github_client import GitHubClient, GitHubError, RateLimited, parse_time
+from sdlc.shipping import shipped_at
 from sdlc.tables import MODULES
+from sdlc.tiers import load_policy
 
 STATUS = "Status"
 STATUSES = ("Backlog", "Triaged", "In progress", "In review", "Gated", "Merged", "Production")
@@ -250,6 +259,7 @@ PLAN_HEADING = re.compile(r"^## Plan\b", re.MULTILINE)
 APPROVE_PLAN = "/approve-plan"
 RECENTLY_CLOSED_DAYS = 14
 LABEL_FIELDS = {"points:": "Points", "module:": "Module", "forecast:": "Forecast tier"}
+Deploys = Sequence[tuple[datetime, datetime]]  # (shipped_through, deployed_at) pairs
 
 ITEMS_QUERY = """
 query($owner: String!, $number: Int!, $after: String) {
@@ -297,6 +307,8 @@ query($q: String!, $after: String) {
             state
             isDraft
             merged
+            mergedAt
+            mergeCommit { oid }
             labels(first: 50) { nodes { name } }
             comments(last: 50) { nodes { body } }
             commits(last: 1) {
@@ -321,6 +333,24 @@ query($q: String!, $after: String) {
   }
 }
 """
+
+DEPLOYMENTS_QUERY = """
+query($owner: String!, $name: String!, $environments: [String!], $after: String) {
+  repository(owner: $owner, name: $name) {
+    deployments(environments: $environments, first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        commitOid
+        commit {
+          associatedPullRequests(first: 10) { nodes { merged mergedAt mergeCommit { oid } } }
+        }
+        statuses(first: 20) { nodes { state createdAt } }
+      }
+    }
+  }
+}
+"""
+REFUSED = ("Resource not accessible", "GitHub 403")  # how GitHub says the token can't read it
 
 ADD_ITEM = """
 mutation($project: ID!, $content: ID!) {
@@ -366,10 +396,10 @@ def awaiting_plan_approval(issue: dict) -> bool:
     )
 
 
-def pr_column(pr: dict) -> str | None:
+def pr_column(pr: dict, deploys: Deploys = ()) -> str | None:
     """The column one pull request puts its issue in; ``None`` for a closed, unmerged one."""
     if pr["merged"]:
-        return "Merged"
+        return "Production" if shipped_at(pr.get("merged_at"), deploys) else "Merged"
     if pr["state"] != "OPEN":
         return None
     if pr["draft"]:
@@ -381,21 +411,25 @@ def pr_column(pr: dict) -> str | None:
     return "In progress"  # not scored yet
 
 
-def deciding_pr(prs: list[dict]) -> dict | None:
-    """The most advanced pull request: merged, then gated, in review, then in progress."""
-    ranked = [(STATUSES.index(column), pr) for pr in prs if (column := pr_column(pr))]
+def deciding_pr(prs: list[dict], deploys: Deploys = ()) -> dict | None:
+    """The most advanced pull request: shipped, merged, then gated, in review, in progress."""
+    ranked = [(STATUSES.index(column), pr) for pr in prs if (column := pr_column(pr, deploys))]
     return max(ranked, key=lambda pair: pair[0])[1] if ranked else None
 
 
-def column_for(issue: dict, prs: list[dict]) -> str | None:
-    """The Status column for an issue; ``None`` leaves its card alone."""
+def column_for(issue: dict, prs: list[dict], deploys: Deploys = ()) -> str | None:
+    """The Status column for an issue; ``None`` leaves its card alone.
+
+    ``deploys`` are the successful deployments as ``(shipped_through, deployed_at)`` pairs.
+    """
     if issue["state"] == "CLOSED" and issue.get("state_reason") in ("NOT_PLANNED", "DUPLICATE"):
         return None
+    pr = deciding_pr(prs, deploys)
     if issue["state"] == "CLOSED":
-        return "Merged"
-    pr = deciding_pr(prs)
+        shipped = pr is not None and pr_column(pr, deploys) == "Production"
+        return "Production" if shipped else "Merged"
     if pr is not None:
-        return pr_column(pr)
+        return pr_column(pr, deploys)
     labels = issue["labels"]
     if "agent-ready" in labels:  # an agent is planning or building, unless a person must act
         return "Triaged" if awaiting_plan_approval(issue) else "In progress"
@@ -415,7 +449,7 @@ def risk_score(pr: dict) -> int | None:
     return None
 
 
-def fields_for(issue: dict, prs: list[dict]) -> dict:
+def fields_for(issue: dict, prs: list[dict], deploys: Deploys = ()) -> dict:
     """Every field but Status, by name; ``None`` means the field should be empty."""
     values: dict = {}
     for prefix, name in LABEL_FIELDS.items():
@@ -425,7 +459,7 @@ def fields_for(issue: dict, prs: list[dict]) -> dict:
             values["Points"] = float(values["Points"])
         except ValueError:
             values["Points"] = None
-    pr = deciding_pr(prs)
+    pr = deciding_pr(prs, deploys)
     values["Tier"] = _label_value(pr["labels"], "tier:") if pr else None
     values["Risk"] = risk_score(pr) if pr else None
     return values
@@ -459,6 +493,8 @@ def _parse_pr(node: dict) -> dict:
         "state": node["state"],
         "draft": node.get("isDraft", False),
         "merged": node.get("merged", False),
+        "merged_at": parse_time(node.get("mergedAt")),
+        "merge_commit": (node.get("mergeCommit") or {}).get("oid"),
         "gate": _gate_state(contexts),
         "labels": _names(node.get("labels")),
         "comments": [c["body"] for c in (node.get("comments") or {}).get("nodes") or []],
@@ -530,6 +566,55 @@ def load_issues(gh: GitHubClient) -> list[tuple[dict, list[dict]]]:
     return [_parse_issue(n) for q in queries for n in _paginate(gh, ISSUES_QUERY, ("search",), q=q)]
 
 
+def _merged_at(node: dict) -> datetime | None:
+    """The ``mergedAt`` of the pull request whose merge commit the deployment deployed, if any."""
+    commit = node.get("commit") or {}
+    for pr in (commit.get("associatedPullRequests") or {}).get("nodes") or []:
+        oid = ((pr or {}).get("mergeCommit") or {}).get("oid")
+        if pr.get("merged") and pr.get("mergedAt") and oid == node["commitOid"]:
+            return parse_time(pr["mergedAt"])
+    return None
+
+
+def load_deployments(gh: GitHubClient, environments: tuple[str, ...]) -> Deploys | None:
+    """Each successful deployment to ``environments`` as ``(shipped_through, deployed_at)``;
+    ``None`` when GitHub refuses to list them.
+
+    A deployment's time is its latest ``SUCCESS`` status. Its latest status alone won't do:
+    GitHub marks a deployment ``INACTIVE`` once a newer one to the same environment succeeds.
+    ``shipped_through`` comes from the deployed commit itself (its associated pull requests), so
+    it holds whether or not that PR closes an issue the board reads.
+    """
+    owner, name = gh.repo.split("/", 1)
+    try:
+        nodes = _paginate(
+            gh,
+            DEPLOYMENTS_QUERY,
+            ("repository", "deployments"),
+            owner=owner,
+            name=name,
+            environments=list(environments),
+        )
+    except RateLimited:
+        raise
+    except GitHubError as error:
+        if not any(sign in str(error) for sign in REFUSED):
+            raise
+        print(
+            f"Warning: can't read the deployments ({error}); cards in Production stay there "
+            "and no other card moves to Production."
+        )
+        return None
+    deployments = []
+    for node in nodes:
+        statuses = (node.get("statuses") or {}).get("nodes") or []
+        succeeded = [parse_time(s["createdAt"]) for s in statuses if s.get("state") == "SUCCESS"]
+        if node.get("commitOid") and succeeded:
+            deployed_at = max(succeeded)
+            deployments.append((_merged_at(node) or deployed_at, deployed_at))
+    return deployments
+
+
 @dataclass
 class Report:
     seen: int = 0
@@ -553,9 +638,14 @@ def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
     items = load_items(gh, board)
     report = Report()
     prefix = "Would " if dry_run else ""
-    for issue, prs in load_issues(gh):
-        status = column_for(issue, prs)
+    issues = load_issues(gh)
+    release = load_policy().release
+    deploys = load_deployments(gh, (release.environment, release.signoff_environment))
+    for issue, prs in issues:
+        status = column_for(issue, prs, deploys or ())
         item = items.get(issue["id"])
+        if deploys is None and item is not None and item.values.get(STATUS) == "Production":
+            status = "Production"  # unknown without the deployments, so left as it is
         if status is None or (item is None and issue["state"] != "OPEN"):
             continue
         report.seen += 1
@@ -566,7 +656,7 @@ def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
             if not dry_run:
                 data = gh.graphql(ADD_ITEM, project=board.project_id, content=issue["id"])
                 item.id = data["addProjectV2ItemById"]["item"]["id"]
-        wanted = {STATUS: status, **fields_for(issue, prs)}
+        wanted = {STATUS: status, **fields_for(issue, prs, deploys or ())}
         for name, value in wanted.items():
             current = item.values.get(name)
             if _same(current, value):

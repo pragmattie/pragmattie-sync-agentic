@@ -7,15 +7,16 @@ delivery board, each issue's stage on a day is derived from what had happened by
 - **Triaged:** a synthetic issue is born triaged. A real issue is triaged at its first ok
   ``triage`` decision, or, without one, at creation when its module and points are set.
 - **In progress** when a pull request linked to it is opened, **In review** at that PR's first ok
-  ``pr_risk`` decision, **Merged** at its merge and **Production** at the first deployment of the
-  same source at or after the merge. A PR closed unmerged stops counting when it closes, and when
-  several PRs are linked the most advanced decides. Gated has no history, so it is In review here.
+  ``pr_risk`` decision, **Merged** at its merge and **Production** when a deployment ships it
+  (``sdlc.shipping``: the earliest successful deployment of the same source whose commit
+  includes the merge, so a deploy of an older commit never ships it). A PR closed unmerged
+  stops counting when it closes, and when several PRs are linked the most advanced decides.
+  Gated has no history, so it is In review here.
 
 An issue closed without a merged PR leaves the flow when it closes; one with no close time can't
 be placed in time, so it is left out.
 """
 
-from bisect import bisect_left
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -24,7 +25,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sdlc.metrics import _midnight, _monday, _percentile, _round
-from sdlc.tables import SOURCES, AgentDecision, Deployment, Issue, PullRequest
+from sdlc.shipping import deploys, shipped_at
+from sdlc.tables import SOURCES, AgentDecision, Issue, PullRequest
 
 STAGES = ("Backlog", "Triaged", "In progress", "In review", "Merged", "Production")
 BACKLOG, TRIAGED, IN_PROGRESS, IN_REVIEW, MERGED, PRODUCTION = range(len(STAGES))
@@ -89,13 +91,7 @@ def _first_ok(db: Session, agent: str, subject_type: str, source: str) -> dict[i
 def _items(db: Session, source: str) -> list[_Item]:
     triaged = _first_ok(db, "triage", "issue", source) if source != "synthetic" else {}
     reviewed = _first_ok(db, "pr_risk", "pr", source)
-    deploys = sorted(db.scalars(select(Deployment.deployed_at).where(Deployment.source == source)))
-
-    def deployed(merged: datetime | None) -> datetime | None:
-        if merged is None:
-            return None
-        index = bisect_left(deploys, merged)
-        return deploys[index] if index < len(deploys) else None
+    shipping = deploys(db, source)
 
     prs_by_issue = defaultdict(list)
     for pr in db.scalars(
@@ -106,7 +102,7 @@ def _items(db: Session, source: str) -> list[_Item]:
                 opened=pr.created_at,
                 reviewed=reviewed.get(pr.number) if pr.number is not None else None,
                 merged=pr.merged_at,
-                deployed=deployed(pr.merged_at),
+                deployed=shipped_at(pr.merged_at, shipping),
                 closed=pr.closed_at,
             )
         )
