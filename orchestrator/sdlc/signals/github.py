@@ -133,13 +133,16 @@ class Collector:
             "issues": self.collect_issues(),
             "pull_requests": self.collect_pull_requests(),
             "ci_jobs": self.collect_ci(),
-            "deployments": self.collect_deployments(environments),
-            "incidents": self.collect_incidents(),
         }
+        # Committed before the deployments, so a token that can't read them loses nothing else;
+        # their error still fails the pass.
         self.db.commit()
         # Remembered only once committed, so a failed pass reads those runs again.
         self.memory.finished_runs |= self._finished_runs
         self.memory.suites |= self._suites
+        counts["deployments"] = self.collect_deployments(environments)
+        counts["incidents"] = self.collect_incidents()
+        self.db.commit()
         return counts
 
     def _row(self, table, external_id: str):
