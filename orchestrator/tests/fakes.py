@@ -3,8 +3,8 @@
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
 ``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
 GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
-statuses, and branches, and logs every request it is sent. ``FakeLLM`` answers with a fixed
-adjustment or raises a given error.
+statuses, branches, environments and files on the default branch, and logs every request it is
+sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re
@@ -42,6 +42,8 @@ class FakeGitHub:
         self.workflow_runs: dict[str, list[dict]] = {}  # by workflow file; a missing one is a 404
         self.deployments: list[dict] = []  # each with its environment
         self.deployment_statuses: dict[int, list[dict]] = {}  # newest first, like GitHub
+        self.environments: dict[str, dict] = {}  # by name, each with its protection_rules
+        self.contents: set[str] = set()  # file paths on the default branch
         self.default_branch = "main"
         self.branches: list[str] = ["main"]
         self.requests: list[tuple[str, str]] = []
@@ -175,6 +177,12 @@ class FakeGitHub:
     def add_branch(self, name: str) -> None:
         self.branches.append(name)
 
+    def add_environment(self, name: str, *, reviewer: bool = False) -> None:
+        rules = (
+            [{"type": "required_reviewers", "reviewers": [{"type": "User"}]}] if reviewer else []
+        )
+        self.environments[name] = {"protection_rules": rules}
+
     def deployment_status(self, deployment_id: int, state: str, at: datetime) -> None:
         self.deployment_statuses[deployment_id].insert(0, {"state": state, "created_at": iso(at)})
 
@@ -232,6 +240,14 @@ class FakeGitHub:
             return self._issue(number) if number in self.issues else self._pr(number)
         if match := re.fullmatch(r"/deployments/(\d+)/statuses", path):
             return list(self.deployment_statuses[int(match.group(1))])
+        if match := re.fullmatch(r"/environments/(.+)", path):
+            name = unquote(match.group(1))
+            if name in self.environments:
+                return {"name": name, **self.environments[name]}
+        if match := re.fullmatch(r"/contents/(.+)", path):
+            on_default = params.get("ref", self.default_branch) == self.default_branch
+            if on_default and match.group(1) in self.contents:
+                return {"path": match.group(1), "type": "file"}
         raise GitHubError(f"GitHub 404 on {path}: Not Found")
 
     def get_text(self, path: str, accept: str = "application/vnd.github.diff") -> str:
