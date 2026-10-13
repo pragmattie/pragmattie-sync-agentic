@@ -17,7 +17,8 @@ touches a pull-request item or edits an issue. It writes no audit rows and needs
 
 An issue moves to Production when a deployment ships its deciding pull request, by the same rule
 as Delivery flow (``sdlc.shipping``). When GitHub refuses to list the deployments (the token has
-no Deployments: read), the run says so and goes on without Production.
+no Deployments: read), the run says so, leaves every card already in Production there and moves
+no other card to Production.
 
 The token needs Organization → Projects: read and write, and Repository → Deployments: read.
 """
@@ -340,6 +341,9 @@ query($owner: String!, $name: String!, $environments: [String!], $after: String)
       pageInfo { hasNextPage endCursor }
       nodes {
         commitOid
+        commit {
+          associatedPullRequests(first: 10) { nodes { merged mergedAt mergeCommit { oid } } }
+        }
         statuses(first: 20) { nodes { state createdAt } }
       }
     }
@@ -562,12 +566,24 @@ def load_issues(gh: GitHubClient) -> list[tuple[dict, list[dict]]]:
     return [_parse_issue(n) for q in queries for n in _paginate(gh, ISSUES_QUERY, ("search",), q=q)]
 
 
-def load_deployments(gh: GitHubClient, environments: tuple[str, ...]) -> list | None:
-    """Each successful deployment to ``environments`` as ``(commit, deployed_at)``; ``None`` when
-    GitHub refuses to list them.
+def _merged_at(node: dict) -> datetime | None:
+    """The ``mergedAt`` of the pull request whose merge commit the deployment deployed, if any."""
+    commit = node.get("commit") or {}
+    for pr in (commit.get("associatedPullRequests") or {}).get("nodes") or []:
+        oid = ((pr or {}).get("mergeCommit") or {}).get("oid")
+        if pr.get("merged") and pr.get("mergedAt") and oid == node["commitOid"]:
+            return parse_time(pr["mergedAt"])
+    return None
+
+
+def load_deployments(gh: GitHubClient, environments: tuple[str, ...]) -> Deploys | None:
+    """Each successful deployment to ``environments`` as ``(shipped_through, deployed_at)``;
+    ``None`` when GitHub refuses to list them.
 
     A deployment's time is its latest ``SUCCESS`` status. Its latest status alone won't do:
     GitHub marks a deployment ``INACTIVE`` once a newer one to the same environment succeeds.
+    ``shipped_through`` comes from the deployed commit itself (its associated pull requests), so
+    it holds whether or not that PR closes an issue the board reads.
     """
     owner, name = gh.repo.split("/", 1)
     try:
@@ -584,29 +600,19 @@ def load_deployments(gh: GitHubClient, environments: tuple[str, ...]) -> list | 
     except GitHubError as error:
         if not any(sign in str(error) for sign in REFUSED):
             raise
-        print(f"Warning: can't read the deployments ({error}); no card moves to Production.")
+        print(
+            f"Warning: can't read the deployments ({error}); cards in Production stay there "
+            "and no other card moves to Production."
+        )
         return None
     deployments = []
     for node in nodes:
         statuses = (node.get("statuses") or {}).get("nodes") or []
         succeeded = [parse_time(s["createdAt"]) for s in statuses if s.get("state") == "SUCCESS"]
         if node.get("commitOid") and succeeded:
-            deployments.append((node["commitOid"], max(succeeded)))
+            deployed_at = max(succeeded)
+            deployments.append((_merged_at(node) or deployed_at, deployed_at))
     return deployments
-
-
-def shipping_deploys(
-    deployments: list[tuple[str, datetime]], issues: list[tuple[dict, list[dict]]]
-) -> Deploys:
-    """``(shipped_through, deployed_at)`` for each deployment: the ``mergedAt`` of the PR whose
-    merge commit it deployed, among the PRs the board reads, else the deployment's own time."""
-    merged = {
-        pr["merge_commit"]: pr["merged_at"]
-        for _, prs in issues
-        for pr in prs
-        if pr["merged"] and pr.get("merge_commit") and pr.get("merged_at")
-    }
-    return [(merged.get(commit, deployed_at), deployed_at) for commit, deployed_at in deployments]
 
 
 @dataclass
@@ -634,11 +640,12 @@ def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
     prefix = "Would " if dry_run else ""
     issues = load_issues(gh)
     release = load_policy().release
-    deployments = load_deployments(gh, (release.environment, release.signoff_environment))
-    deploys = shipping_deploys(deployments or [], issues)
+    deploys = load_deployments(gh, (release.environment, release.signoff_environment))
     for issue, prs in issues:
-        status = column_for(issue, prs, deploys)
+        status = column_for(issue, prs, deploys or ())
         item = items.get(issue["id"])
+        if deploys is None and item is not None and item.values.get(STATUS) == "Production":
+            status = "Production"  # unknown without the deployments, so left as it is
         if status is None or (item is None and issue["state"] != "OPEN"):
             continue
         report.seen += 1
@@ -649,7 +656,7 @@ def sync(gh: GitHubClient, *, dry_run: bool = False) -> Report:
             if not dry_run:
                 data = gh.graphql(ADD_ITEM, project=board.project_id, content=issue["id"])
                 item.id = data["addProjectV2ItemById"]["item"]["id"]
-        wanted = {STATUS: status, **fields_for(issue, prs, deploys)}
+        wanted = {STATUS: status, **fields_for(issue, prs, deploys or ())}
         for name, value in wanted.items():
             current = item.values.get(name)
             if _same(current, value):

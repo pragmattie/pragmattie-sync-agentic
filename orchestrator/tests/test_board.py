@@ -11,7 +11,7 @@ from sdlc import board
 from sdlc.board import FIELDS, STATUSES, check, load_board, main, setup
 from sdlc.github_client import GitHubError
 from sdlc.tables import MODULES
-from tests.shipping_cases import CASES, IDS, MERGES, SHIPPED
+from tests.shipping_cases import CASES, IDS, MERGES, OLDER, SHIPPED
 
 FORBIDDEN = (
     "deleteProjectV2Field",
@@ -853,12 +853,19 @@ def test_the_event_board_job_is_unchanged():
 # Production (6.4)
 
 
-def _deployment_node(sha, at, state="SUCCESS"):
+def _deployment_node(sha, at, state="SUCCESS", merged_at=None):
+    """A deployment of ``sha``; ``merged_at`` is when the PR whose merge commit it is merged."""
     statuses = [{"state": "IN_PROGRESS", "createdAt": f"{at.isoformat()}Z"}]
     statuses.append({"state": state, "createdAt": f"{at.isoformat()}Z"})
     if state == "SUCCESS":  # GitHub marks it inactive once a newer deploy succeeds
         statuses.append({"state": "INACTIVE", "createdAt": "2026-12-01T00:00:00Z"})
-    return {"commitOid": sha, "statuses": {"nodes": statuses}}
+    # An open PR whose branch holds the commit too: only the PR it is the merge commit of counts.
+    prs = [{"merged": False, "mergedAt": None, "mergeCommit": None}]
+    if merged_at is not None:
+        stamp = f"{merged_at.isoformat()}Z"
+        prs.append({"merged": True, "mergedAt": stamp, "mergeCommit": {"oid": sha}})
+    commit = {"associatedPullRequests": {"nodes": prs}}
+    return {"commitOid": sha, "commit": commit, "statuses": {"nodes": statuses}}
 
 
 def _merged_pr(sha, merged_at):
@@ -873,15 +880,13 @@ def test_production_follows_the_shipping_rule(case):
         for number, (sha, merged_at) in enumerate(MERGES.items(), start=1)
     ]
     deployments = [  # the board reads GitHub's deployments only, never simulated ones
-        _deployment_node(d.sha, d.at, "SUCCESS" if d.succeeded else "FAILURE")
+        _deployment_node(d.sha, d.at, "SUCCESS" if d.succeeded else "FAILURE", MERGES.get(d.sha))
         for d in case.deploys
         if d.source == "github"
     ]
     fake = FakeBoard([], issues, deployments=deployments)
     loaded = board.load_issues(fake)
-    deploys = board.shipping_deploys(
-        board.load_deployments(fake, ("production", "production-signoff")), loaded
-    )
+    deploys = board.load_deployments(fake, ("production", "production-signoff"))
     issue, prs = next(pair for pair in loaded if pair[1][0]["merge_commit"] == SHIPPED)
     expected = "Production" if case.shipped else "Merged"
     assert board.column_for(issue, prs, deploys) == expected
@@ -896,7 +901,7 @@ def _shipped_board():
     fake.issues["is:closed"][0]["closedByPullRequestsReferences"]["nodes"][0].update(
         mergedAt=f"{merged_at.isoformat()}Z", mergeCommit={"oid": SHIPPED}
     )
-    fake.deployments = [_deployment_node(SHIPPED, merged_at.replace(hour=16))]
+    fake.deployments = [_deployment_node(SHIPPED, merged_at.replace(hour=16), merged_at=merged_at)]
     return fake
 
 
@@ -922,19 +927,38 @@ def test_a_merged_unshipped_issue_stays_in_merged():
     assert fake.mutations == []
 
 
-def test_refused_deployments_leave_production_out_and_the_run_goes_on(capsys):
+def test_a_deploy_of_an_older_commit_whose_pr_closes_no_issue_ships_no_later_merge():
+    """The deployed commit's own PR decides, even when the board reads no issue it closes."""
+    fake = _shipped_board()
+    deployed_at = MERGES[SHIPPED].replace(hour=18)  # after #3's merge, but of an older commit
+    fake.deployments = [_deployment_node(OLDER, deployed_at, merged_at=MERGES[OLDER])]
+    board.sync(fake)
+    assert fake.mutations == []  # #3 stays in Merged
+
+
+def test_refused_deployments_keep_production_cards_and_the_run_goes_on(capsys):
     fake = _shipped_board()
     fake.items[1] = _item("PVTI_2", 2, status="Backlog")
     fake.refuse_deployments = "GitHub GraphQL: Resource not accessible by integration"
     report = board.sync(fake)
     out = capsys.readouterr().out
     assert "Warning: can't read the deployments" in out
-    assert "no card moves to Production" in out
+    assert "no other card moves to Production" in out
     updates = [v for q, v in fake.mutations if "updateProjectV2ItemFieldValue" in q]
     assert {v["item"] for v in updates} == {"PVTI_2"}  # #3 stays in Merged; #2 is still synced
     status = next(v for v in updates if v["field"] == "F-status")
     assert status["value"] == {"singleSelectOptionId": "S-4"}
     assert report.changed["Status"] == 1
+
+
+def test_refused_deployments_keep_a_production_card_in_production():
+    fake = _shipped_board()
+    fake.items[2] = _item(
+        "PVTI_3", 3, status="Production", points=2, module="leads", tier="T1", risk=12
+    )
+    fake.refuse_deployments = "GitHub GraphQL: Resource not accessible by integration"
+    board.sync(fake)
+    assert fake.mutations == []
 
 
 def test_other_deployment_errors_still_fail_the_run():
