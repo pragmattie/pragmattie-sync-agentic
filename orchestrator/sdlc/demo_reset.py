@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sdlc import synth
+from sdlc import issue_runner, synth
 from sdlc.agents import signoff, triage_comment
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
@@ -45,7 +45,7 @@ DEMO_LABEL = "demo"
 DEMO_BRANCH_PREFIX = "demo-"
 INCIDENT_LABEL = "incident"
 TIER_LABEL_PREFIX = "tier:"
-AGENT_MARKERS = (signoff.COMMENT_MARKER, triage_comment.MARKER)
+AGENT_MARKERS = (signoff.COMMENT_MARKER, triage_comment.MARKER, issue_runner.GAVE_UP_MARKER)
 SOURCE = "github"
 BASELINE_PATH = Path(__file__).resolve().parents[1] / ".demo" / "baseline.json"
 NO_BASELINE = (
@@ -280,10 +280,11 @@ def plan(gh: Any, baseline: dict[str, Any]) -> Plan:
     }
     for branch in sorted(branches - set(baseline["branches"]) - heads - {default}):
         result.left_behind.append(f"Branch {branch} has no pull request: kept.")
-    result.left_behind.append(
-        f"Kept as real work (not marked demo): {len(result.real_issues)} issue(s) and "
-        f"{len(result.real_prs)} PR(s) new since the baseline."
-    )
+    if result.real_issues or result.real_prs:
+        result.left_behind.append(
+            f"Kept as real work (not marked demo): {len(result.real_issues)} issue(s) and "
+            f"{len(result.real_prs)} PR(s) new since the baseline."
+        )
     if result.demo_issues:
         result.left_behind.append(
             f"{len(result.demo_issues)} issue(s) opened during demos stay on GitHub as closed "
@@ -323,22 +324,22 @@ def reset_database(db: Session, demo_issues: list[int], demo_prs: list[int]) -> 
     )
     approvals = db.execute(delete(Approval).where(Approval.pull_request_id.in_(pr_ids))).rowcount
     gates = db.execute(delete(GateStatus).where(GateStatus.pull_request_id.in_(pr_ids))).rowcount
-    about = AgentDecision.subject_source == SOURCE
-    forgotten = db.execute(
-        delete(AgentDecision).where(
-            about,
-            or_(
-                and_(
-                    AgentDecision.subject_type == "issue",
-                    AgentDecision.subject_id.in_(demo_issues),
-                ),
-                and_(
-                    AgentDecision.subject_type.in_(("pr", "release")),
-                    AgentDecision.subject_id.in_(demo_prs),
-                ),
+    demo_rows = and_(
+        AgentDecision.subject_source == SOURCE,
+        or_(
+            and_(
+                AgentDecision.subject_type == "issue",
+                AgentDecision.subject_id.in_(demo_issues),
             ),
-        )
-    ).rowcount
+            and_(
+                AgentDecision.subject_type.in_(("pr", "release")),
+                AgentDecision.subject_id.in_(demo_prs),
+            ),
+        ),
+    )
+    # a correction and the row it supersedes go together: unlink them first, or MySQL refuses
+    db.execute(update(AgentDecision).where(demo_rows).values(supersedes_id=None))
+    forgotten = db.execute(delete(AgentDecision).where(demo_rows)).rowcount
     incidents = db.execute(
         delete(Incident).where(
             Incident.source == SOURCE,

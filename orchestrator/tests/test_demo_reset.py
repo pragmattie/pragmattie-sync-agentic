@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from sdlc import demo_reset, synth
@@ -10,6 +10,7 @@ from sdlc.agents.signoff import COMMENT_MARKER
 from sdlc.agents.triage_comment import MARKER as TRIAGE_MARKER
 from sdlc.audit import record_decision
 from sdlc.db import Base
+from sdlc.issue_runner import GAVE_UP_MARKER
 from sdlc.tables import (
     AgentDecision,
     Approval,
@@ -210,6 +211,28 @@ def test_plan_lists_each_action_and_what_stays(scenario):
         "Kept as real work (not marked demo): 1 issue(s) and 2 PR(s) new since the baseline.",
         "2 issue(s) opened during demos stay on GitHub as closed (GitHub can't delete issues).",
     ]
+
+
+def test_the_triage_agents_gave_up_comment_on_a_demo_pr_is_deleted(scenario):
+    gh, baseline, made = scenario
+    gave_up = gh.comment(30, f"{GAVE_UP_MARKER}\nThe triage agent gave up.", user=BOT)
+
+    demo_reset.apply_plan(gh, demo_reset.plan(gh, baseline))
+
+    kept = {comment["id"] for comment in gh.comments}
+    assert gave_up["id"] not in kept
+    assert made["person_comment"]["id"] in kept
+
+
+def test_no_kept_as_real_work_line_when_nothing_is_new():
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    gh.add_issue(20, "Leads page loads slowly", labels=["demo", "module:leads"])
+
+    plan = demo_reset.plan(gh, baseline)
+
+    assert (plan.real_issues, plan.real_prs) == ([], [])
+    assert not [line for line in plan.left_behind if line.startswith("Kept as real work")]
 
 
 def test_a_failed_action_does_not_stop_the_rest(scenario):
@@ -426,6 +449,28 @@ def test_reset_database_forgets_only_the_demo_items(session):
     assert result["history"]["sprints"] == synth.SPRINT_COUNT
     synthetic = select(func.count(PullRequest.id)).where(PullRequest.source == "synthetic")
     assert session.scalar(synthetic) == result["history"]["pull_requests"]
+
+
+def test_a_superseded_pair_of_demo_rows_is_deleted_without_error(session, sqlite_engine):
+    original = _decision(session, "pr_risk", "pr", 30)
+    correction = _decision(session, "pr_risk", "pr", 30)
+    correction.supersedes_id = original.id
+    session.commit()
+    statements = []
+    event.listen(
+        sqlite_engine,
+        "before_cursor_execute",
+        lambda conn, cursor, statement, *rest: statements.append(statement.split()[0]),
+    )
+
+    result = demo_reset.reset_database(session, [], [30])
+    session.commit()
+
+    assert result["forgotten"] == 2
+    real = select(func.count(AgentDecision.id)).where(AgentDecision.subject_source == "github")
+    assert session.scalar(real) == 0
+    # MySQL checks the self-reference row by row, so the pair is unlinked before the delete
+    assert statements.index("UPDATE") < statements.index("DELETE", statements.index("UPDATE"))
 
 
 def test_apply_resets_github_and_the_database(scenario, sqlite_engine, monkeypatch, capsys):
