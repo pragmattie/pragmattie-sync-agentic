@@ -525,10 +525,12 @@ class FakeBoard(FakeGraphQL):
 
     repo = "pragmattie/pragmattie-sync-agentic"
 
-    def __init__(self, items, open_issues, closed_issues=()):
+    def __init__(self, items, open_issues, closed_issues=(), deployments=()):
         super().__init__(_ready_fields())
         self.items = list(items)
         self.issues = {"is:open": list(open_issues), "is:closed": list(closed_issues)}
+        self.deployments = list(deployments)
+        self.refuse_deployments = None  # an error message, when the token can't read them
 
     @staticmethod
     def _page(nodes, after):
@@ -555,6 +557,14 @@ class FakeBoard(FakeGraphQL):
             self.calls.append((query, variables))
             page = self._page(self.items, variables["after"])
             return {"organization": {"projectV2": {"items": page}}}
+        if "deployments(" in query:
+            self.calls.append((query, variables))
+            assert (variables["owner"], variables["name"]) == tuple(self.repo.split("/"))
+            assert variables["environments"] == ["production", "production-signoff"]
+            if self.refuse_deployments:
+                raise GitHubError(self.refuse_deployments)
+            page = self._page(self.deployments, variables["after"])
+            return {"repository": {"deployments": page}}
         return super().graphql(query, **variables)
 
 
@@ -713,6 +723,7 @@ def test_sync_reads_every_page_with_one_query_per_page():
     queries = [q for q, _ in fake.calls]
     assert sum("items(" in q for q in queries) == 6  # six items, one per page
     assert sum("search(" in q for q in queries) == 3 + 2
+    assert sum("deployments(" in q for q in queries) == 1
 
 
 def test_sync_never_sends_a_forbidden_mutation():

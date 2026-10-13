@@ -11,6 +11,7 @@ from sdlc.github_client import GitHubClient, GitHubError
 from sdlc.signals import github
 from sdlc.signals.github import Collector, labels_of, linked_issue_number, suite_of
 from sdlc.tables import CIRun, Deployment, Engineer, Epic, Incident, Issue, PullRequest
+from tests.fakes import FakeGitHub
 
 REPO = "acme/widgets"
 API = f"/repos/{REPO}"
@@ -834,8 +835,6 @@ DEPLOYED = datetime(2026, 10, 5, 12, 0)
 
 @pytest.fixture
 def gh():
-    from tests.fakes import FakeGitHub
-
     return FakeGitHub()
 
 
