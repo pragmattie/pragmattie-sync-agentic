@@ -15,6 +15,27 @@ function counts(values) {
   return Object.fromEntries(STAGES.map((stage, index) => [stage, values[index]]));
 }
 
+const HELD = "T2 · Held: open incident in pipeline (#61)";
+
+function merged(number, { source = "github", state = null, description = "" } = {}) {
+  return {
+    source,
+    number,
+    title: `Change ${number}`,
+    merged_at: `2026-10-02T${String(number % 24).padStart(2, "0")}:00:00`,
+    release: state ? { state, description } : null,
+  };
+}
+
+const RECENTLY_MERGED = [
+  merged(12, { state: "pending", description: HELD }),
+  merged(11, { state: "failure", description: "T2 · Blocked: CI failed on the release commit" }),
+  merged(10, { state: "success", description: "T0 · Release: deploys automatically" }),
+  merged(9),
+  merged(8, { source: "synthetic", state: "success", description: "T1 · Release" }),
+  ...[7, 6, 5, 4, 3].map((number) => merged(number, { source: "synthetic" })),
+];
+
 function flowResult({ source = "github", days = 60, available = { github: 4, synthetic: 90 } } = {}) {
   return {
     source,
@@ -31,6 +52,7 @@ function flowResult({ source = "github", days = 60, available = { github: 4, syn
     cycle_time_days: { median: 2.5, p85: 4.1 },
     items: 5,
     available,
+    recently_merged: RECENTLY_MERGED,
   };
 }
 
@@ -153,5 +175,59 @@ describe("DeliveryFlowView", () => {
 
     expect(getJson).toHaveBeenCalledTimes(2);
     expect(wrapper.find("[data-test='flow-chart']").exists()).toBe(true);
+  });
+
+  it("lists the recently merged items, newest first, with their release chips", async () => {
+    mockFlow({ github: 4, synthetic: 90 });
+
+    const wrapper = await mountView();
+
+    const rows = wrapper.findAll("[data-test='merged-item']");
+    expect(rows).toHaveLength(10);
+    expect(rows.map((row) => row.find("[data-test='merged-title']").text())).toEqual(
+      [12, 11, 10, 9, 8, 7, 6, 5, 4, 3].map((number) => `Change ${number}`),
+    );
+    expect(rows[0].text()).toContain("#12");
+    expect(rows[0].find("[data-test='merged-at']").text()).toMatch(/^Merged .*2026/);
+
+    const chips = rows.map((row) => row.find("[data-test='release-chip']"));
+    expect(chips.slice(0, 3).map((chip) => chip.text())).toEqual([
+      "Release held",
+      "Release blocked",
+      "Releasing",
+    ]);
+    expect(chips[0].classes()).toContain("text-warning");
+    expect(chips[1].classes()).toContain("text-error");
+    expect(chips[2].classes()).toContain("text-success");
+    const tooltips = rows
+      .slice(0, 3)
+      .map((row) => row.findComponent({ name: "VTooltip" }).props("text"));
+    expect(tooltips).toEqual([
+      HELD,
+      "T2 · Blocked: CI failed on the release commit",
+      "T0 · Release: deploys automatically",
+    ]);
+    expect(chips[3].exists()).toBe(false); // no verdict names it
+    expect(chips[5].exists()).toBe(false);
+    expect(chips[4].text()).toBe("Releasing");
+  });
+
+  it("labels simulated merged items and only those", async () => {
+    mockFlow({ github: 4, synthetic: 90 });
+
+    const wrapper = await mountView();
+
+    const rows = wrapper.findAll("[data-test='merged-item']");
+    const simulated = rows.map((row) => row.find("[data-test='merged-simulated']").exists());
+    expect(simulated).toEqual([false, false, false, false, true, true, true, true, true, true]);
+    expect(rows[4].find("[data-test='merged-simulated']").text()).toBe("Simulated");
+  });
+
+  it("leaves the list out when nothing has merged", async () => {
+    vi.spyOn(api, "getJson").mockResolvedValue({ ...flowResult(), recently_merged: [] });
+
+    const wrapper = await mountView();
+
+    expect(wrapper.find("[data-test='recently-merged']").exists()).toBe(false);
   });
 });

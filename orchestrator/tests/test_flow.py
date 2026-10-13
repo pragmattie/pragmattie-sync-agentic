@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from sdlc.db import Base
-from sdlc.flow import STAGES, available, flow
+from sdlc.flow import STAGES, available, flow, recently_merged
 from sdlc.main import app
 from sdlc.routers.signals import get_now
 from sdlc.tables import AgentDecision, Deployment, Issue, PullRequest
@@ -342,3 +342,98 @@ def test_production_follows_the_shipping_rule(db, case):
 
     in_production = [row["date"] for row in result["series"] if row["counts"]["Production"]]
     assert in_production[:1] == ([case.shipped.date()] if case.shipped else [])
+
+
+def _verdict(db, prs, at, *, source="github", state=None, verdict="hold", trigger="poll", **row):
+    db.add(
+        AgentDecision(
+            created_at=at,
+            agent="release_gate",
+            agent_version="v1",
+            subject_type="release",
+            subject_source=source,
+            subject_id=max(prs, default=0),
+            head_sha=f"sha-{at:%d%H%M}",
+            trigger=trigger,
+            output={"verdict": verdict, "prs": prs, **row.pop("output", {})},
+            action_taken=row.pop(
+                "action_taken", {"state": state, "description": f"T2 · {verdict}"}
+            ),
+            **row,
+        )
+    )
+    db.flush()
+
+
+def test_recently_merged_lists_the_ten_newest_of_both_sources(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    for number in range(1, 13):
+        merged = datetime(2026, 9, 10, number)
+        source = "synthetic" if number % 2 else "github"
+        _pr(db, issue, number, datetime(2026, 9, 9), source=source, merged_at=merged)
+    _pr(db, issue, 99, datetime(2026, 9, 9))  # open: not merged
+
+    items = recently_merged(db)
+
+    assert [item["number"] for item in items] == list(range(12, 2, -1))
+    assert items[0] == {
+        "source": "github",
+        "number": 12,
+        "title": "PR 12",
+        "merged_at": datetime(2026, 9, 10, 12),
+        "release": None,
+    }
+    assert items[1]["source"] == "synthetic"
+
+
+def test_recently_merged_shows_the_newest_verdict_naming_each_pr(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    for number in (40, 41, 42):
+        _pr(db, issue, number, datetime(2026, 9, 9), merged_at=datetime(2026, 9, 10, number - 30))
+    _pr(db, issue, 40, datetime(2026, 9, 9), source="synthetic", merged_at=datetime(2026, 9, 10))
+    _verdict(db, [40, 41], datetime(2026, 9, 10, 13), state="pending")
+    _verdict(db, [40, 41], datetime(2026, 9, 10, 14), state="success", verdict="release")
+    _verdict(db, [41], datetime(2026, 9, 10, 15), state="failure", verdict="blocked")
+    _verdict(db, [41], datetime(2026, 9, 10, 16), state="success", trigger="trial")
+    # a simulated verdict keeps its description in output, and its state only when held
+    _verdict(
+        db,
+        [40],
+        datetime(2026, 9, 10, 17),
+        source="synthetic",
+        verdict="hold",
+        output={"description": "T2 · Held: open incident in pipeline"},
+        action_taken={"held": True, "state": "pending"},
+    )
+
+    releases = {(item["source"], item["number"]): item["release"] for item in recently_merged(db)}
+
+    assert releases == {
+        ("github", 42): None,
+        ("github", 41): {"state": "failure", "description": "T2 · blocked"},
+        ("github", 40): {"state": "success", "description": "T2 · release"},
+        ("synthetic", 40): {
+            "state": "pending",
+            "description": "T2 · Held: open incident in pipeline",
+        },
+    }
+
+
+def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
+    with Session(sqlite_engine) as session:
+        issue = _issue(session, 9, datetime(2026, 9, 1))
+        _pr(session, issue, 40, datetime(2026, 9, 2), merged_at=datetime(2026, 9, 3, 10))
+        _verdict(session, [40], datetime(2026, 9, 3, 11), state="pending")
+        session.commit()
+
+    body = api.get("/api/v1/signals/flow", params={"source": "synthetic"}).json()
+
+    assert body["recently_merged"] == [
+        {
+            "source": "github",
+            "number": 40,
+            "title": "PR 40",
+            "merged_at": "2026-09-03T10:00:00",
+            "release": {"state": "pending", "description": "T2 · hold"},
+        }
+    ]

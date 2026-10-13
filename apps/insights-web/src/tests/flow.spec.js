@@ -3,7 +3,9 @@ import {
   STAGE_COLORS,
   flowChartData,
   flowTiles,
+  mergedRows,
   noRealWork,
+  releaseChip,
   shortDate,
   throughputChartData,
 } from "../flow";
@@ -50,5 +52,38 @@ describe("flow helpers", () => {
     const tiles = flowTiles({ items: 0, cycle_time_days: { median: null, p85: 1 } });
 
     expect(tiles.map((tile) => tile.value)).toEqual(["0", "—", "1 day"]);
+  });
+
+  it("turns a release verdict's state into its chip, with the description as tooltip", () => {
+    const chip = (state) => releaseChip({ release: { state, description: `T2 · ${state}` } });
+
+    expect(chip("pending")).toEqual({
+      text: "Release held",
+      color: "warning",
+      tooltip: "T2 · pending",
+    });
+    expect([chip("failure").text, chip("error").text]).toEqual([
+      "Release blocked",
+      "Release blocked",
+    ]);
+    expect(chip("success").color).toBe("success");
+    expect(releaseChip({ release: null })).toBeNull();
+    expect(releaseChip({})).toBeNull();
+  });
+
+  it("makes the merged rows with a Simulated flag for simulated items", () => {
+    const rows = mergedRows({
+      recently_merged: [
+        { source: "synthetic", number: 7, title: "A", merged_at: "2026-10-02T10:00:00" },
+        { source: "github", number: 7, title: "B", merged_at: null, release: null },
+      ],
+    });
+
+    expect(rows.map((row) => [row.key, row.simulated, row.chip])).toEqual([
+      ["synthetic-7", true, null],
+      ["github-7", false, null],
+    ]);
+    expect(rows[1].merged).toBe("—");
+    expect(mergedRows(null)).toEqual([]);
   });
 });

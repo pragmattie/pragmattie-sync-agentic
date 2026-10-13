@@ -26,6 +26,7 @@ import {
   STAGE_COLORS,
   flowChartData,
   flowTiles,
+  mergedRows,
   noRealWork,
   throughputChartData,
 } from "../flow";
@@ -69,6 +70,7 @@ const emptyReal = computed(() => noRealWork(result.value));
 const tiles = computed(() => flowTiles(result.value));
 const flowData = computed(() => flowChartData(result.value));
 const throughputData = computed(() => throughputChartData(result.value));
+const merged = computed(() => mergedRows(result.value));
 const legend = computed(() =>
   (result.value?.stages ?? []).map((stage) => ({ label: stage, color: STAGE_COLORS[stage] })),
 );
@@ -255,6 +257,48 @@ const throughputOptions = {
         </v-card>
       </v-col>
     </v-row>
+
+    <v-card
+      v-if="result && !error && merged.length"
+      variant="outlined"
+      class="mt-4"
+      data-test="recently-merged"
+    >
+      <v-card-title>Recently merged</v-card-title>
+      <v-card-subtitle>The newest merged items, real and simulated, with their release</v-card-subtitle>
+      <v-list density="comfortable">
+        <v-list-item v-for="item in merged" :key="item.key" data-test="merged-item">
+          <v-list-item-title>
+            <span class="text-medium-emphasis">#{{ item.number }}</span>
+            <span data-test="merged-title">{{ item.title }}</span>
+          </v-list-item-title>
+          <v-list-item-subtitle data-test="merged-at">Merged {{ item.merged }}</v-list-item-subtitle>
+          <template #append>
+            <div class="d-flex ga-2">
+              <v-chip
+                v-if="item.simulated"
+                size="small"
+                color="secondary"
+                variant="tonal"
+                data-test="merged-simulated"
+              >
+                Simulated
+              </v-chip>
+              <v-chip
+                v-if="item.chip"
+                size="small"
+                :color="item.chip.color"
+                variant="tonal"
+                data-test="release-chip"
+              >
+                {{ item.chip.text }}
+                <v-tooltip activator="parent" location="top" :text="item.chip.tooltip" />
+              </v-chip>
+            </div>
+          </template>
+        </v-list-item>
+      </v-list>
+    </v-card>
   </v-container>
 </template>
 

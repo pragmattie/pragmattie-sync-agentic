@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sdlc import runner as runner_module
 from sdlc.config import Settings, get_settings
 from sdlc.db import Base
+from sdlc.release_runner import ReleaseRunner
 from sdlc.runner import Runner, main, run
 from sdlc.signals.github import Collector
 from sdlc.tables import AgentDecision, PullRequest
@@ -171,9 +172,9 @@ def test_run_builds_the_forecaster_with_the_runners_own_mode(mode, gh, llm, engi
     monkeypatch.setattr(issue_runner, "build", lambda m, gh=None, engine=None: None)
     seen = {}
 
-    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner):
+    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner, release_runner):
         seen["runner"], seen["forecaster"] = runner, forecast_runner
-        seen["planner"] = plan_runner
+        seen["planner"], seen["releases"] = plan_runner, release_runner
 
     monkeypatch.setattr(runner_module, "run", loop)
     try:
@@ -181,6 +182,9 @@ def test_run_builds_the_forecaster_with_the_runners_own_mode(mode, gh, llm, engi
     finally:
         get_settings.cache_clear()
 
+    releases = seen["releases"]
+    assert isinstance(releases, ReleaseRunner)
+    assert releases.mode == mode and releases.gh is gh and releases.engine is engine
     forecaster = seen["forecaster"]
     assert isinstance(forecaster, ForecastRunner)
     assert forecaster.mode == seen["runner"].mode == mode
@@ -214,7 +218,7 @@ def test_the_poll_loop_plans_only_with_both_switches_on(
     monkeypatch.setattr(issue_runner, "build", lambda m, gh=None, engine=None: None)
     seen = {}
 
-    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner):
+    def loop(runner, poll_seconds, *, issue_runner, forecast_runner, plan_runner, release_runner):
         seen["planner"] = plan_runner
 
     monkeypatch.setattr(runner_module, "run", loop)
@@ -287,3 +291,53 @@ def test_run_logs_github_calls_once_an_hour(runner, gh, monkeypatch, caplog):
         run(runner, 1800, sleep=ticks.sleep, clock=ticks.clock, polls=5)
     lines = [r.message for r in caplog.records if "calls sent" in r.message]
     assert lines == ["GitHub calls sent: 120, of which free 304s: 90"] * 2
+
+
+class Poller:
+    """A stand-in runner that notes each poll in ``order`` and can fail."""
+
+    def __init__(self, name, order, fail=False):
+        self.name, self.order, self.fail = name, order, fail
+
+    def poll_once(self):
+        self.order.append(self.name)
+        if self.fail:
+            raise RuntimeError("boom")
+        return {}
+
+
+def test_run_polls_the_release_runner_last_and_keeps_going_when_it_fails(
+    runner, monkeypatch, caplog
+):
+    order = []
+    monkeypatch.setattr(runner, "poll_once", lambda: order.append("risk"))
+    ticks = Ticks(30)
+    with caplog.at_level(logging.INFO, "sdlc.runner"):
+        run(
+            runner,
+            30,
+            sleep=ticks.sleep,
+            clock=ticks.clock,
+            polls=2,
+            plan_runner=Poller("plan", order),
+            release_runner=Poller("release", order, fail=True),
+        )
+    assert order == ["risk", "plan", "release"] * 2
+    assert "The release poll failed" in caplog.text
+
+
+def test_run_skips_the_release_runner_while_rate_limited(runner, gh, monkeypatch):
+    order = []
+    monkeypatch.setattr(runner, "poll_once", lambda: pytest.fail("polled while limited"))
+    gh.limited_until = datetime(2026, 10, 6, 12, 30)
+    ticks = Ticks(30)
+    run(
+        runner,
+        30,
+        sleep=ticks.sleep,
+        clock=ticks.clock,
+        polls=2,
+        plan_runner=Poller("plan", order),
+        release_runner=Poller("release", order),
+    )
+    assert order == ["plan", "plan"]

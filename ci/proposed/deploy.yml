@@ -1,0 +1,59 @@
+# Proposed deploy workflow. A person copies this to .github/workflows/deploy.yml; see README.md here.
+# Every push to main waits for the release-gate status the orchestrator posts on its commit, then
+# deploys to the environment that status names: production-signoff for T3, production otherwise.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60 # fails closed: no verdict in an hour, no deploy
+    outputs:
+      environment: ${{ steps.gate.outputs.environment }}
+      tier: ${{ steps.gate.outputs.tier }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          echo "Waiting for the release-gate status on $SHA (the orchestrator posts it)."
+          while true; do
+            line=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses" \
+              --jq '[.[] | select(.context == "release-gate")][0] | "\(.state)|\(.description)"')
+            state=${line%%|*}; description=${line#*|}
+            case "$state" in
+              success) tier=${description:0:2}; echo "Release gate: $description"; echo "tier=$tier" >> "$GITHUB_OUTPUT"
+                       if [ "$tier" = "T3" ]; then echo "environment=production-signoff" >> "$GITHUB_OUTPUT"
+                       else echo "environment=production" >> "$GITHUB_OUTPUT"; fi; exit 0 ;;
+              failure|error) echo "::error::Release gate: $description"; exit 1 ;;
+              pending) echo "$(date -u +%H:%M:%S) held: $description" ;;
+              *) echo "$(date -u +%H:%M:%S) no verdict yet" ;;
+            esac
+            sleep 20
+          done
+
+  deploy:
+    name: Deploy (no-op)
+    needs: release-gate
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.release-gate.outputs.environment }}
+    steps:
+      - env:
+          TIER: ${{ needs.release-gate.outputs.tier }}
+        run: |
+          echo "No-op deploy of ${GITHUB_SHA::7} (tier $TIER)."
+          echo "Nothing is hosted: replace this step to deploy for real."
