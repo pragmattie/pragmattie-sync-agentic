@@ -1,4 +1,4 @@
-# Proposed deploy workflow. A person copies this to .github/workflows/deploy.yml; see README.md here.
+# The deploy workflow (6.5). Proposed by an agent in ci/proposed/ and applied here by a person.
 # Every push to main waits for the release-gate status the orchestrator posts on its commit, then
 # deploys to the environment that status names: production-signoff for T3, production otherwise.
 name: Deploy
