@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
@@ -10,7 +10,7 @@ from sdlc.db import Base
 from sdlc.github_client import GitHubClient, GitHubError
 from sdlc.signals import github
 from sdlc.signals.github import Collector, labels_of, linked_issue_number, suite_of
-from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
+from sdlc.tables import CIRun, Deployment, Engineer, Epic, Incident, Issue, PullRequest
 
 REPO = "acme/widgets"
 API = f"/repos/{REPO}"
@@ -824,3 +824,153 @@ def test_a_failed_forecast_is_logged_and_keeps_the_counts(
         counts = github.collect_once(sqlite_engine, client)
     assert counts["issues"] == 2
     assert "The forecaster failed" in caplog.text
+
+
+# Deployments and incidents (6.4), against the fake GitHub
+
+ENVIRONMENTS = ("production", "production-signoff")
+DEPLOYED = datetime(2026, 10, 5, 12, 0)
+
+
+@pytest.fixture
+def gh():
+    from tests.fakes import FakeGitHub
+
+    return FakeGitHub()
+
+
+def _deployed(gh, sha, at=DEPLOYED, environment="production"):
+    deployment = gh.add_deployment(sha, environment)
+    gh.deployment_status(deployment["id"], "in_progress", at - timedelta(minutes=5))
+    gh.deployment_status(deployment["id"], "success", at)
+    return deployment
+
+
+def _incident(gh, number, labels=("incident", "module:leads", "sev1"), opened=DEPLOYED):
+    gh.add_issue(number, "Leads list is empty", "Customers see no leads.", labels=labels)
+    gh.issues[number]["created_at"] = f"{opened.isoformat()}Z"
+
+
+def test_a_successful_deployment_is_stored_with_its_sha(session, gh):
+    _deployed(gh, "c" * 40)
+    _deployed(gh, "d" * 40, DEPLOYED + timedelta(hours=1), environment="production-signoff")
+    gh.add_deployment("e" * 40, environment="staging")  # not a release environment
+    assert Collector(session, gh).collect_deployments(ENVIRONMENTS) == 2
+    rows = session.scalars(select(Deployment).order_by(Deployment.deployed_at)).all()
+    assert [(row.source, row.sha, row.version, row.status) for row in rows] == [
+        ("github", "c" * 40, "ccccccc", "success"),
+        ("github", "d" * 40, "ddddddd", "success"),
+    ]
+    assert rows[0].deployed_at == DEPLOYED
+    assert rows[0].pr_count == 0
+    assert rows[0].external_id.startswith("deployment-")
+
+
+def test_a_deployment_without_success_is_skipped_until_it_succeeds(session, gh):
+    deployment = gh.add_deployment("c" * 40)
+    gh.deployment_status(deployment["id"], "in_progress", DEPLOYED)
+    assert Collector(session, gh).collect_deployments(ENVIRONMENTS) == 0
+    assert session.scalar(select(func.count()).select_from(Deployment)) == 0
+
+    gh.deployment_status(deployment["id"], "success", DEPLOYED + timedelta(minutes=3))
+    assert Collector(session, gh).collect_deployments(ENVIRONMENTS) == 1
+    assert session.scalar(select(Deployment.deployed_at)) == DEPLOYED + timedelta(minutes=3)
+
+    # Stored once, then left as it is: its statuses aren't read again.
+    gh.requests.clear()
+    assert Collector(session, gh).collect_deployments(ENVIRONMENTS) == 1
+    assert not any(path.endswith("/statuses") for _, path in gh.requests)
+
+
+def test_a_deployment_deleted_on_github_disappears_and_its_incidents_are_unlinked(session, gh):
+    kept = _deployed(gh, "c" * 40, DEPLOYED - timedelta(days=3))
+    deleted = _deployed(gh, "d" * 40)
+    _incident(gh, 40, opened=DEPLOYED + timedelta(hours=2))
+    session.add(
+        Deployment(
+            source="synthetic",
+            external_id="syn-deploy-1",
+            version="2026.1",
+            deployed_at=DEPLOYED,
+            status="success",
+        )
+    )
+    collector = Collector(session, gh)
+    collector.collect_deployments(ENVIRONMENTS)
+    collector.collect_incidents()
+    session.commit()
+    assert _github(session, Incident, "issue-40").deployment.sha == "d" * 40
+
+    gh.delete_deployment(deleted["id"])
+    collector = Collector(session, gh)
+    assert collector.collect_deployments(ENVIRONMENTS) == 1
+    session.commit()
+    assert _github(session, Deployment, f"deployment-{deleted['id']}") is None
+    assert _github(session, Deployment, f"deployment-{kept['id']}") is not None
+    assert _github(session, Incident, "issue-40").deployment_id is None
+    synthetic = session.scalar(select(Deployment).where(Deployment.source == "synthetic"))
+    assert synthetic is not None
+
+
+def test_an_incident_is_stored_resolved_and_removed_with_its_label(session, gh):
+    _incident(gh, 40)
+    _incident(gh, 41, labels=("incident",))
+    assert Collector(session, gh).collect_incidents() == 2
+    incident = _github(session, Incident, "issue-40")
+    assert (incident.title, incident.severity, incident.module) == (
+        "Leads list is empty",
+        "sev1",
+        "leads",
+    )
+    assert incident.opened_at == DEPLOYED
+    assert incident.resolved_at is None
+    plain = _github(session, Incident, "issue-41")
+    assert (plain.severity, plain.module) == ("sev2", None)
+
+    gh.close_issue(40, DEPLOYED + timedelta(hours=3))
+    Collector(session, gh).collect_incidents()
+    assert _github(session, Incident, "issue-40").resolved_at == DEPLOYED + timedelta(hours=3)
+
+    gh.issue_labels[41].remove("incident")  # no longer an incident
+    assert Collector(session, gh).collect_incidents() == 1
+    session.commit()
+    assert _github(session, Incident, "issue-41") is None
+    assert _github(session, Incident, "issue-40") is not None
+
+
+def test_an_incident_links_to_the_latest_deploy_within_24_hours(session, gh):
+    _deployed(gh, "c" * 40, DEPLOYED - timedelta(hours=30))
+    latest = _deployed(gh, "d" * 40, DEPLOYED)
+    _deployed(gh, "e" * 40, DEPLOYED + timedelta(days=5))  # after both incidents opened
+    _incident(gh, 40, opened=DEPLOYED + timedelta(hours=23))
+    _incident(gh, 41, opened=DEPLOYED + timedelta(hours=25))
+    _incident(gh, 42, opened=DEPLOYED - timedelta(days=2))  # before any deploy
+    collector = Collector(session, gh)
+    collector.collect_deployments(ENVIRONMENTS)
+    collector.collect_incidents()
+    linked = _github(session, Incident, "issue-40").deployment
+    assert linked.external_id == f"deployment-{latest['id']}"
+    assert _github(session, Incident, "issue-41").deployment_id is None
+    assert _github(session, Incident, "issue-42").deployment_id is None
+
+
+def test_incident_issues_are_not_work(session, gh):
+    _incident(gh, 40)
+    gh.add_issue(41, labels=("module:leads", "points:3"))
+    collector = Collector(session, gh)
+    assert collector.collect_issues() == 1
+    collector.collect_incidents()
+    assert _github(session, Issue, "issue-40") is None
+    assert _github(session, Issue, "issue-41") is not None
+    assert _github(session, Incident, "issue-41") is None
+
+
+def test_the_collector_reads_the_policys_environments(sqlite_engine, client):
+    Base.metadata.create_all(sqlite_engine)
+    asked = []
+
+    with Session(sqlite_engine) as session:
+        collector = Collector(session, client)
+        collector.collect_deployments = lambda environments: asked.append(environments) or 0
+        collector.run()
+    assert asked == [("production", "production-signoff")]
