@@ -39,6 +39,12 @@ def gh():
     return FakeGitHub()
 
 
+@pytest.fixture(autouse=True)
+def runner_logs(monkeypatch):
+    """Alembic's fileConfig in other tests disables loggers that already exist; undo that."""
+    monkeypatch.setattr(release_runner.log, "disabled", False)
+
+
 def _runner(gh, engine, policy, mode="enforce"):
     return ReleaseRunner(gh, policy, mode, engine=engine)
 
