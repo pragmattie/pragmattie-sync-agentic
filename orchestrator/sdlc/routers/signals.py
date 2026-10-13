@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from sdlc import audit, calibration, flow, forecaster, metrics
+from sdlc import accuracy, audit, calibration, flow, forecaster, metrics
 from sdlc.clock import utcnow
 from sdlc.db import get_session
 from sdlc.tables import AgentDecision, Forecast, PullRequest
@@ -119,6 +119,12 @@ def calibration_report(
         "real_incident_prs": real_incidents,
         "pooled": calibration.POOLED_RESULT,
     }
+
+
+@router.get("/accuracy")
+def accuracy_report(db: Session = Depends(get_session)) -> dict:
+    """How often the predictions matched what happened: two simulated trends, three real."""
+    return accuracy.report(db)
 
 
 @router.get("/decisions")

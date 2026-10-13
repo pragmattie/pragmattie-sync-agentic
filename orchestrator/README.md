@@ -34,6 +34,15 @@ repeats. Each run draws from its own sequence (from the seed and the run's numbe
 remaining items never finish later; with nothing remaining the chance is 100%. `python -m sdlc.forecast [--runs N]` prints the current simulated sprint's forecast,
 with the items at risk; it is read-only.
 
+How often the predictions matched what happened is reported by `sdlc/accuracy.py`, at
+`GET /api/v1/signals/accuracy` and by `python -m sdlc.accuracy` (JSON). Two trends are simulated:
+each past synthetic sprint forecast again as of its third working day, from only what was known
+then (sampling from the history's first closure on), and the risk score's catch of incident PRs
+(T2 or above) by sprint; both are kept in the process until the day or the simulated history
+changes. Three are real: the triage agent's labels kept or corrected by a person, the test
+selector's settled results that missed a failure, and each finished milestone's first saved
+forecast against when its last issue closed. No Claude or GitHub call is made.
+
 Real milestones are forecast in sequence, the way the agents build them: a milestone's forecast
 plays forward the open items of the open milestones before it (by the number after M) and then
 its own, and every real milestone shares one seed per day, so a later milestone is never forecast
