@@ -19,6 +19,7 @@ from sdlc.agents.suite_select import (
     with_flaky,
 )
 from sdlc.db import Base
+from sdlc.signals.github import SUITES
 from sdlc.suite_selector import ci_results, describe, recommend, report, settle, unsettled
 from sdlc.tables import AgentDecision, CIRun, PullRequest
 from sdlc.tiers import load_policy
@@ -225,13 +226,7 @@ def test_recommend_records_one_row_per_attempt(db, policy):
     assert second.output["suites"] == list(CI_SUITES)
 
 
-JOB_NAMES = {
-    "api": "CRM API (lint + tests)",
-    "web": "CRM web (tests + build)",
-    "insights-web": "Insights web (tests + build)",
-    "orchestrator": "Orchestrator (lint + tests)",
-    "migrations": "Migrations on MySQL",
-}
+JOB_NAMES = {suite: name for name, suite in SUITES.items()}  # CI's job name for each suite
 
 
 def _job(suite, conclusion="success", *, attempt=1, seconds=60, status="completed"):
