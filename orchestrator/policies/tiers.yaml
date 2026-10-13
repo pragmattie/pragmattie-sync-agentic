@@ -84,6 +84,18 @@ tiers:
     agent_check: reports_only
     release: signoff
 
+# The release gate: what a release needs before it deploys. A release is everything merged since
+# the last deploy, at the highest tier among its PRs; each tier's `release` says which of these
+# apply: automatic (none), checks, or signoff (the checks, then a person approves the deployment).
+release_gate:
+  environment: production  # the GitHub environment a deploy uses
+  signoff_environment: production-signoff  # the same, with a required reviewer
+  failure_rate:  # hold when too many recent deploys caused an incident
+    window_days: 7
+    max: 0.3
+    min_deploys: 3  # fewer deploys than this in the window: too few to judge, don't hold
+  synthetic_signoff_hours: 4  # simulated history: how long after merge a T3 sign-off arrives
+
 # Models the implementer workflow uses to build and review. A `model:` label on the issue wins.
 # .github/workflows/implement.yml still holds its own copy of this rule until you change it.
 models:

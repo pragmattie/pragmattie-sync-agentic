@@ -1,6 +1,6 @@
 """The release runner: judge each commit the deploy workflow is waiting on, and post its verdict.
 
-The deploy workflow (``ci/proposed/deploy.yml`` until a person applies it) runs on every push to
+The deploy workflow (``.github/workflows/deploy.yml``) runs on every push to
 ``main`` and waits for a ``release-gate`` commit status. Each poll this runner collects
 deployments and incidents, finds the deploy runs still waiting (``JUDGING``), and judges each
 commit with the release gate's rules (``sdlc.agents.release_gate``):

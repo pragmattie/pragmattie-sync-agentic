@@ -8,22 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`tiers.yaml`** (6.3): the whole live policy with a `release_gate:` section added (the
-  release gate's environments, failure-rate hold and simulated sign-off delay). Its values equal
-  the defaults in `sdlc/tiers.py`, so behaviour is the same before and after. Apply it over
-  `orchestrator/policies/tiers.yaml` and delete this copy; the tests read this copy while it
-  exists, else the live one.
-- **`deploy.yml`** (6.5): the deploy workflow. On every push to `main`, the job "Release gate"
-  waits (up to 60 minutes, then fails: no verdict, no deploy) for the `release-gate` commit
-  status. A success deploys, T3 to `production-signoff` and anything else to `production`; a
-  failure stops; pending keeps waiting. The job "Deploy (no-op)" deploys nothing, but GitHub
-  records a real deployment, so merged work reaches Production. Until 7.1 v1 posts the
-  `release-gate` status; after it, this repository's release runner (`sdlc.release_runner`)
-  does. Copy it to `.github/workflows/deploy.yml` and delete this copy; its test reads this copy
-  while it exists, else the live one. Before applying it, in Settings > Environments add:
-  - `production`, with no protection rules;
-  - `production-signoff`, with the repository owner as required reviewer and "Prevent
-    self-review" off, so a T3 deploy waits for a person to press "Approve deployment".
+Nothing pending.
 
 ## Applied
 
@@ -53,6 +38,15 @@ Nothing in this folder runs automatically.
   statuses, and the runs of "Implementer agent", "Reviewer agent (shadow)" and "CI") as well
   as its 10-minute schedule. Applied over `.github/workflows/board.yml` with one addition: the
   job skips pull requests from forks, which get no secrets. The copy is deleted.
+
+- **`deploy.yml`** (6.5): the deploy workflow. Every push to `main` waits (up to 60 minutes) for
+  the `release-gate` commit status, then deploys nothing to `production`, or to
+  `production-signoff` (which waits for its required reviewer) for T3. Applied as
+  `.github/workflows/deploy.yml` after both environments were created, and the copy deleted.
+
+- **`tiers.yaml`** (6.3): the `release_gate:` section (environments, failure-rate hold, simulated
+  sign-off delay), equal to the defaults in `sdlc/tiers.py`, so nothing changed in behaviour.
+  Applied over `orchestrator/policies/tiers.yaml` and the copy deleted.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
