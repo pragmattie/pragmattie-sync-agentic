@@ -64,6 +64,17 @@ run` when `ORCHESTRATOR_MODE` isn't `off` either. `python -m sdlc.plan_runner dr
 the M-number in the milestone's title (`5` or `M5`) or the full title. The forecast page's
 `proposals` show each milestone's latest proposal, and `synth --reset` keeps every planner row.
 
+The release runner in `sdlc/release_runner.py` gates real releases. The deploy workflow
+(proposed as `ci/proposed/deploy.yml`) runs on every push to `main` and waits for a
+`release-gate` commit status; each poll, the runner finds the deploy runs still waiting, works out
+what each would ship (everything merged since the last deploy, through the PR whose merge commit
+it is) and judges it with the release gate's rules (`sdlc/agents/release_gate.py`): T0 and T1
+deploy at once, T2 waits for CI and for any open incident in its modules to close, and T3 then
+waits for a person to approve the deployment in GitHub. It posts the verdict as the status and
+records one `release_gate` audit row each time the verdict changes. It runs last in `python -m
+sdlc.runner run`, in the same mode, and `python -m sdlc.release_runner once` polls once. Until
+7.1 this repository's poll loop is off and v1 posts the status.
+
 Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
 reads decisions, and `sdlc/agent_runs.py` parses the run records the implementer and reviewer
