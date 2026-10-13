@@ -2,12 +2,13 @@
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
 ``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
-GitHub Actions runs with their jobs, and deployments with their statuses, and logs every request
-it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
+GitHub Actions runs with their jobs, workflow runs by workflow file, and deployments with their
+statuses, and logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises
+a given error.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import unquote
 
 from sdlc.agents.llm import LLMResult, StructuredLLM
@@ -38,6 +39,7 @@ class FakeGitHub:
         self.diffs: dict[int, str] = {}
         self.runs: list[dict] = []  # Actions runs, each with its head_sha
         self.jobs: dict[int, list[dict]] = {}  # each run's jobs, every attempt
+        self.workflow_runs: dict[str, list[dict]] = {}  # by workflow file; a missing one is a 404
         self.deployments: list[dict] = []  # each with its environment
         self.deployment_statuses: dict[int, list[dict]] = {}  # newest first, like GitHub
         self.requests: list[tuple[str, str]] = []
@@ -114,8 +116,10 @@ class FakeGitHub:
     def push(self, number: int, sha: str) -> None:
         self.prs[number]["head"]["sha"] = sha
 
-    def merge(self, number: int, at: datetime) -> None:
-        self.prs[number].update(state="closed", merged_at=iso(at), closed_at=iso(at))
+    def merge(self, number: int, at: datetime, sha: str | None = None) -> None:
+        self.prs[number].update(
+            state="closed", merged_at=iso(at), closed_at=iso(at), merge_commit_sha=sha
+        )
 
     def comment(self, number: int, body: str, *, user=PERSON, at=None) -> dict:
         self._next_id += 1
@@ -141,6 +145,16 @@ class FakeGitHub:
         run = {"id": self._next_id, "head_sha": sha, "created_at": iso(created_at)}
         self.runs.append(run)
         self.jobs[run["id"]] = jobs
+        return run
+
+    def add_workflow_run(
+        self, workflow: str, sha: str, status: str = "queued", *, created_at=None
+    ) -> dict:
+        """A run of ``workflow`` (e.g. "deploy.yml") on this commit of main."""
+        self._next_id += 1
+        at = created_at or datetime(2026, 10, 1, 10, 0) + timedelta(seconds=self._next_id)
+        run = {"id": self._next_id, "head_sha": sha, "status": status, "created_at": iso(at)}
+        self.workflow_runs.setdefault(workflow, []).insert(0, run)  # newest first, like GitHub
         return run
 
     def add_deployment(self, sha: str, environment: str = "production") -> dict:
@@ -189,6 +203,15 @@ class FakeGitHub:
         path = self._log("GET", path)
         if match := re.fullmatch(r"/pulls/(\d+)", path):
             return self._pr(int(match.group(1)))
+        if path == "/pulls":  # one page, newest update first
+            state = params.get("state", "open")
+            listed = [self._pr(n) for n, pr in self.prs.items() if state in ("all", pr["state"])]
+            listed.sort(key=lambda pr: pr["closed_at"] or pr["created_at"], reverse=True)
+            return listed[: params.get("per_page", 30)]
+        if match := re.fullmatch(r"/actions/workflows/([\w.-]+)/runs", path):
+            if match.group(1) not in self.workflow_runs:
+                raise GitHubError(f"GitHub 404 on {path}: Not Found")
+            return {"workflow_runs": [dict(run) for run in self.workflow_runs[match.group(1)]]}
         if path == "/actions/runs":
             sha = params.get("head_sha")
             return {"workflow_runs": [run for run in self.runs if run["head_sha"] == sha]}
@@ -241,6 +264,13 @@ class FakeGitHub:
             return list((self.files if match.group(2) == "files" else self.reviews)[number])
         if match := re.fullmatch(r"/issues/(\d+)/comments", path):
             return [c for c in self.comments if c["number"] == int(match.group(1))]
+        if match := re.fullmatch(r"/commits/(\w+)/pulls", path):
+            sha = match.group(1)
+            return [
+                self._pr(number)
+                for number, pr in self.prs.items()
+                if sha in (pr["merge_commit_sha"], pr["head"]["sha"])
+            ]
         if match := re.fullmatch(r"/actions/runs/(\d+)/jobs", path):
             return list(self.jobs[int(match.group(1))])
         if match := re.fullmatch(r"/issues/(\d+)/labels", path):
