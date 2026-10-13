@@ -44,6 +44,12 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
       CORS_ORIGINS: http://localhost:${INSIGHTS_WEB_PORT:-5174},http://insights.pragmattie-sync.localhost,http://insights.pragmattie-sync.localhost:${PROXY_PORT:-80}
+      # For the demo reset and the pre-demo check; this service runs no poll loop.
+      ORCHESTRATOR_MODE: ${ORCHESTRATOR_MODE:-off}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      GITHUB_API_URL: ${GITHUB_API_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}  # only the check's --smoke uses it
     ports:
       - "${ORCH_PORT:-8001}:8001"
     volumes:
