@@ -30,6 +30,7 @@ from sdlc.clock import utcnow
 from sdlc.db import get_engine
 from sdlc.epics import epic_label, milestone_order
 from sdlc.forecast import (
+    HISTORY_DAYS,
     RUNS,
     daily_throughput,
     percentile_date,
@@ -80,6 +81,16 @@ def _met(forecast: date | None, actual: date | None) -> bool:
     return forecast is None or actual <= forecast
 
 
+def _known_throughput(db: Session, as_of: date) -> list[int]:
+    """``daily_throughput`` before ``as_of``, from the history's first closure on."""
+    samples = daily_throughput(db, today=as_of, source=SIMULATED)
+    began = db.scalar(select(func.min(Issue.closed_at)).where(Issue.source == SIMULATED))
+    if began is None:
+        return []
+    window = working_days(as_of - timedelta(days=HISTORY_DAYS), as_of - timedelta(days=1))
+    return [count for day, count in zip(window, samples, strict=True) if day >= began.date()]
+
+
 def backtest_sprint(db: Session, sprint: Sprint, *, runs: int = RUNS) -> dict | str:
     """``sprint`` forecast as of its third working day and graded; a reason string if skipped."""
     days = working_days(sprint.start_date, sprint.end_date)
@@ -96,7 +107,7 @@ def backtest_sprint(db: Session, sprint: Sprint, *, runs: int = RUNS) -> dict | 
             )
         )
     )
-    samples = daily_throughput(db, today=as_of, source=SIMULATED)
+    samples = _known_throughput(db, as_of)
     if len(samples) < MIN_HISTORY_DAYS:
         return TOO_EARLY
     results = simulate(len(items), samples, start=as_of, runs=runs, seed=seed_for(sprint, as_of))
