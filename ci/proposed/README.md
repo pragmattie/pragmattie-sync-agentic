@@ -8,11 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`tiers.yaml`** (6.3): the whole live policy with a `release_gate:` section added (the
-  release gate's environments, failure-rate hold and simulated sign-off delay). Its values equal
-  the defaults in `sdlc/tiers.py`, so behaviour is the same before and after. Apply it over
-  `orchestrator/policies/tiers.yaml` and delete this copy; the tests read this copy while it
-  exists, else the live one.
+Nothing pending.
 
 ## Applied
 
@@ -47,6 +43,10 @@ Nothing in this folder runs automatically.
   the `release-gate` commit status, then deploys nothing to `production`, or to
   `production-signoff` (which waits for its required reviewer) for T3. Applied as
   `.github/workflows/deploy.yml` after both environments were created, and the copy deleted.
+
+- **`tiers.yaml`** (6.3): the `release_gate:` section (environments, failure-rate hold, simulated
+  sign-off delay), equal to the defaults in `sdlc/tiers.py`, so nothing changed in behaviour.
+  Applied over `orchestrator/policies/tiers.yaml` and the copy deleted.
 
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
