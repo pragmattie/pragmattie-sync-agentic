@@ -1,9 +1,9 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels and
-GitHub Actions runs with their jobs, and logs every request it is sent. ``FakeLLM`` answers with
-a fixed adjustment or raises a given error.
+``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
+GitHub Actions runs with their jobs, and deployments with their statuses, and logs every request
+it is sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re
@@ -38,6 +38,8 @@ class FakeGitHub:
         self.diffs: dict[int, str] = {}
         self.runs: list[dict] = []  # Actions runs, each with its head_sha
         self.jobs: dict[int, list[dict]] = {}  # each run's jobs, every attempt
+        self.deployments: list[dict] = []  # each with its environment
+        self.deployment_statuses: dict[int, list[dict]] = {}  # newest first, like GitHub
         self.requests: list[tuple[str, str]] = []
         self.fail_writes: set[str] = set()  # methods that raise, e.g. {"POST"}
         self.limited_until = None
@@ -141,6 +143,23 @@ class FakeGitHub:
         self.jobs[run["id"]] = jobs
         return run
 
+    def add_deployment(self, sha: str, environment: str = "production") -> dict:
+        """A deployment of this commit, with no status yet."""
+        self._next_id += 1
+        deployment = {"id": self._next_id, "sha": sha, "environment": environment}
+        self.deployments.append(deployment)
+        self.deployment_statuses[deployment["id"]] = []
+        return deployment
+
+    def deployment_status(self, deployment_id: int, state: str, at: datetime) -> None:
+        self.deployment_statuses[deployment_id].insert(0, {"state": state, "created_at": iso(at)})
+
+    def delete_deployment(self, deployment_id: int) -> None:
+        self.deployments = [d for d in self.deployments if d["id"] != deployment_id]
+
+    def close_issue(self, number: int, at: datetime) -> None:
+        self.issues[number].update(state="closed", closed_at=iso(at))
+
     def risk_comment(self, number: int) -> dict | None:
         return next(
             (c for c in self.comments if c["number"] == number and c["user"]["type"] == "Bot"),
@@ -176,6 +195,8 @@ class FakeGitHub:
         if match := re.fullmatch(r"/issues/(\d+)", path):
             number = int(match.group(1))
             return self._issue(number) if number in self.issues else self._pr(number)
+        if match := re.fullmatch(r"/deployments/(\d+)/statuses", path):
+            return list(self.deployment_statuses[int(match.group(1))])
         raise GitHubError(f"GitHub 404 on {path}: Not Found")
 
     def get_text(self, path: str, accept: str = "application/vnd.github.diff") -> str:
@@ -196,7 +217,20 @@ class FakeGitHub:
             state = params.get("state", "open")
             prs = [{**self._pr(n), "pull_request": {}} for n in self.prs]
             issues = [self._issue(number) for number in self.issues]
-            return [item for item in issues + prs if state == "all" or item["state"] == state]
+            wanted = [label for label in params.get("labels", "").split(",") if label]
+            return [
+                item
+                for item in issues + prs
+                if (state == "all" or item["state"] == state)
+                and all(label in {lb["name"] for lb in item["labels"]} for label in wanted)
+            ]
+        if path == "/deployments":
+            environment = params.get("environment")
+            return [
+                dict(d)
+                for d in self.deployments
+                if environment is None or d["environment"] == environment
+            ]
         if path == "/labels":
             return [{"name": name, "color": colour} for name, colour in self.repo_labels.items()]
         if path == "/issues/comments":

@@ -1,9 +1,16 @@
 """Real work from a GitHub repository: milestones (as epics), issues, pull requests with their
-files and reviews, CI jobs.
+files and reviews, CI jobs, deployments and incidents.
 
 CI jobs come only from the CI workflow (``CI_WORKFLOW``); the other workflows' jobs aren't CI.
 A finished run's jobs are read once per collector process (``CIMemory``), and each collection that
 stores CI jobs deletes this source's rows whose suite isn't one of the CI workflow's jobs.
+
+Deployments are read for the policy's two release environments; one is stored once it has a
+``success`` status, and is never changed after. Incidents are issues labelled ``incident``: open
+means ongoing, closed means resolved, and an issue no longer labelled ``incident`` is no longer
+one. Each collection deletes this source's deployments and incidents it didn't see, so a
+deployment deleted on GitHub (or a removed label) disappears here too. Incidents are not work:
+they never become issue rows.
 
 Every row is stored with ``source = "github"`` and matched on its ``external_id``, so running
 the collector again updates rows in place instead of adding new ones.
@@ -24,11 +31,11 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -37,7 +44,8 @@ from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
 from sdlc.github_client import GitHubClient, GitHubError, RateLimited, parse_time
-from sdlc.tables import CIRun, Engineer, Epic, Issue, PullRequest
+from sdlc.tables import CIRun, Deployment, Engineer, Epic, Incident, Issue, PullRequest
+from sdlc.tiers import load_policy
 
 log = logging.getLogger("sdlc.signals.github")
 
@@ -52,6 +60,9 @@ SUITES = {
 }
 SUITE_LENGTH = 40
 EPIC_LENGTH = 80
+SEVERITIES = ("sev1", "sev2", "sev3")
+DEFAULT_SEVERITY = "sev2"
+INCIDENT_AFTER_DEPLOY = timedelta(hours=24)  # an incident opened within this of a deploy is its
 
 
 def labels_of(item: dict) -> dict[str, str]:
@@ -85,6 +96,12 @@ def _points(value: str | None) -> int | None:
     return int(value) if value and value.isdigit() else None
 
 
+def release_environments() -> tuple[str, str]:
+    """The policy's release environments: production and its sign-off environment."""
+    release = load_policy().release
+    return release.environment, release.signoff_environment
+
+
 @dataclass
 class CIMemory:
     """What this process has stored from CI: the finished runs and their jobs' suites.
@@ -107,12 +124,17 @@ class Collector:
         self._finished_runs: set[int] = set()
         self._suites: set[str] = set()
 
-    def run(self) -> dict[str, int]:
+    def run(self, environments: Sequence[str] | None = None) -> dict[str, int]:
+        """Collect everything; ``environments`` defaults to the policy's release environments."""
+        if environments is None:
+            environments = release_environments()
         counts = {
             "epics": self.collect_milestones(),
             "issues": self.collect_issues(),
             "pull_requests": self.collect_pull_requests(),
             "ci_jobs": self.collect_ci(),
+            "deployments": self.collect_deployments(environments),
+            "incidents": self.collect_incidents(),
         }
         self.db.commit()
         # Remembered only once committed, so a failed pass reads those runs again.
@@ -328,17 +350,110 @@ class Collector:
             int((completed_at - started_at).total_seconds()) if started_at and completed_at else 0
         )
 
+    def collect_deployments(self, environments: Sequence[str]) -> int:
+        """Store each successful deployment to ``environments`` once; delete the ones gone.
+
+        A deployment without a ``success`` status yet is skipped and checked again next time.
+        Returns how many of this source's deployments are stored after the pass.
+        """
+        seen: set[str] = set()
+        count = 0
+        for environment in environments:
+            listed = self.client.paginate("/repos/{repo}/deployments", environment=environment)
+            for item in listed:
+                external_id = f"deployment-{item['id']}"
+                seen.add(external_id)
+                if self._stored(Deployment, external_id) is not None:
+                    count += 1
+                    continue
+                statuses = self.client.get(f"/repos/{{repo}}/deployments/{item['id']}/statuses")
+                success = next((s for s in statuses or [] if s.get("state") == "success"), None)
+                if success is None:
+                    continue
+                self.db.add(
+                    Deployment(
+                        source=self.source,
+                        external_id=external_id,
+                        sha=item["sha"],
+                        version=item["sha"][:7],
+                        deployed_at=parse_time(success["created_at"]),
+                        pr_count=0,
+                        status="success",
+                    )
+                )
+                count += 1
+        self.db.flush()
+        gone = list(
+            self.db.scalars(
+                select(Deployment.id).where(
+                    Deployment.source == self.source, Deployment.external_id.not_in(seen)
+                )
+            )
+        )
+        if gone:
+            self.db.execute(
+                update(Incident).where(Incident.deployment_id.in_(gone)).values(deployment_id=None)
+            )
+            self.db.execute(delete(Deployment).where(Deployment.id.in_(gone)))
+            self.db.flush()
+        return count
+
+    def collect_incidents(self) -> int:
+        """Store or update every issue labelled ``incident``; delete the incidents gone."""
+        deploys = list(
+            self.db.execute(
+                select(Deployment.id, Deployment.deployed_at).where(
+                    Deployment.source == self.source, Deployment.status == "success"
+                )
+            )
+        )
+        seen: set[str] = set()
+        listed = self.client.paginate("/repos/{repo}/issues", state="all", labels="incident")
+        for item in listed:
+            labels = labels_of(item)
+            if "pull_request" in item or "incident" not in labels:
+                continue
+            incident = self._row(Incident, f"issue-{item['number']}")
+            seen.add(incident.external_id)
+            incident.title = item["title"][:200]
+            incident.severity = next((s for s in labels if s in SEVERITIES), DEFAULT_SEVERITY)
+            module = labels.get("module")
+            incident.module = module[:30] if module else None
+            incident.opened_at = parse_time(item["created_at"])
+            incident.resolved_at = parse_time(item.get("closed_at"))
+            before = [
+                (deployed_at, deploy_id)
+                for deploy_id, deployed_at in deploys
+                if deployed_at <= incident.opened_at <= deployed_at + INCIDENT_AFTER_DEPLOY
+            ]
+            incident.deployment_id = max(before)[1] if before else None
+        self.db.flush()
+        gone = Incident.external_id.not_in(seen)
+        self.db.execute(delete(Incident).where(Incident.source == self.source, gone))
+        self.db.flush()
+        return len(seen)
+
+    def _stored(self, table, external_id: str):
+        return self.db.scalar(
+            select(table).where(table.source == self.source, table.external_id == external_id)
+        )
+
 
 def collect_once(
-    engine: Engine, client: GitHubClient, memory: CIMemory | None = None
+    engine: Engine,
+    client: GitHubClient,
+    memory: CIMemory | None = None,
+    environments: Sequence[str] | None = None,
 ) -> dict[str, int]:
     """Collect, save fresh forecasts, then plan when ``PLANNER_MODE`` is on.
 
     ``memory`` carries the finished CI runs from one collection to the next. A failed forecast or
     plan is logged and leaves the counts.
     """
+    if environments is None:
+        environments = release_environments()
     with Session(engine) as db:
-        counts = Collector(db, client, memory).run()
+        counts = Collector(db, client, memory).run(environments)
     from sdlc.forecaster import ALWAYS_ON, ForecastRunner
 
     try:

@@ -177,7 +177,13 @@ def _handler(request):
         assert request.url.params["state"] == "all"
         return httpx.Response(200, json=MILESTONES)
     if path == f"{API}/issues":
+        if request.url.params.get("labels") == "incident":
+            incidents = [item for item in ISSUES if "incident" in labels_of(item)]
+            return httpx.Response(200, json=incidents)
         return httpx.Response(200, json=ISSUES)
+    if path == f"{API}/deployments":
+        assert request.url.params["environment"] in ("production", "production-signoff")
+        return httpx.Response(200, json=[])
     if path == f"{API}/pulls":
         return httpx.Response(200, json=[{"number": number} for number in PULLS])
     if path == f"{API}/actions/runs":
@@ -261,7 +267,14 @@ def test_suite_of():
 
 def test_run_returns_the_counts(collected):
     _, counts = collected
-    assert counts == {"epics": 2, "issues": 2, "pull_requests": 2, "ci_jobs": 5}
+    assert counts == {
+        "epics": 2,
+        "issues": 2,
+        "pull_requests": 2,
+        "ci_jobs": 5,
+        "deployments": 0,
+        "incidents": 1,
+    }
 
 
 def test_issue_fields(collected):
@@ -545,7 +558,8 @@ def test_cli_prints_the_counts(sqlite_engine, client, capsys):
     Base.metadata.create_all(sqlite_engine)
     assert github.main([], engine=sqlite_engine, client=client) == 0
     assert capsys.readouterr().out.strip() == (
-        f"Collected from {REPO}: epics: 2, issues: 2, pull_requests: 2, ci_jobs: 5"
+        f"Collected from {REPO}: epics: 2, issues: 2, pull_requests: 2, ci_jobs: 5, "
+        "deployments: 0, incidents: 1"
     )
 
 
