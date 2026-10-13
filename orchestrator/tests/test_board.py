@@ -868,6 +868,12 @@ def _deployment_node(sha, at, state="SUCCESS", merged_at=None):
     return {"commitOid": sha, "commit": commit, "statuses": {"nodes": statuses}}
 
 
+def test_a_null_pr_node_on_a_deployed_commit_is_skipped():
+    node = _deployment_node(SHIPPED, MERGES[SHIPPED], merged_at=MERGES[SHIPPED])
+    node["commit"]["associatedPullRequests"]["nodes"].insert(0, None)
+    assert board._merged_at(node) == MERGES[SHIPPED]
+
+
 def _merged_pr(sha, merged_at):
     return _pr_node(merged=True, merged_at=merged_at, merge_commit=sha)
 

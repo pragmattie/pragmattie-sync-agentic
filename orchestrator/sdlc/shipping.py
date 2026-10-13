@@ -33,30 +33,30 @@ def shipped_at(
 
 def shipped_through(db: Session, deployment: Deployment) -> datetime:
     """The ``merged_at`` of the PR whose merge commit the deployment is, else its own time."""
-    merged_at = None
-    if deployment.sha:
-        merged_at = db.scalar(
-            select(PullRequest.merged_at).where(
-                PullRequest.source == deployment.source,
-                PullRequest.merge_commit_sha == deployment.sha,
-                PullRequest.merged_at.is_not(None),
-            )
-        )
-    return merged_at or deployment.deployed_at
+    shas = [deployment.sha] if deployment.sha else []
+    return _through(deployment, _merged_by_sha(db, deployment.source, shas))
 
 
 def deploys(db: Session, source: str) -> list[tuple[datetime, datetime]]:
     """Every successful deployment of ``source`` as ``(shipped_through, deployed_at)``."""
-    merged_by_sha = dict(
-        db.execute(
-            select(PullRequest.merge_commit_sha, PullRequest.merged_at).where(
-                PullRequest.source == source,
-                PullRequest.merge_commit_sha.is_not(None),
-                PullRequest.merged_at.is_not(None),
-            )
-        ).all()
-    )
+    merged_by_sha = _merged_by_sha(db, source)
     rows = db.scalars(
         select(Deployment).where(Deployment.source == source, Deployment.status == "success")
     )
-    return [(merged_by_sha.get(row.sha) or row.deployed_at, row.deployed_at) for row in rows]
+    return [(_through(row, merged_by_sha), row.deployed_at) for row in rows]
+
+
+def _merged_by_sha(db: Session, source: str, shas: list[str] | None = None) -> dict[str, datetime]:
+    """The ``merged_at`` of each merged PR of ``source`` by merge commit, only ``shas`` if given."""
+    query = select(PullRequest.merge_commit_sha, PullRequest.merged_at).where(
+        PullRequest.source == source,
+        PullRequest.merge_commit_sha.is_not(None),
+        PullRequest.merged_at.is_not(None),
+    )
+    if shas is not None:
+        query = query.where(PullRequest.merge_commit_sha.in_(shas))
+    return dict(db.execute(query).all())
+
+
+def _through(deployment: Deployment, merged_by_sha: dict[str, datetime]) -> datetime:
+    return merged_by_sha.get(deployment.sha) or deployment.deployed_at

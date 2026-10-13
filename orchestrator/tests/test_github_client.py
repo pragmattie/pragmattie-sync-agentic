@@ -119,6 +119,7 @@ def test_a_404_raises_with_the_status_path_and_message():
     with pytest.raises(GitHubError) as raised:
         _client(handler).get("/repos/{repo}/issues/999")
     assert str(raised.value) == "GitHub 404 on /repos/acme/widgets/issues/999: Not Found"
+    assert raised.value.status == 404
     assert TOKEN not in str(raised.value)
 
 

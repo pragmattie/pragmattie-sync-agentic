@@ -151,6 +151,27 @@ def test_each_vite_dev_server_allows_its_proxy_name(app, name):
 
 
 @needs_docker
+def test_the_orchestrator_service_gets_the_github_settings_the_demo_scripts_need(tmp_path):
+    unset = {
+        "GITHUB_TOKEN": "",
+        "GITHUB_REPO": "",
+        "GITHUB_API_URL": "",
+        "ORCHESTRATOR_MODE": "",
+        "ANTHROPIC_API_KEY": "",
+    }
+    environment = _config(tmp_path, unset)["orchestrator"]["environment"]
+    assert environment["ORCHESTRATOR_MODE"] == "off"
+    for name in ("GITHUB_TOKEN", "GITHUB_REPO", "GITHUB_API_URL", "ANTHROPIC_API_KEY"):
+        assert environment[name] == ""
+    values = {"GITHUB_REPO": "acme/widgets", "ORCHESTRATOR_MODE": "shadow"}
+    environment = _config(tmp_path, values)["orchestrator"]["environment"]
+    assert (environment["GITHUB_REPO"], environment["ORCHESTRATOR_MODE"]) == (
+        "acme/widgets",
+        "shadow",
+    )
+
+
+@needs_docker
 def test_the_collector_only_collects(tmp_path):
     collector = _config(tmp_path, {"COLLECT_SECONDS": "120"})["collector"]
     assert collector["profiles"] == ["collect"]

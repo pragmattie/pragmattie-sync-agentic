@@ -410,13 +410,31 @@ def test_recently_merged_shows_the_newest_verdict_naming_each_pr(db):
 
     assert releases == {
         ("github", 42): None,
-        ("github", 41): {"state": "failure", "description": "T2 · blocked"},
-        ("github", 40): {"state": "success", "description": "T2 · release"},
+        ("github", 41): {"state": "failure", "description": "T2 · blocked", "shadow": False},
+        ("github", 40): {"state": "success", "description": "T2 · release", "shadow": False},
         ("synthetic", 40): {
             "state": "pending",
             "description": "T2 · Held: open incident in pipeline",
+            "shadow": False,
         },
     }
+
+
+def test_a_shadow_verdict_shows_what_it_would_be_not_the_posted_success(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    _pr(db, issue, 40, datetime(2026, 9, 9), merged_at=datetime(2026, 9, 10))
+    description = "T2 · Shadow (would be pending). Held: open incident in pipeline"
+    _verdict(
+        db,
+        [40],
+        datetime(2026, 9, 10, 13),
+        output={"would_be": "pending", "mode": "shadow"},
+        action_taken={"state": "success", "description": description},
+    )
+
+    [item] = recently_merged(db)
+
+    assert item["release"] == {"state": "pending", "description": description, "shadow": True}
 
 
 def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
@@ -434,6 +452,6 @@ def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
             "number": 40,
             "title": "PR 40",
             "merged_at": "2026-09-03T10:00:00",
-            "release": {"state": "pending", "description": "T2 · hold"},
+            "release": {"state": "pending", "description": "T2 · hold", "shadow": False},
         }
     ]

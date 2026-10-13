@@ -15,6 +15,7 @@ from sdlc.approver import load_approvers
 from sdlc.db import Base
 from sdlc.github_client import GitHubError
 from sdlc.runner import Runner
+from sdlc.signals.github import SUITES
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
 from sdlc.tiers import load_policy
 from tests.fakes import WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
@@ -638,6 +639,21 @@ def test_a_tier_t3_command_writes_one_tier_change_row_and_rewrites_the_section(g
     assert not [path for _, path in gh.writes() if "/actions" in path]
 
 
+def test_a_tier_command_while_the_comment_is_for_an_older_commit_writes_no_tier_change_row(
+    gh, engine, policy
+):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    gh.push(1, NEW_SHA)
+    gh.fail_writes = {"POST", "PATCH"}  # the risk comment stays on the older commit
+    runner.poll_once(NOON + timedelta(minutes=1))
+    gh.comment(1, "/tier T3 this touches the forecast maths")
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert f"<!-- head:{SHA} -->" in gh.risk_comment(1)["body"]
+    assert [row.trigger for row in _selector(engine)] == ["poll", "poll"]
+
+
 def test_a_failed_then_successful_assessment_writes_two_selector_rows(gh, engine, policy):
     gh.add_pr(1, SHA, additions=T1_SIZE)
     llm = FakeLLM(error=LLMError("timeout", "slow"))
@@ -671,13 +687,7 @@ def test_a_repaired_risk_comment_keeps_the_tests_section_without_a_new_row(gh, e
     assert len(_selector(engine)) == 1
 
 
-JOB_NAMES = {
-    "api": "CRM API (lint + tests)",
-    "web": "CRM web (tests + build)",
-    "insights-web": "Insights web (tests + build)",
-    "orchestrator": "Orchestrator (lint + tests)",
-    "migrations": "Migrations on MySQL",
-}
+JOB_NAMES = {suite: name for name, suite in SUITES.items()}  # CI's job name for each suite
 
 
 def _ci_run(gh, sha=SHA, running=(), failed=()):
@@ -748,11 +758,7 @@ def test_settling_runs_at_most_every_two_minutes(gh, engine, policy):
     assert _runs_read(gh) == 2
 
 
-def test_a_github_error_while_settling_is_counted_and_waits(
-    gh, engine, policy, caplog, monkeypatch
-):
-    # alembic's fileConfig (the migration tests) disables loggers that already exist
-    monkeypatch.setattr(logging.getLogger("sdlc.runner"), "disabled", False)
+def test_a_github_error_while_settling_is_counted_and_waits(gh, engine, policy, caplog):
     gh.add_pr(1, SHA, additions=T1_SIZE)
     _ci_run(gh)
     fetch = gh.get
@@ -776,6 +782,25 @@ def test_a_github_error_while_settling_is_counted_and_waits(
     assert _ci_results(engine) == []
     runner.poll_once(NOON + timedelta(minutes=2))
     assert len(_ci_results(engine)) == 1
+
+
+def test_a_malformed_recommendation_while_settling_is_counted_and_the_poll_finishes(
+    gh, engine, policy, caplog
+):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    run = _ci_run(gh, running=("api",))
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    with Session(engine) as db:
+        row = db.get(AgentDecision, _selector(engine)[0].id)
+        row.output = {key: value for key, value in row.output.items() if key != "skipped"}
+        db.commit()
+    gh.jobs[run["id"]][0].update(status="completed", conclusion="success")
+    with caplog.at_level(logging.ERROR, "sdlc.runner"):
+        summary = runner.poll_once(NOON + timedelta(minutes=2))
+    assert (summary["prs"], summary["errors"]) == (1, 1)
+    assert "test selector failed" in caplog.text
+    assert _ci_results(engine) == []
 
 
 def test_off_never_reads_ci_results(gh, engine, policy):

@@ -101,7 +101,7 @@ class ReleaseRunner:
         try:
             runs = self.gh.get(path, branch="main", per_page=RUNS_READ)["workflow_runs"]
         except GitHubError as error:
-            if str(error).startswith("GitHub 404"):
+            if error.status == 404:
                 return []  # no deploy workflow yet
             raise
         shas: list[str] = []

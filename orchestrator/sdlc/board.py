@@ -570,7 +570,9 @@ def _merged_at(node: dict) -> datetime | None:
     """The ``mergedAt`` of the pull request whose merge commit the deployment deployed, if any."""
     commit = node.get("commit") or {}
     for pr in (commit.get("associatedPullRequests") or {}).get("nodes") or []:
-        oid = ((pr or {}).get("mergeCommit") or {}).get("oid")
+        if not pr:
+            continue
+        oid = (pr.get("mergeCommit") or {}).get("oid")
         if pr.get("merged") and pr.get("mergedAt") and oid == node["commitOid"]:
             return parse_time(pr["mergedAt"])
     return None

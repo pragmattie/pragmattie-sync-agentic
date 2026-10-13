@@ -188,11 +188,18 @@ def flow(db: Session, *, source: str, days: int, today: date) -> dict:
 
 
 def _release(row: AgentDecision) -> dict:
-    """The verdict's posted state and description; simulated rows keep them in ``output``."""
+    """The verdict's state and description; simulated rows keep them in ``output``.
+
+    In shadow mode the posted state always passes, so the state is the verdict's own
+    (``would_be``) and ``shadow`` says it was never enforced.
+    """
     action, output = row.action_taken or {}, row.output or {}
+    shadow = output.get("mode") == "shadow"
+    verdict_state = output.get("would_be") or release_gate.STATES.get(output.get("verdict"))
     return {
-        "state": action.get("state") or release_gate.STATES.get(output.get("verdict")),
+        "state": verdict_state if shadow else action.get("state") or verdict_state,
         "description": action.get("description") or output.get("description"),
+        "shadow": shadow,
     }
 
 

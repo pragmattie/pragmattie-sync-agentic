@@ -71,6 +71,20 @@ describe("flow helpers", () => {
     expect(releaseChip({})).toBeNull();
   });
 
+  it("shows a shadow verdict's own chip, marked shadow", () => {
+    const description = "T2 · Shadow (would be pending)";
+    const release = { state: "pending", description, shadow: true };
+
+    expect(releaseChip({ release })).toEqual({
+      text: "Release held (shadow)",
+      color: "warning",
+      tooltip: description,
+    });
+    expect(releaseChip({ release: { ...release, state: "success" } }).text).toBe(
+      "Releasing (shadow)",
+    );
+  });
+
   it("makes the merged rows with a Simulated flag for simulated items", () => {
     const rows = mergedRows({
       recently_merged: [

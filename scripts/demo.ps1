@@ -131,6 +131,7 @@ function Invoke-Reset {
 
     $started = Get-Date
     $collector = Test-Running "collector"
+    $restartFailed = $false
     try {
         if ($collector) {
             Write-Host "Pausing the collector..."
@@ -145,7 +146,15 @@ function Invoke-Reset {
         if ($collector) {
             Write-Host "Restarting the collector..."
             docker compose --profile collect start collector
+            if ($LASTEXITCODE -ne 0) {
+                $restartFailed = $true
+                Write-Host ("Restarting the collector failed (exit code $LASTEXITCODE). Start it " +
+                    "yourself: docker compose --profile collect start collector") -ForegroundColor Red
+            }
         }
+    }
+    if ($restartFailed) {
+        throw "The reset finished, but the collector isn't running again (above)."
     }
     $seconds = [int]((Get-Date) - $started).TotalSeconds
     Write-Host "Reset done in $seconds seconds."

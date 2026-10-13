@@ -141,6 +141,10 @@ class Runner:
             db.rollback()
             summary["errors"] += 1
             log.warning("test selector: %s", error)
+        except Exception:
+            db.rollback()
+            summary["errors"] += 1
+            log.exception("test selector failed; it is left as it was")
 
     def _record_runs(self, db: Session, now: datetime) -> None:
         """Record the implementer's and reviewer's runs from the workflow bot's new comments."""
@@ -298,8 +302,9 @@ class Runner:
             gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
         self._post_status(pr.number, sha, gate)
         body = (risk_comment.get("body") or "") if risk_comment else ""
-        selection, retested = self._retest(db, pr, sha, tier, decision, now)
         if risk_comment and comment_head(body) == sha:
+            # a tier_change recommendation belongs to the commit the comment was written for
+            selection, retested = self._retest(db, pr, sha, tier, decision, now)
             refreshed = replace_section(body, selection) if retested else body
             # every new ruling, accepted or rejected, is shown in the overrides block
             if tier != before or new:
@@ -316,6 +321,8 @@ class Runner:
             if refreshed != body:
                 self.effects.upsert_comment(pr.number, COMMENT_MARKER, refreshed, comments)
         else:
+            stored = suite_selector.latest(db, pr, sha)
+            selection = Selection.from_record(stored.output) if stored else None
             assessment = pr_risk.from_decision(db, pr, decision)
             meta = Meta(decision.id, self.mode, self._approver_name(), sha)
             lines = _lines(rulings)

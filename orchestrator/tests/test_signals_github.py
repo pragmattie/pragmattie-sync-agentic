@@ -278,6 +278,24 @@ def test_run_returns_the_counts(collected):
     }
 
 
+def test_a_refused_deployments_read_keeps_the_issues_prs_and_ci_of_that_pass(sqlite_engine):
+    Base.metadata.create_all(sqlite_engine)
+
+    def refusing(request):
+        if request.url.path == f"{API}/deployments":
+            return httpx.Response(403, json={"message": "Resource not accessible by integration"})
+        return _handler(request)
+
+    client = GitHubClient(token="test-token", repo=REPO, transport=httpx.MockTransport(refusing))
+    with Session(sqlite_engine) as session, pytest.raises(GitHubError) as raised:
+        Collector(session, client).run()
+    assert raised.value.status == 403
+    with Session(sqlite_engine) as session:
+        assert session.scalar(select(func.count()).select_from(Issue)) == 2
+        assert session.scalar(select(func.count()).select_from(PullRequest)) == 2
+        assert session.scalar(select(func.count()).select_from(CIRun)) == 5
+
+
 def test_issue_fields(collected):
     session, _ = collected
     issue = _github(session, Issue, "issue-12")
