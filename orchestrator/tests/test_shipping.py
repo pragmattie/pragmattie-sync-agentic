@@ -59,6 +59,16 @@ def test_shipped_through_is_the_merge_of_the_deployed_commit_else_the_deploy_tim
     assert shipped_through(db, no_sha) == datetime(2026, 10, 2)
 
 
+@pytest.mark.parametrize("case", CASES, ids=IDS)
+def test_deploys_pairs_each_success_with_its_shipped_through(db, case):
+    _store(db, case)
+    stored = [row for row in db.query(Deployment) if row.source == "github"]
+    expected = [
+        (shipped_through(db, row), row.deployed_at) for row in stored if row.status == "success"
+    ]
+    assert sorted(deploys(db, "github")) == sorted(expected)
+
+
 def test_an_unmerged_pr_never_ships():
     assert shipped_at(None, [(datetime(2026, 10, 1), datetime(2026, 10, 1))]) is None
 
