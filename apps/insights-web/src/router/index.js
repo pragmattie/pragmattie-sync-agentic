@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+const AccuracyView = () => import("../views/AccuracyView.vue");
 const DecisionLogView = () => import("../views/DecisionLogView.vue");
 const DeliveryFlowView = () => import("../views/DeliveryFlowView.vue");
 const DeliveryForecastView = () => import("../views/DeliveryForecastView.vue");
@@ -13,6 +14,7 @@ export const navItems = [
   { title: "Decision log", to: "/decisions", name: "decisions" },
   { title: "Delivery flow", to: "/flow", name: "flow" },
   { title: "Delivery forecast", to: "/forecast", name: "forecast" },
+  { title: "Prediction accuracy", to: "/accuracy", name: "accuracy" },
 ];
 
 export function pageTitle(route) {
@@ -47,6 +49,12 @@ export const router = createRouter({
       name: "forecast",
       component: DeliveryForecastView,
       meta: { title: "Delivery forecast" },
+    },
+    {
+      path: "/accuracy",
+      name: "accuracy",
+      component: AccuracyView,
+      meta: { title: "Prediction accuracy" },
     },
     {
       path: "/:pathMatch(.*)*",
