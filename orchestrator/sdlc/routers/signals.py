@@ -68,10 +68,12 @@ def delivery_flow(
     db: Session = Depends(get_session),
     now: datetime = Depends(get_now),
 ) -> dict:
-    """Stage counts per day, throughput and cycle time for one source, and each source's size."""
+    """Stage counts per day, throughput and cycle time for one source, each source's size, and
+    the newest merged items of both sources with their release verdicts."""
     return {
         **flow.flow(db, source=source, days=days, today=now.date()),
         "available": flow.available(db),
+        "recently_merged": flow.recently_merged(db),
     }
 
 

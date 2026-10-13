@@ -15,6 +15,9 @@ delivery board, each issue's stage on a day is derived from what had happened by
 
 An issue closed without a merged PR leaves the flow when it closes; one with no close time can't
 be placed in time, so it is left out.
+
+``recently_merged`` lists the newest merged pull requests of both sources, each with the release
+verdict that names it, if any: the newest non-trial ``release_gate`` row whose ``prs`` include it.
 """
 
 from collections import defaultdict
@@ -24,12 +27,15 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from sdlc.agents import release_gate
+from sdlc.audit import TRIAL
 from sdlc.metrics import _midnight, _monday, _percentile, _round
 from sdlc.shipping import deploys, shipped_at
 from sdlc.tables import SOURCES, AgentDecision, Issue, PullRequest
 
 STAGES = ("Backlog", "Triaged", "In progress", "In review", "Merged", "Production")
 BACKLOG, TRIAGED, IN_PROGRESS, IN_REVIEW, MERGED, PRODUCTION = range(len(STAGES))
+RECENTLY_MERGED = 10
 
 
 @dataclass
@@ -179,3 +185,53 @@ def flow(db: Session, *, source: str, days: int, today: date) -> dict:
         },
         "items": len(present),
     }
+
+
+def _release(row: AgentDecision) -> dict:
+    """The verdict's posted state and description; simulated rows keep them in ``output``."""
+    action, output = row.action_taken or {}, row.output or {}
+    return {
+        "state": action.get("state") or release_gate.STATES.get(output.get("verdict")),
+        "description": action.get("description") or output.get("description"),
+    }
+
+
+def recently_merged(db: Session, limit: int = RECENTLY_MERGED) -> list[dict]:
+    """The ``limit`` newest merged PRs, real and simulated, each with its release verdict."""
+    prs = db.scalars(
+        select(PullRequest)
+        .where(PullRequest.merged_at.is_not(None))
+        .order_by(PullRequest.merged_at.desc(), PullRequest.id.desc())
+        .limit(limit)
+    ).all()
+    if not prs:
+        return []
+    wanted = {(pr.source, pr.number) for pr in prs}
+    verdicts: dict[tuple[str, int], dict] = {}
+    rows = db.scalars(
+        select(AgentDecision)
+        .where(
+            AgentDecision.agent == release_gate.AGENT,
+            AgentDecision.trigger != TRIAL,
+            # a verdict naming a PR comes after its merge
+            AgentDecision.created_at >= min(pr.merged_at for pr in prs),
+        )
+        .order_by(AgentDecision.created_at.desc(), AgentDecision.id.desc())
+    )
+    for row in rows:
+        for number in (row.output or {}).get("prs") or []:
+            key = (row.subject_source, number)
+            if key in wanted and key not in verdicts:
+                verdicts[key] = _release(row)
+        if len(verdicts) == len(wanted):
+            break
+    return [
+        {
+            "source": pr.source,
+            "number": pr.number,
+            "title": pr.title,
+            "merged_at": pr.merged_at,
+            "release": verdicts.get((pr.source, pr.number)),
+        }
+        for pr in prs
+    ]
