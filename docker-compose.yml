@@ -1,3 +1,7 @@
+# The whole stack: `docker compose up --build`. The proxy serves the CRM on
+# http://pragmattie-sync.localhost and Delivery Insights on http://insights.pragmattie-sync.localhost,http://insights.pragmattie-sync.localhost:${PROXY_PORT:-80}
+# (add :PROXY_PORT when it isn't 80, e.g. :18080 beside v1); each app also answers on its own port.
+# The APIs are not proxied.
 services:
   crm-web:
     build: ./apps/crm-web
@@ -25,7 +29,7 @@ services:
     build: ./apps/api
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
-      CORS_ORIGINS: http://localhost:${CRM_WEB_PORT:-5173},http://pragmattie-sync.localhost
+      CORS_ORIGINS: http://localhost:${CRM_WEB_PORT:-5173},http://pragmattie-sync.localhost,http://pragmattie-sync.localhost:${PROXY_PORT:-80}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -39,7 +43,7 @@ services:
     build: ./orchestrator
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pragmattie_sync}:${MYSQL_PASSWORD:-pragmattie_sync}@db:3306/${MYSQL_DATABASE:-pragmattie_sync}
-      CORS_ORIGINS: http://localhost:${INSIGHTS_WEB_PORT:-5174},http://insights.pragmattie-sync.localhost
+      CORS_ORIGINS: http://localhost:${INSIGHTS_WEB_PORT:-5174},http://insights.pragmattie-sync.localhost,http://insights.pragmattie-sync.localhost:${PROXY_PORT:-80}
     ports:
       - "${ORCH_PORT:-8001}:8001"
     volumes:
@@ -48,6 +52,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  proxy:
+    image: caddy:2.10-alpine
+    ports:
+      - "${PROXY_PORT:-80}:80"
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - crm-web
+      - insights-web
+    restart: unless-stopped
 
   # Reads the repository in GITHUB_REPO on a schedule, with GET requests only. It never runs the
   # agents. Start it with `docker compose --profile collect up -d`.

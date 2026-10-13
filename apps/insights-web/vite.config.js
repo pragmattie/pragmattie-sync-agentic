@@ -11,6 +11,8 @@ export default defineConfig({
     host: true,
     port: 5174,
     strictPort: true,
+    // The proxy's address (proxy/Caddyfile); Vite refuses hosts it doesn't know.
+    allowedHosts: ["insights.pragmattie-sync.localhost"],
     watch: {
       usePolling: true,
     },

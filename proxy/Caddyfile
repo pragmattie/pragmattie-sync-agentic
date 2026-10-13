@@ -1,0 +1,13 @@
+# Friendly local addresses (Chrome and Edge send every *.localhost name to this machine, so no
+# hosts-file edit is needed). Plain HTTP; the apps still answer on their own ports too.
+{
+	auto_https off
+}
+
+http://pragmattie-sync.localhost {
+	reverse_proxy crm-web:5173
+}
+
+http://insights.pragmattie-sync.localhost {
+	reverse_proxy insights-web:5174
+}

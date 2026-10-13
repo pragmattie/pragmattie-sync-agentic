@@ -56,8 +56,8 @@ The whole stack starts with `docker compose up --build`, and serves:
 
 | Service | Address |
 | --- | --- |
-| CRM web app (`crm-web`) | <http://localhost:5173> |
-| Delivery Insights (`insights-web`) | <http://localhost:5174> |
+| CRM web app (`crm-web`) | <http://pragmattie-sync.localhost> (also <http://localhost:5173>) |
+| Delivery Insights (`insights-web`) | <http://insights.pragmattie-sync.localhost> (also <http://localhost:5174>) |
 | CRM API (`api`) | <http://localhost:8000> |
 | Orchestrator (`orchestrator`) | <http://localhost:8001> |
 | MySQL (`db`) | `localhost:${MYSQL_HOST_PORT:-3307}` |
@@ -66,8 +66,13 @@ To bring up just the database, run
 `docker compose up -d db`; it publishes on `${MYSQL_HOST_PORT:-3307}` and is healthy once
 `docker compose ps` shows it as such.
 
+The two `.localhost` addresses go through the `proxy` service (Caddy, `proxy/Caddyfile`), plain
+HTTP on `PROXY_PORT` (80 by default). Chrome and Edge send every `*.localhost` name to this
+machine, so no hosts-file edit is needed. When `PROXY_PORT` isn't 80, add it to both addresses.
+Only the web apps are proxied; the APIs stay on their own ports.
+
 Every published host port comes from `.env`: `CRM_WEB_PORT`, `INSIGHTS_WEB_PORT`, `API_PORT`,
-`ORCH_PORT` and `MYSQL_HOST_PORT`, defaulting to the addresses above. Containers keep their own
+`ORCH_PORT`, `MYSQL_HOST_PORT` and `PROXY_PORT`, defaulting to the addresses above. Containers keep their own
 ports, and the web apps' API addresses follow the host ports.
 
 ## Running beside v1
@@ -85,11 +90,13 @@ Deployments.
 
 1. Create the read-only token above.
 2. Copy `.env.example` to `.env` (v2's own, separate from v1's), uncomment the "Running beside
-   v1" block (ports 15173, 15174, 18000, 18001 and 13307, and
+   v1" block (ports 15173, 15174, 18000, 18001, 13307 and proxy port 18080, and
    `GITHUB_REPO=pragmattie/pragmattie-sync-agentic`), and set the token as `GITHUB_TOKEN`.
 3. Run `docker compose --profile collect up -d`. On a new database, apply the migrations first
    (see [Database migrations](#database-migrations)).
-4. Open Delivery Insights on <http://localhost:15174>.
+4. Open Delivery Insights on <http://insights.pragmattie-sync.localhost:18080> (or
+   <http://localhost:15174>), and the CRM on <http://pragmattie-sync.localhost:18080>. v1 keeps
+   port 80 and <http://pragmattie-sync.localhost>.
 
 ## CRM API
 
