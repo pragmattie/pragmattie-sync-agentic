@@ -195,7 +195,26 @@ read and write**. A read-only token can run the dry run; with it, `--apply` list
 action as failed (the database part still runs). From the repository root, `scripts/demo.ps1`
 wraps it for the Docker stack: `reset` (the dry run), `reset -Apply` (pauses the `collector` if it
 is running, reseeds the CRM with `python -m app.seed --reset`, runs the reset, then restarts the
-collector, even after a failure), `baseline [-Force]`, and `check [-Smoke]`, which arrives with
-6.9.
+collector, even after a failure; then it runs the check), `baseline [-Force]`, and
+`check [-Smoke]`.
+
+**Pre-demo check.** `python -m sdlc.demo_check` says whether everything is ready for a demo, one
+line per check with the fix for anything that isn't: the database (if it's down, nothing else is
+checked), both Alembic histories at head, at least 20 accounts, 50 leads and 50 opportunities in
+the CRM, a simulated sprint in progress today and at least 300 simulated PRs, forecasts saved
+today, both APIs' health, GitHub access (if it fails, the GitHub checks are skipped), a recorded
+demo baseline, the release setup (the `demo` and `incident` labels, `deploy.yml` on the default
+branch, the policy's two environments, the sign-off one with a required reviewer, and reading
+deployments), a clean start (the reset would do nothing; notes it leaves behind and real work don't
+count) and `ORCHESTRATOR_MODE` (off fails, shadow warns, enforce passes). It ends with "Ready for the
+demo." or "Not ready: {n} check(s) failed." and exits 1 on a failure; a warning alone is ready. The
+container can't see the CRM's migrations, so `--crm-head` takes its head; run outside the
+container, the check reads `apps/api/migrations` itself. `--smoke --yes` also runs the runners'
+`try` on the newest merged real PR and the lowest open real issue: one real, paid call each (about
+5 cents), a trial row each, nothing written to GitHub. `scripts/demo.ps1 check [-Smoke]` first
+checks from the host that the `db`, `api`, `orchestrator`, `crm-web` and `insights-web` containers
+are running and that both web apps answer on `CRM_WEB_PORT` and `INSIGHTS_WEB_PORT` (5173 and 5174
+by default; the dev servers refuse requests from inside Docker), then runs the checklist with the
+CRM's head from the api container.
 
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
