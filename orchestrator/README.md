@@ -173,4 +173,29 @@ It runs every 10 minutes as a GitHub Actions workflow (`.github/workflows/board.
 `ci/proposed/board.yml` proposes running it on issue, pull-request, status and agent-run events
 too.
 
+**Demo reset.** Between demos, `sdlc/demo_reset.py` puts the demo back to a clean start. Only
+items marked as demo are touched: issues labelled `demo` (or `demo:<x>`), and pull requests
+labelled so or opened from a branch starting `demo-`. Real work is never closed or deleted. When
+the repository is in a clean state, record what it holds with `python -m sdlc.demo_reset baseline`
+(`--force` replaces an existing one); it is saved to `orchestrator/.demo/baseline.json`, which is
+git-ignored, and a baseline for another repository is refused. `python -m sdlc.demo_reset` is a
+dry run: it prints each GitHub request it would send and changes nothing. `--apply` sends them in
+order (a failed one doesn't stop the rest): demo issues opened since the baseline lose their
+`incident` label and are closed as not planned; backlog issues get back their state and labels;
+demo pull requests are closed, lose their `tier:` labels and the agents' comments (people's stay)
+and their branch, when it is in this repository and isn't the default or a baseline branch;
+deployments of a merged demo PR's commit are marked inactive and deleted. Then the database forgets
+the audit rows, simulated approvals, gate states and incidents about the demo items, regenerates
+the simulated history for today (real forecasts and planner rows are kept), collects from GitHub
+and saves fresh forecasts. Merged commits, closed issues (GitHub can't delete issues), release-gate
+statuses, deploy logs and branches with no pull request stay, and are listed.
+
+The reset needs a token with **Issues, Pull requests, Contents (to delete branches) and Deployments:
+read and write**. A read-only token can run the dry run; with it, `--apply` lists every GitHub
+action as failed (the database part still runs). From the repository root, `scripts/demo.ps1`
+wraps it for the Docker stack: `reset` (the dry run), `reset -Apply` (pauses the `collector` if it
+is running, reseeds the CRM with `python -m app.seed --reset`, runs the reset, then restarts the
+collector, even after a failure), `baseline [-Force]`, and `check [-Smoke]`, which arrives with
+6.9.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.

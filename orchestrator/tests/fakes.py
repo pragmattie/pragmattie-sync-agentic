@@ -2,9 +2,9 @@
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
 ``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
-GitHub Actions runs with their jobs, workflow runs by workflow file, and deployments with their
-statuses, and logs every request it is sent. ``FakeLLM`` answers with a fixed adjustment or raises
-a given error.
+GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
+statuses, and branches, and logs every request it is sent. ``FakeLLM`` answers with a fixed
+adjustment or raises a given error.
 """
 
 import re
@@ -42,6 +42,8 @@ class FakeGitHub:
         self.workflow_runs: dict[str, list[dict]] = {}  # by workflow file; a missing one is a 404
         self.deployments: list[dict] = []  # each with its environment
         self.deployment_statuses: dict[int, list[dict]] = {}  # newest first, like GitHub
+        self.default_branch = "main"
+        self.branches: list[str] = ["main"]
         self.requests: list[tuple[str, str]] = []
         self.fail_writes: set[str] = set()  # methods that raise, e.g. {"POST"}
         self.limited_until = None
@@ -61,14 +63,19 @@ class FakeGitHub:
         body="Adds a field.",
         additions=10,
         created_at=datetime(2026, 10, 1, 10, 0),
+        branch: str | None = None,
+        head_repo: str = REPO,
     ) -> dict:
+        branch = branch or f"change-{number}"
+        if head_repo == REPO and branch not in self.branches:
+            self.branches.append(branch)
         self.prs[number] = {
             "number": number,
             "title": f"Change {number}",
             "body": body,
             "state": "open",
             "draft": draft,
-            "head": {"sha": sha},
+            "head": {"sha": sha, "ref": branch, "repo": {"full_name": head_repo}},
             "labels": [],
             "user": {"login": "ada-dev", "type": "User"},
             "created_at": iso(created_at),
@@ -165,6 +172,9 @@ class FakeGitHub:
         self.deployment_statuses[deployment["id"]] = []
         return deployment
 
+    def add_branch(self, name: str) -> None:
+        self.branches.append(name)
+
     def deployment_status(self, deployment_id: int, state: str, at: datetime) -> None:
         self.deployment_statuses[deployment_id].insert(0, {"state": state, "created_at": iso(at)})
 
@@ -201,6 +211,8 @@ class FakeGitHub:
 
     def get(self, path: str, **params):
         path = self._log("GET", path)
+        if path == "":
+            return {"full_name": REPO, "default_branch": self.default_branch}
         if match := re.fullmatch(r"/pulls/(\d+)", path):
             return self._pr(int(match.group(1)))
         if path == "/pulls":  # one page, newest update first
@@ -254,6 +266,8 @@ class FakeGitHub:
                 for d in self.deployments
                 if environment is None or d["environment"] == environment
             ]
+        if path == "/branches":
+            return [{"name": name} for name in self.branches]
         if path == "/labels":
             return [{"name": name, "color": colour} for name, colour in self.repo_labels.items()]
         if path == "/issues/comments":
@@ -293,10 +307,22 @@ class FakeGitHub:
             labels = self.issue_labels.setdefault(int(match.group(1)), [])
             labels += [name for name in body["labels"] if name not in labels]
             return labels
+        if match := re.fullmatch(r"/deployments/(\d+)/statuses", path):
+            self.deployment_statuses[int(match.group(1))].insert(0, dict(body))
+            return body
         raise GitHubError(f"GitHub 404 on {path}: Not Found")
 
     def patch(self, path: str, body: dict):
         path = self._log("PATCH", path)
+        if match := re.fullmatch(r"/(issues|pulls)/(\d+)", path):
+            number = int(match.group(2))
+            if "labels" in body:
+                self.issue_labels[number] = list(body["labels"])
+            if "state" in body:
+                item = self.issues[number] if number in self.issues else self.prs[number]
+                item["state"] = body["state"]
+                item["state_reason"] = body.get("state_reason")
+            return self._issue(number) if number in self.issues else self._pr(number)
         comment_id = int(re.fullmatch(r"/issues/comments/(\d+)", path).group(1))
         comment = next(c for c in self.comments if c["id"] == comment_id)
         comment["body"] = body["body"]
@@ -304,8 +330,22 @@ class FakeGitHub:
 
     def delete(self, path: str) -> None:
         path = self._log("DELETE", path)
-        match = re.fullmatch(r"/issues/(\d+)/labels/(.+)", path)
-        self.issue_labels[int(match.group(1))].remove(unquote(match.group(2)))
+        if match := re.fullmatch(r"/issues/comments/(\d+)", path):
+            self.comments = [c for c in self.comments if c["id"] != int(match.group(1))]
+        elif match := re.fullmatch(r"/git/refs/heads/(.+)", path):
+            name = unquote(match.group(1))
+            if name not in self.branches:
+                raise GitHubError(f"GitHub 422 on {path}: Reference does not exist")
+            self.branches.remove(name)
+        elif match := re.fullmatch(r"/deployments/(\d+)", path):
+            deployment_id = int(match.group(1))
+            statuses = self.deployment_statuses.get(deployment_id) or [{"state": "inactive"}]
+            if statuses[0]["state"] != "inactive":  # GitHub deletes only inactive deployments
+                raise GitHubError(f"GitHub 422 on {path}: deployment is still active")
+            self.delete_deployment(deployment_id)
+        else:
+            match = re.fullmatch(r"/issues/(\d+)/labels/(.+)", path)
+            self.issue_labels[int(match.group(1))].remove(unquote(match.group(2)))
 
     def _issue(self, number: int) -> dict:
         labels = [{"name": name} for name in self.issue_labels.get(number, [])]
