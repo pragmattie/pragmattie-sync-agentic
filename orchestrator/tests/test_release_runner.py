@@ -195,6 +195,25 @@ def test_shadow_posts_success_with_what_enforce_would_do(gh, engine, policy):
     assert row.output["mode"] == "shadow" and row.output["would_be"] == "pending"
 
 
+def test_observe_records_the_verdict_and_posts_nothing(gh, engine, policy):
+    _release(gh)
+    _incident(gh)
+    runner = _runner(gh, engine, policy, "observe")
+
+    summary = runner.poll_once(NOON)
+    runner.poll_once(NOON + timedelta(minutes=1))
+
+    assert summary["mode"] == "observe"
+    assert gh.writes() == [] and _gates(gh) == []
+    [row] = _rows(engine)  # an unchanged verdict isn't recorded again
+    assert row.action_taken == {
+        "state": "success",
+        "description": "T2 · Observe (would be pending). Held: open incident in pipeline (#61)",
+        "skipped": "mode is observe",
+    }
+    assert row.output["mode"] == "observe" and row.output["would_be"] == "pending"
+
+
 def test_off_does_nothing_at_all(gh, engine, policy):
     _release(gh)
 

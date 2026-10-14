@@ -18,6 +18,8 @@ PORT_VARIABLES = (
     "MYSQL_HOST_PORT",
     "PROXY_PORT",
     "COLLECT_SECONDS",
+    "POLL_SECONDS",
+    "DIFF_CHAR_LIMIT",
 )
 BESIDE_V1 = {
     "CRM_WEB_PORT": "15173",
@@ -46,6 +48,8 @@ def _config(tmp_path, values: dict[str, str]) -> dict:
             str(env_file),
             "--profile",
             "collect",
+            "--profile",
+            "agents",
             "config",
             "--format",
             "json",
@@ -189,3 +193,43 @@ def test_the_collector_plans_only_when_planner_mode_is_on(tmp_path):
     assert environment["PLANNER_MODEL"] == "claude-sonnet-5"
     environment = _config(tmp_path, {"PLANNER_MODE": "on"})["collector"]["environment"]
     assert environment["PLANNER_MODE"] == "on"
+
+
+AGENT_VARIABLES = (
+    "DATABASE_URL",
+    "GITHUB_TOKEN",
+    "GITHUB_REPO",
+    "GITHUB_API_URL",
+    "ANTHROPIC_API_KEY",
+    "PLANNER_MODE",
+    "PLANNER_MODEL",
+    "ORCHESTRATOR_MODE",
+    "POLL_SECONDS",
+    "DIFF_CHAR_LIMIT",
+)
+
+
+@needs_docker
+def test_the_agents_service_runs_the_poll_loop_and_is_off_by_default(tmp_path):
+    unset = {"ORCHESTRATOR_MODE": "", "PLANNER_MODE": ""}
+    services = _config(tmp_path, unset)
+    agents = services["agents"]
+    assert agents["profiles"] == ["agents"]
+    assert agents["command"] == ["python", "-m", "sdlc.runner", "run"]
+    assert agents["restart"] == "unless-stopped"
+    assert "db" in agents["depends_on"]
+    assert "ports" not in agents
+    environment = agents["environment"]
+    assert sorted(environment) == sorted(AGENT_VARIABLES)
+    assert (environment["ORCHESTRATOR_MODE"], environment["POLL_SECONDS"]) == ("off", "30")
+    assert environment["DIFF_CHAR_LIMIT"] == "60000"
+    collector = services["collector"]["environment"]
+    assert {name: collector[name] for name in collector if name != "ORCHESTRATOR_MODE"} == {
+        name: environment[name] for name in collector if name != "ORCHESTRATOR_MODE"
+    }
+    assert collector["ORCHESTRATOR_MODE"] == "off"
+
+    values = {"ORCHESTRATOR_MODE": "observe", "POLL_SECONDS": "60"}
+    environment = _config(tmp_path, values)["agents"]["environment"]
+    assert (environment["ORCHESTRATOR_MODE"], environment["POLL_SECONDS"]) == ("observe", "60")
+    assert _config(tmp_path, values)["collector"]["environment"]["ORCHESTRATOR_MODE"] == "off"
