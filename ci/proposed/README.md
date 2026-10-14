@@ -8,7 +8,8 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`CLAUDE.modes.md`** (7.1): the new "### Modes" subsection of `CLAUDE.md`'s "## Governance"
+  section, adding `observe`. A person replaces the subsection with it and deletes the copy.
 
 ## Applied
 

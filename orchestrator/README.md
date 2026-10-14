@@ -82,7 +82,19 @@ deploy at once, T2 waits for CI and for any open incident in its modules to clos
 waits for a person to approve the deployment in GitHub. It posts the verdict as the status and
 records one `release_gate` audit row each time the verdict changes. It runs last in `python -m
 sdlc.runner run`, in the same mode, and `python -m sdlc.release_runner once` polls once. Until
-7.1 this repository's poll loop is off and v1 posts the status.
+cutover (7.5) v1 posts the status on this repository, and v2's poll loop runs here in observe.
+
+**Modes.** `ORCHESTRATOR_MODE` switches every agent in the poll loop (`python -m sdlc.runner run`,
+the `agents` Compose service: `docker compose --profile agents up -d`). `off` does nothing, not
+even a read. `observe` polls and decides exactly as shadow and records the same audit rows, but
+writes nothing to GitHub (`sdlc/agents/github_effects.py` returns `{"skipped": "mode is
+observe"}` without sending a request), so v2 can watch this repository beside v1 with a read-only
+token. The risk comment it would post is kept in the risk row's `action_taken`, and
+`sdlc_gate_status` and the release verdicts say "Observe (would be …)". The status and tier label
+it would set are noted in the log once a commit; a `retriage` label counts once per issue
+version; labels differing from the triage agent's last answer are not a person's correction.
+`shadow` writes everything, but the statuses always pass and say what they would be. `enforce`
+makes the gates real.
 
 Every agent decision is appended to `sdlc_agent_decisions`, which is never updated or deleted
 from: a correction is a new row pointing at the one it replaces. `sdlc/audit.py` records and
@@ -206,7 +218,7 @@ today, both APIs' health, GitHub access (if it fails, the GitHub checks are skip
 demo baseline, the release setup (the `demo` and `incident` labels, `deploy.yml` on the default
 branch, the policy's two environments, the sign-off one with a required reviewer, and reading
 deployments), a clean start (the reset would do nothing; notes it leaves behind and real work don't
-count) and `ORCHESTRATOR_MODE` (off fails, shadow warns, enforce passes). It ends with "Ready for the
+count) and `ORCHESTRATOR_MODE` (off fails, observe and shadow warn, enforce passes). It ends with "Ready for the
 demo." or "Not ready: {n} check(s) failed." and exits 1 on a failure; a warning alone is ready. The
 container can't see the CRM's migrations, so `--crm-head` takes its head; run outside the
 container, the check reads `apps/api/migrations` itself. `--smoke --yes` also runs the runners'

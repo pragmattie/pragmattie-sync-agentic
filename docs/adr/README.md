@@ -13,3 +13,4 @@ Start at `0001-record-architecture-decisions.md`.
 | [0006](0006-polling-with-off-shadow-enforce.md) | Polling, with off/shadow/enforce | Accepted |
 | [0007](0007-tier-overrides.md) | `/tier` overrides | Accepted |
 | [0008](0008-board-computed-from-github.md) | The board is computed from GitHub | Accepted |
+| [0010](0010-observe-mode.md) | Observe mode: v2's agents watch beside v1 | Accepted |
