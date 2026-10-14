@@ -65,7 +65,8 @@ def _alembic_config() -> Config:
 def test_history_has_a_single_head():
     script = ScriptDirectory.from_config(_alembic_config())
 
-    assert script.get_heads() == ["0008_forecast_ahead"]
+    assert script.get_heads() == ["0009_forecast_gate_days"]
+    assert script.get_revision("0009_forecast_gate_days").down_revision == "0008_forecast_ahead"
     assert script.get_revision("0008_forecast_ahead").down_revision == "0007_forecasts"
     assert script.get_revision("0007_forecasts").down_revision == "0006_epics"
     assert script.get_revision("0006_epics").down_revision == "0005_approvals"
@@ -189,7 +190,8 @@ def _assert_ahead_items_round_trips(url: str) -> None:
             command.upgrade(config, "0008_forecast_ahead")
             assert "ahead_items" in _forecast_columns(engine)
             with Session(engine) as db:
-                assert db.get(Forecast, old_id).ahead_items == 0
+                ahead = select(Forecast.ahead_items).where(Forecast.id == old_id)
+                assert db.scalar(ahead) == 0
             command.downgrade(config, "0007_forecasts")
             assert "ahead_items" not in _forecast_columns(engine)
             command.upgrade(config, "head")
@@ -222,5 +224,64 @@ def test_ahead_items_upgrades_and_downgrades_on_mysql():
     get_settings.cache_clear()
     try:
         _assert_ahead_items_round_trips(url)
+    finally:
+        get_settings.cache_clear()
+
+
+def _assert_gate_days_round_trips(url: str) -> None:
+    """From 0008, an old forecast row reads ``gate_days`` 0 after 0009; downgrade drops it."""
+    config = _alembic_config()
+    engine = create_engine(url)
+    try:
+        _move_to_0007(config, engine)
+        command.upgrade(config, "0008_forecast_ahead")
+        assert "gate_days" not in _forecast_columns(engine)
+        with engine.begin() as connection:
+            old_id = connection.execute(
+                text(
+                    "INSERT INTO sdlc_forecasts (created_at, as_of, kind, subject, source, "
+                    "`trigger`, inputs_hash, remaining_items, remaining_points, throughput_mean, "
+                    "history_days, runs, seed) VALUES ('2026-10-13 09:00:00', '2026-10-13', "
+                    "'epic', 'Gate check', 'github', 'schedule', :hash, 4, 8, 1.0, 5, 1, 1)"
+                ),
+                {"hash": "0" * 64},
+            ).lastrowid
+        try:
+            command.upgrade(config, "0009_forecast_gate_days")
+            assert "gate_days" in _forecast_columns(engine)
+            with Session(engine) as db:
+                assert db.get(Forecast, old_id).gate_days == 0
+            command.downgrade(config, "0008_forecast_ahead")
+            assert "gate_days" not in _forecast_columns(engine)
+            command.upgrade(config, "head")
+        finally:
+            with engine.begin() as connection:
+                connection.execute(delete(Forecast.__table__).where(Forecast.id == old_id))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("start", [None, "head"])
+def test_gate_days_reads_0_on_old_rows_and_downgrades(tmp_path, monkeypatch, start):
+    """Starts from an empty database, and from head as CI's MySQL job does."""
+    url = f"sqlite:///{tmp_path / 'gates.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    get_settings.cache_clear()
+    try:
+        if start:
+            command.upgrade(_alembic_config(), start)
+        _assert_gate_days_round_trips(url)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_gate_days_upgrades_and_downgrades_on_mysql():
+    """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("mysql"):
+        pytest.skip("DATABASE_URL is not MySQL")
+    get_settings.cache_clear()
+    try:
+        _assert_gate_days_round_trips(url)
     finally:
         get_settings.cache_clear()

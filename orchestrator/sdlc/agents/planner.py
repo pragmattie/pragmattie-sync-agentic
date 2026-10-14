@@ -207,7 +207,8 @@ def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]
 
     Only numbers that are open items of the milestone count, so a caller can't overstate it. The
     items ahead in earlier milestones stay: deferring moves items to the next milestone, so it
-    never changes what is built first. The forecast's working days for gates and specs stay too.
+    never changes what is built first. The forecast's working days for gates and specs stay too,
+    unless nothing is left to build (as ``epic_forecast``).
     """
     samples = real_throughput(db, today=forecast.as_of)
     open_numbers = {item.number for item in milestone_items(db, forecast.epic)}
@@ -215,7 +216,7 @@ def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]
     total = forecast.ahead_items + remaining
     results = shift(
         simulate(total, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed),
-        forecast.gate_days,
+        forecast.gate_days if total else 0,
     )
     on_time = None
     if forecast.end_date is not None and forecast.runs and (any(samples) or not total):

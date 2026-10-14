@@ -452,6 +452,37 @@ def test_closing_an_item_ahead_re_forecasts_the_later_milestone(engine, runner, 
     assert (rows[1].remaining_items, rows[1].ahead_items) == (1, 1)
 
 
+def test_a_milestone_opening_its_first_pull_request_re_forecasts(engine, runner, milestone):
+    runner.poll_once(WEDNESDAY)
+    (first,) = _epic_rows(engine, MILESTONE)
+    assert first.gate_days == 1  # unstarted, nothing open before it
+    assert "plus 1 working day(s) for gates and specs" in _rationale(engine, first.id)
+    assert serialize(first)["gate_days"] == 1
+
+    with Session(engine) as db:
+        before = epic_inputs(db, MILESTONE)
+        story = db.scalars(select(Issue).where(Issue.epic == MILESTONE).order_by(Issue.id)).first()
+        db.add(
+            PullRequest(
+                source="github",
+                external_id="pr-first",
+                number=400,
+                title="First",
+                issue_id=story.id,
+                created_at=datetime(2026, 10, 7, 10),
+            )
+        )
+        db.commit()
+        after = epic_inputs(db, MILESTONE)
+    assert {"gate_days": 1} in before and {"gate_days": 0} in after
+    summary = runner.poll_once(WEDNESDAY + timedelta(minutes=5))
+    assert summary["assessed"] == 1
+    rows = _epic_rows(engine, MILESTONE)
+    assert [row.trigger for row in rows] == ["schedule", "change"]
+    assert rows[1].gate_days == 0
+    assert rows[1].p50 <= rows[0].p50
+
+
 def _rationale(engine, forecast_id):
     with Session(engine) as db:
         return db.scalars(
@@ -531,6 +562,9 @@ def test_serialize_gives_iso_dates_and_the_full_seed(db):
     assert data["ahead_items"] == 0
     row.ahead_items = 10
     assert serialize(row)["ahead_items"] == 10
+    assert data["gate_days"] == 0
+    row.gate_days = 2
+    assert serialize(row)["gate_days"] == 2
     json.dumps(data)
 
 
