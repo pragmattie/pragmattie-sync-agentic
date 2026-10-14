@@ -209,3 +209,27 @@ def test_a_missing_decision_is_404(client, ids):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "No decision 999."}
+
+
+def test_rows_decided_by_v1_filter_and_count_in_the_totals(client, ids, sqlite_engine):
+    with Session(sqlite_engine) as db:
+        imported = [
+            _record(db, 7, subject_source="v1", tier="T1", output={"floors": []}),
+            _record(db, 8, agent="triage", subject_type="issue", subject_source="v1"),
+        ]
+        db.commit()
+        imported_ids = [row.id for row in imported]
+
+    body = client.get(URL, params={"subject_source": "v1"}).json()
+    assert _ids(body) == imported_ids[::-1]
+    assert body["totals"] == {
+        "runs": 2,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "runs_without_cost": 2,
+    }
+
+    everything = client.get(URL).json()
+    assert everything["total"] == len(ids) + 2
+    assert everything["totals"]["runs_without_cost"] == 3 + 2
