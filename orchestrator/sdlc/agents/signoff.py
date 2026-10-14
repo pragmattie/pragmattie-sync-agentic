@@ -33,8 +33,19 @@ def _is_person(item: Mapping) -> bool:
 
 def ticked(comment_body: str | None, sha: str) -> tuple[bool, bool]:
     """Whether the sign-off and QA boxes are ticked in the risk comment written for ``sha``."""
+    if HEAD_MARKER.format(sha=sha) not in (comment_body or ""):
+        return False, False
+    return boxes(comment_body)
+
+
+def boxes(comment_body: str | None) -> tuple[bool, bool]:
+    """Whether the sign-off and QA boxes are ticked in a risk comment, whatever its commit.
+
+    In observe the risk comment is v1's (it uses the same marker): its boxes are a person's real
+    ticks, and v1 writes the comment for the commit it gates.
+    """
     body = comment_body or ""
-    if not body.startswith(COMMENT_MARKER) or HEAD_MARKER.format(sha=sha) not in body:
+    if not body.startswith(COMMENT_MARKER):
         return False, False
     return bool(SIGNOFF_BOX.search(body)), bool(QA_BOX.search(body))
 
