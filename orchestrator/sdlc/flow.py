@@ -191,15 +191,18 @@ def _release(row: AgentDecision) -> dict:
     """The verdict's state and description; simulated rows keep them in ``output``.
 
     In shadow mode the posted state always passes, so the state is the verdict's own
-    (``would_be``) and ``shadow`` says it was never enforced.
+    (``would_be``) and ``shadow`` says it was never enforced. Observe mode posts nothing, so it is
+    shown the same way, by its own state, and ``observe`` says so.
     """
     action, output = row.action_taken or {}, row.output or {}
     shadow = output.get("mode") == "shadow"
+    observe = output.get("mode") == "observe"
     verdict_state = output.get("would_be") or release_gate.STATES.get(output.get("verdict"))
     return {
-        "state": verdict_state if shadow else action.get("state") or verdict_state,
+        "state": verdict_state if shadow or observe else action.get("state") or verdict_state,
         "description": action.get("description") or output.get("description"),
         "shadow": shadow,
+        "observe": observe,
     }
 
 

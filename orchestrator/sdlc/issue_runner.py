@@ -8,6 +8,12 @@ agent never closes, assigns or edits an issue, and never removes ``needs-info`` 
 skipping the backoff; after three failed ``retriage`` runs on one version the agent gives up,
 leaves the label and says so in one comment. Removing and re-adding the label tries again.
 
+In ``observe`` mode it decides and records as in shadow but writes nothing to GitHub. As the
+``retriage`` label can't be removed, it is honoured once per version: after one successful
+``retriage`` run of a version, later polls treat it as done. As the agent's labels were never set,
+labels differing from its last answer are not a person's correction, and it never gives up in a
+comment.
+
 ``python -m sdlc.issue_runner once`` polls once, ``dry-run <n>`` shows the exact request and a
 cost ceiling without calling the model or writing anything, and ``try <n> --yes`` makes one real
 call and records only a trial row; it never writes to GitHub.
@@ -90,12 +96,16 @@ class IssueRunner:
         retriage = RETRIAGE in _names(item)
         rows = decisions_for(db, triage.AGENT, head_sha=version, **_subject(item["number"]))
         done = any(row.status == "ok" for row in rows)
+        if retriage and self.mode == "observe":
+            # the label stays in observe, so one successful run of this version honours it
+            retriage = not any(row.status == "ok" and row.trigger == RETRIAGE for row in rows)
         if not retriage and (done or not may_attempt(rows, now)):
             return
         if retriage:
             failures = self._retriage_failures(item["number"], rows)
             if len(failures) >= RETRIAGE_CAP:
-                self._give_up(item["number"], version, failures[-1])
+                if self.mode != "observe":
+                    self._give_up(item["number"], version, failures[-1])
                 return
         assessment = self._triage(db, item, version, retriage, now)
         summary["triaged"] += 1
@@ -152,7 +162,8 @@ class IssueRunner:
         subject = _subject(number)
         last = latest_decision(db, triage.AGENT, **subject)
         assessment = self._assess(db, item)
-        left = _overrides(last, labels_of(item)) if assessment.ok else []
+        # in observe the agent's labels were never set, so a difference isn't a person's
+        left = _overrides(last, labels_of(item)) if assessment.ok and self.mode != "observe" else []
         actions: dict[str, Any] = {}
         if assessment.ok:
             proposed = _proposed(assessment)

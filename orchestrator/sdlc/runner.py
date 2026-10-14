@@ -9,8 +9,10 @@ when ``PLANNER_MODE`` is ``on`` as well. The release runner (``sdlc.release_runn
 in the same mode, and posts each waiting deploy's ``release-gate`` status.
 
 ``ORCHESTRATOR_MODE`` switches all of it. ``off`` does nothing at all, not even a read. ``shadow``
-does everything, but the status always passes and says what it would be. ``enforce`` makes the
-gate real. It fails closed: an exception on one pull request leaves that PR as it was (gated),
+does everything, but the status always passes and says what it would be. ``observe`` decides and
+records exactly as shadow does but writes nothing to GitHub, so v2 can watch beside v1: the risk
+comment it would post is kept in the audit row, and the status and tier label it would set are
+noted once a commit. ``enforce`` makes the gate real. It fails closed: an exception on one pull request leaves that PR as it was (gated),
 and a risk agent that fails leaves a failing gate, never a pass.
 
 ``python -m sdlc.runner run`` polls forever, ``once`` polls once, ``dry-run <pr>`` shows the exact
@@ -93,7 +95,8 @@ class Runner:
         self.engine = engine
         self.diff_char_limit = diff_char_limit
         self.approver = approver
-        self._posted: dict[int, tuple[str, str, str]] = {}  # the last status posted, per PR
+        # the last status posted, per PR; in observe, the last one noted as not posted
+        self._posted: dict[int, tuple[str, str, str]] = {}
         self._open: set[int] | None = None  # the open PRs at the last poll
         self._comments_since: datetime | None = None
         self._settled_at: datetime | None = None  # when the test selector last read CI results
@@ -245,8 +248,11 @@ class Runner:
             override_lines=_lines(rulings),
             tests="\n".join(section_lines(selection)),
         )
+        comment = self.effects.upsert_comment(pr.number, COMMENT_MARKER, body)
+        if self.mode == "observe":
+            comment = {**comment, "body": body}  # what v2 would have shown
         row.action_taken = {
-            "comment": self.effects.upsert_comment(pr.number, COMMENT_MARKER, body),
+            "comment": comment,
             "label": self.effects.set_tier_label(pr.number, tier),
             "status": self._post_status(pr.number, sha, gate, force=True),
         }
@@ -278,7 +284,9 @@ class Runner:
         tier = overrides.effective_tier(decision.tier, floor, rulings, sha)
         self._request_if_covered(db, pr, tier, now)  # a /tier raise can bring a PR into cover
         labels = [label["name"] for label in item.get("labels") or []]
-        if [name for name in labels if name.startswith("tier:")] != [f"tier:{tier}"]:
+        tier_labels = [name for name in labels if name.startswith("tier:")]
+        # in observe the label is never set, so there is nothing to repair
+        if self.mode != "observe" and tier_labels != [f"tier:{tier}"]:
             self.effects.set_tier_label(pr.number, tier)
         risk_comment = self.effects.find_comment(pr.number, COMMENT_MARKER, comments)
         boxed, qa_done = ticked(risk_comment.get("body") if risk_comment else None, sha)
@@ -302,7 +310,10 @@ class Runner:
             gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
         self._post_status(pr.number, sha, gate)
         body = (risk_comment.get("body") or "") if risk_comment else ""
-        if risk_comment and comment_head(body) == sha:
+        if self.mode == "observe":
+            # no comment to refresh or render again; a /tier change is still decided and recorded
+            self._retest(db, pr, sha, tier, decision, now)
+        elif risk_comment and comment_head(body) == sha:
             # a tier_change recommendation belongs to the commit the comment was written for
             selection, retested = self._retest(db, pr, sha, tier, decision, now)
             refreshed = replace_section(body, selection) if retested else body
@@ -446,6 +457,17 @@ class Runner:
         posted = (sha, gate.state, gate.description)
         if not force and self._posted.get(number) == posted:
             return {"skipped": "unchanged"}
+        if self.mode == "observe":
+            # noted once a commit, not every poll; the gate's changes are in sdlc_gate_status
+            if not force and (self._posted.get(number) or ("",))[0] == sha:
+                return {"skipped": "unchanged"}
+            self._posted[number] = posted
+            log.info(
+                "PR #%s at %s: observe mode, so risk-gate (%s) and its tier label are not posted",
+                number,
+                sha[:7],
+                gate.description,
+            )
         result = self.effects.set_status(sha, gate.state, gate.description)
         if "done" in result:
             self._posted[number] = posted

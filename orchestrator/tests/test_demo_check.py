@@ -192,6 +192,12 @@ def test_a_ready_setup_passes_every_check_in_order(engine, gh, baseline):
     [
         ("off", FAIL, "off: the agents won't react during the demo. Set it to shadow in .env."),
         ("shadow", WARN, "shadow: the release gate will only say what it would do"),
+        (
+            "observe",
+            WARN,
+            "observe: v2 decides but posts nothing; v1 still governs this repository until "
+            "cutover (7.5).",
+        ),
         ("enforce", PASS, "enforce: the release gate holds deploys and risk-gate shows"),
     ],
 )

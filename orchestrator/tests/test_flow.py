@@ -410,12 +410,13 @@ def test_recently_merged_shows_the_newest_verdict_naming_each_pr(db):
 
     assert releases == {
         ("github", 42): None,
-        ("github", 41): {"state": "failure", "description": "T2 · blocked", "shadow": False},
-        ("github", 40): {"state": "success", "description": "T2 · release", "shadow": False},
+        ("github", 41): {"state": "failure", "description": "T2 · blocked", "shadow": False, "observe": False},
+        ("github", 40): {"state": "success", "description": "T2 · release", "shadow": False, "observe": False},
         ("synthetic", 40): {
             "state": "pending",
             "description": "T2 · Held: open incident in pipeline",
             "shadow": False,
+            "observe": False,
         },
     }
 
@@ -434,7 +435,34 @@ def test_a_shadow_verdict_shows_what_it_would_be_not_the_posted_success(db):
 
     [item] = recently_merged(db)
 
-    assert item["release"] == {"state": "pending", "description": description, "shadow": True}
+    assert item["release"] == {
+        "state": "pending",
+        "description": description,
+        "shadow": True,
+        "observe": False,
+    }
+
+
+def test_an_observe_verdict_shows_what_it_would_be_and_is_never_shown_as_released(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    _pr(db, issue, 40, datetime(2026, 9, 9), merged_at=datetime(2026, 9, 10))
+    description = "T2 · Observe (would be pending). Held: open incident in pipeline"
+    _verdict(
+        db,
+        [40],
+        datetime(2026, 9, 10, 13),
+        output={"would_be": "pending", "mode": "observe"},
+        action_taken={"state": "success", "description": description, "skipped": "mode is observe"},
+    )
+
+    [item] = recently_merged(db)
+
+    assert item["release"] == {
+        "state": "pending",
+        "description": description,
+        "shadow": False,
+        "observe": True,
+    }
 
 
 def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
@@ -452,6 +480,6 @@ def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
             "number": 40,
             "title": "PR 40",
             "merged_at": "2026-09-03T10:00:00",
-            "release": {"state": "pending", "description": "T2 · hold", "shadow": False},
+            "release": {"state": "pending", "description": "T2 · hold", "shadow": False, "observe": False},
         }
     ]

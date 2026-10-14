@@ -224,6 +224,12 @@ def mode_check(mode: str) -> Check:
             "Set enforce in .env for the demo, and shadow again afterwards."
         )
         return Check("ORCHESTRATOR_MODE", WARN, detail)
+    if mode == "observe":
+        detail = (
+            "observe: v2 decides but posts nothing; v1 still governs this repository until "
+            "cutover (7.5)."
+        )
+        return Check("ORCHESTRATOR_MODE", WARN, detail)
     detail = "off: the agents won't react during the demo. Set it to shadow in .env."
     return Check("ORCHESTRATOR_MODE", FAIL, detail)
 
