@@ -1,0 +1,834 @@
+{
+ "exported_at": "2026-10-14T09:00:00Z",
+ "repository": "pragmattie/pragmattie-sync-agentic",
+ "decisions": [
+  {
+   "id": 5023,
+   "created_at": "2026-10-05T09:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 1,
+   "head_sha": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 10,
+   "adjustment": 0,
+   "final_score": 10,
+   "tier": "T0",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5024,
+   "created_at": "2026-10-05T10:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 2,
+   "head_sha": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 27,
+   "adjustment": 0,
+   "final_score": 27,
+   "tier": "T1",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5025,
+   "created_at": "2026-10-05T11:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 3,
+   "head_sha": "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 50,
+   "adjustment": 0,
+   "final_score": 50,
+   "tier": "T2",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5026,
+   "created_at": "2026-10-05T12:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 4,
+   "head_sha": "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 40,
+   "adjustment": 0,
+   "final_score": 40,
+   "tier": "T1",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5027,
+   "created_at": "2026-10-05T13:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 5,
+   "head_sha": "05aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 45,
+   "adjustment": 0,
+   "final_score": 45,
+   "tier": "T1",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5028,
+   "created_at": "2026-10-05T14:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 6,
+   "head_sha": "06aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 82,
+   "adjustment": 0,
+   "final_score": 82,
+   "tier": "T3",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [
+     "pipeline"
+    ],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5029,
+   "created_at": "2026-10-05T15:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 7,
+   "head_sha": "07aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 60,
+   "adjustment": 0,
+   "final_score": 60,
+   "tier": "T2",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5030,
+   "created_at": "2026-10-05T16:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 8,
+   "head_sha": "08aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 85,
+   "adjustment": 0,
+   "final_score": 85,
+   "tier": "T3",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [
+     "migration"
+    ],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5031,
+   "created_at": "2026-10-05T17:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 9,
+   "head_sha": "09aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 15,
+   "adjustment": 0,
+   "final_score": 15,
+   "tier": "T0",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5032,
+   "created_at": "2026-10-05T18:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 10,
+   "head_sha": "10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 52,
+   "adjustment": 0,
+   "final_score": 52,
+   "tier": "T2",
+   "signals": {
+    "change_size": 20,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5033,
+   "created_at": "2026-10-05T20:30:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 12,
+   "head_sha": "12aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 33,
+   "adjustment": 0,
+   "final_score": 33,
+   "tier": "T1",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5034,
+   "created_at": "2026-10-03T10:00:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 13,
+   "head_sha": "13aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": {
+    "additions": 100,
+    "module_incident_rate": 0.1
+   },
+   "raw_score": 20,
+   "adjustment": 0,
+   "final_score": 20,
+   "tier": "T1",
+   "signals": {
+    "change_size": 10,
+    "module_incidents": 5
+   },
+   "output": {
+    "floors": [],
+    "reasons": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5035,
+   "created_at": "2026-10-05T09:40:00",
+   "agent": "pr_risk",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 1,
+   "head_sha": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "trial",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": 99,
+   "tier": "T3",
+   "signals": null,
+   "output": null,
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5036,
+   "created_at": "2026-10-05T09:31:00",
+   "agent": "test_selector",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 1,
+   "head_sha": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "suites": [
+     "api"
+    ],
+    "skipped": [],
+    "reasons": {
+     "api": "code changed in apps/api/app/x.py"
+    },
+    "full": null,
+    "flaky": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5037,
+   "created_at": "2026-10-05T10:31:00",
+   "agent": "test_selector",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 2,
+   "head_sha": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "suites": [
+     "api"
+    ],
+    "skipped": [],
+    "reasons": {
+     "api": "code changed in apps/api/app/y.py"
+    },
+    "full": null,
+    "flaky": []
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5038,
+   "created_at": "2026-10-05T09:50:00",
+   "agent": "test_selector",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 1,
+   "head_sha": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "ci_result",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "results": {
+     "api": {
+      "conclusion": "success",
+      "flaky": false,
+      "seconds": 60
+     },
+     "crm-web": {
+      "conclusion": "success",
+      "flaky": false,
+      "seconds": 60
+     }
+    }
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5039,
+   "created_at": "2026-10-05T10:50:00",
+   "agent": "test_selector",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 2,
+   "head_sha": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "attempt": 1,
+   "trigger": "ci_result",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "results": {
+     "api": {
+      "conclusion": "failure",
+      "flaky": false,
+      "seconds": 61
+     },
+     "crm-web": {
+      "conclusion": "success",
+      "flaky": false,
+      "seconds": 60
+     }
+    }
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5040,
+   "created_at": "2026-10-06T10:00:00",
+   "agent": "triage",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "issue",
+   "subject_id": 50,
+   "head_sha": "h50bbbbbbbbbb",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "module": "pipeline",
+    "type": "feature",
+    "priority": "P2",
+    "estimate_points": 3
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5041,
+   "created_at": "2026-10-06T10:00:00",
+   "agent": "triage",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "issue",
+   "subject_id": 51,
+   "head_sha": "h51bbbbbbbbbb",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": {
+    "module": "pipeline",
+    "type": "feature",
+    "priority": "P2",
+    "estimate_points": 5
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5042,
+   "created_at": "2026-10-07T10:00:00",
+   "agent": "release_gate",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "release",
+   "subject_id": 7,
+   "head_sha": "d1cccccccccccccccccccccccccccccccccccccc",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": "T1",
+   "signals": null,
+   "output": {
+    "verdict": "pass",
+    "reasons": [
+     "T1 release"
+    ]
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5043,
+   "created_at": "2026-10-07T10:00:00",
+   "agent": "release_gate",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "release",
+   "subject_id": 8,
+   "head_sha": "d2cccccccccccccccccccccccccccccccccccccc",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": "T2",
+   "signals": null,
+   "output": {
+    "verdict": "pass",
+    "reasons": [
+     "T2 release"
+    ]
+   },
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  },
+  {
+   "id": 5044,
+   "created_at": "2026-10-06T11:00:00",
+   "agent": "tier_override",
+   "agent_version": "v1",
+   "model_id": null,
+   "prompt_version": null,
+   "prompt_hash": null,
+   "subject_type": "pr",
+   "subject_id": 4,
+   "head_sha": "comment-1",
+   "attempt": 1,
+   "trigger": "poll",
+   "inputs_digest": null,
+   "raw_score": null,
+   "adjustment": null,
+   "final_score": null,
+   "tier": null,
+   "signals": null,
+   "output": null,
+   "action_taken": null,
+   "status": "ok",
+   "error": null,
+   "latency_ms": null,
+   "input_tokens": null,
+   "output_tokens": null,
+   "human_override": null,
+   "supersedes_id": null
+  }
+ ],
+ "approvals": [
+  {
+   "pr": 8,
+   "approver_id": "owner",
+   "tier": "T3",
+   "status": "approved",
+   "reason": null,
+   "note": null,
+   "requested_at": "2026-10-06T12:00:00",
+   "decided_at": "2026-10-06T13:00:00"
+  }
+ ]
+}
