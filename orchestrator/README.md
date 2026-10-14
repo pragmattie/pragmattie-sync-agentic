@@ -234,4 +234,11 @@ compares v2's decisions with v1's export (`sdlc/v1_export.py` loads and validate
 PRs, issues and deploys, and reports agreement, every difference and the bar for cutover. It is
 read-only; see `docs/v1-comparison.md`.
 
+**v1's record imported.** `python -m sdlc.import_v1 FILE [--apply]` adds every decision in v1's
+export to the audit trail with source `v1` (every field as v1 recorded it, `supersedes_id`
+remapped), and each approval as a `simulated_approver` row. Implementer, reviewer and trial rows
+are left out and counted. A row already imported is skipped, so it can be run again on a newer
+export. It is a dry run without `--apply`, and only ever inserts. v2's own runners and measures
+read `github` and `synthetic` rows only; the decision log shows imported rows with a "v1" chip.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
