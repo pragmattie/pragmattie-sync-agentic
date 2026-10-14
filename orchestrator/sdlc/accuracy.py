@@ -220,7 +220,8 @@ def risk_accuracy(db: Session, policy: Policy) -> dict:
         "caught": caught,
         "recall": _rate(caught, incidents),
         "t0_incidents": t0,
-        "real": {"merged_prs": real_merged, "incident_prs": real_incidents},
+        # MySQL sums to a Decimal; the report's counts are ints.
+        "real": {"merged_prs": int(real_merged), "incident_prs": int(real_incidents)},
     }
 
 
