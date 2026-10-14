@@ -28,6 +28,7 @@ from sdlc.forecast import (
     on_time_share,
     percentile_date,
     real_throughput,
+    shift,
     simulate,
     started_on,
     working_days,
@@ -187,6 +188,8 @@ def build_prompt(forecast: EpicForecast, items: list[Item], next_milestone: str)
             f"{forecast.ahead_items} items in earlier milestones are built first; only this "
             "milestone's items are listed.\n"
         )
+    if forecast.gate_days > 0:
+        ahead += f"{forecast.gate_days} working day(s) for gates and specs are included.\n"
     return (
         f"Milestone: {epic_label(forecast.epic)}, target {_day(forecast.end_date)}, "
         f"{days_left} working days left (today {forecast.as_of.isoformat()}).\n"
@@ -204,13 +207,16 @@ def effect_of_deferring(db: Session, forecast: EpicForecast, deferred: list[int]
 
     Only numbers that are open items of the milestone count, so a caller can't overstate it. The
     items ahead in earlier milestones stay: deferring moves items to the next milestone, so it
-    never changes what is built first.
+    never changes what is built first. The forecast's working days for gates and specs stay too.
     """
     samples = real_throughput(db, today=forecast.as_of)
     open_numbers = {item.number for item in milestone_items(db, forecast.epic)}
     remaining = max(0, forecast.remaining_items - len(open_numbers & set(deferred)))
     total = forecast.ahead_items + remaining
-    results = simulate(total, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed)
+    results = shift(
+        simulate(total, samples, start=forecast.as_of, runs=forecast.runs, seed=forecast.seed),
+        forecast.gate_days,
+    )
     on_time = None
     if forecast.end_date is not None and forecast.runs and (any(samples) or not total):
         on_time = on_time_share(results, forecast.end_date, total)

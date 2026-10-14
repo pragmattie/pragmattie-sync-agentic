@@ -19,12 +19,16 @@ from sdlc.forecast import (
     describe_epic,
     epic_forecast,
     epic_seed,
+    gate_boundaries,
+    gate_gap,
+    gate_gaps,
     items_ahead,
     on_time_share,
     percentile_date,
     real_epics,
     real_throughput,
     seed_for,
+    shift,
     simulate,
     simulated_epics,
     sprint_forecast,
@@ -584,7 +588,8 @@ def test_a_real_epic_with_no_real_closure_has_no_dates(session, epics):
     # Nothing can be judged without a pace: None, not a certain miss.
     assert result.end_date == date(2026, 10, 16) and result.on_time_probability is None
     assert describe_epic(result).startswith(
-        "Delivery forecasting (M5): 3 items left; P50 not within"
+        "Delivery forecasting (M5): 3 items left, plus 1 working day(s) for gates and specs; "
+        "P50 not within"
     )
     assert "; its target is Oct 16 (agents' pace" in describe_epic(result)
 
@@ -695,12 +700,17 @@ def test_a_later_milestone_is_forecast_after_the_earlier_ones(session, in_sequen
     m6 = epic_forecast(session, WEDNESDAY, M6, runs=500)
     m7 = epic_forecast(session, WEDNESDAY, M7, runs=500)
     assert (m6.ahead_items, m7.ahead_items) == (0, 10)
+    assert (m6.gate_days, m7.gate_days) == (1, 2)  # M5 is open before M6; M5 and M6 before M7
     assert (m7.remaining_items, m7.remaining_real, m7.remaining_points) == (4, 4, 12)
     assert m6.seed == m7.seed == epic_seed("github", WEDNESDAY)
     assert m7.p50 >= m6.p50 and m7.p85 >= m6.p85
-    # M7's forecast is a forecast of 14 items with the shared seed, judged on all 14.
-    results = simulate(
-        14, real_throughput(session, today=WEDNESDAY), start=WEDNESDAY, runs=500, seed=m7.seed
+    # M7's forecast is a forecast of 14 items with the shared seed, 2 working days later,
+    # judged on all 14.
+    results = shift(
+        simulate(
+            14, real_throughput(session, today=WEDNESDAY), start=WEDNESDAY, runs=500, seed=m7.seed
+        ),
+        2,
     )
     assert m7.p50 == percentile_date(results, 0.5)
     assert m7.p85 == percentile_date(results, 0.85)
@@ -724,9 +734,167 @@ def test_simulated_epics_have_nothing_ahead_and_are_unchanged(session, epics):
     _issue(session, 600, source="github", epic=M6)
     session.flush()
     after = epic_forecast(session, WEDNESDAY, "Billing", runs=200)
-    assert after.ahead_items == 0
+    assert (after.ahead_items, after.gate_days) == (0, 0)
     assert after == before
     assert after.seed == epic_seed("Billing", WEDNESDAY)
+
+
+# Gates between milestones
+
+
+def _history(session, milestones, *, start=800):
+    """For each (name, [(opened, merged or None)]), a closed real story per pull request."""
+    number = start
+    for name, prs in milestones:
+        for opened, merged in prs:
+            issue = _closed(
+                session, number, merged or opened, source="github", epic=name, estimate_points=1
+            )
+            session.add(
+                PullRequest(
+                    source="github",
+                    external_id=f"pr-{number}",
+                    number=number,
+                    title=f"PR {number}",
+                    issue_id=issue.id,
+                    state="merged" if merged else "open",
+                    created_at=opened,
+                    merged_at=merged,
+                )
+            )
+            number += 1
+    session.flush()
+
+
+def _at(day, hour=12):
+    return datetime(2026, *day, hour)
+
+
+@pytest.fixture
+def gated(session):
+    """M0 to M6 with gaps 1, 0, 1, 1, 1, 0, plus pull requests that must be left out."""
+    _history(
+        session,
+        [
+            ("M0 Bootstrap", [(_at((9, 28)), _at((9, 28))), (_at((9, 28)), _at((9, 29)))]),
+            # First opened Wed Sep 30, the working day after M0's last merge: 1.
+            (
+                "M1 Product",
+                [
+                    (_at((9, 30)), _at((10, 1))),
+                    (_at((10, 1)), _at((10, 2), 16)),
+                    (_at((10, 2)), None),
+                ],
+            ),
+            # First opened Thu Oct 1, before M1's last merge: an overlap, 0.
+            ("M2 Pipeline", [(_at((10, 1), 9), _at((10, 2)))]),
+            # First opened Mon Oct 5 after a Friday merge: the weekend counts none, 1.
+            ("M3 Signals", [(_at((10, 5)), _at((10, 6)))]),
+            ("M4 Risk", [(_at((10, 7)), _at((10, 8)))]),
+            ("M5 Forecasting", [(_at((10, 9), 9), _at((10, 9), 17))]),
+            # First opened Sun Oct 11 after a Friday merge: no working day between, 0.
+            ("M6 Releases", [(_at((10, 11)), _at((10, 12)))]),
+            # Not measured: no merged pull request, an unnumbered milestone.
+            ("M7 Self-governance", [(_at((10, 20)), None)]),
+            ("Backlog", [(_at((9, 1)), _at((9, 2)))]),
+        ],
+    )
+    # A synthetic pull request on a real milestone's name is not real history.
+    _history(session, [("M3 Signals", [(_at((9, 1)), _at((9, 1)))])], start=900)
+    session.execute(
+        PullRequest.__table__.update().where(PullRequest.number == 900).values(source="synthetic")
+    )
+    session.flush()
+
+
+def test_gate_gaps_are_measured_between_consecutive_milestones(session, gated):
+    assert gate_gaps(session) == [1, 0, 1, 1, 1, 0]
+    assert gate_gap(session) == 1
+
+
+def test_gate_gap_is_the_median_rounded_half_up(session):
+    # Gaps 1, 2, 3 and 4: the median 2.5 rounds up to 3.
+    _history(
+        session,
+        [
+            ("M1 A", [(_at((10, 1)), _at((10, 1)))]),
+            ("M2 B", [(_at((10, 2)), _at((10, 2)))]),  # Fri, 1
+            ("M3 C", [(_at((10, 6)), _at((10, 6)))]),  # Tue, 2
+            ("M4 D", [(_at((10, 9)), _at((10, 9)))]),  # Fri, 3
+            ("M5 E", [(_at((10, 15)), _at((10, 15)))]),  # Thu, 4
+        ],
+    )
+    assert gate_gaps(session) == [1, 2, 3, 4]
+    assert gate_gap(session) == 3
+
+
+def test_with_fewer_than_three_gaps_the_gate_gap_is_one(session):
+    assert gate_gaps(session) == [] and gate_gap(session) == forecast.DEFAULT_GATE_GAP == 1
+    _history(
+        session,
+        [
+            ("M1 A", [(_at((10, 1)), _at((10, 1)))]),
+            ("M2 B", [(_at((10, 6)), _at((10, 6)))]),
+            ("M3 C", [(_at((10, 13)), _at((10, 13)))]),
+        ],
+    )
+    assert gate_gaps(session) == [3, 5]
+    assert gate_gap(session) == 1
+
+
+def test_gate_boundaries(session, in_sequence):
+    # M5 (open, nothing started), M6 and M7 are open.
+    assert gate_boundaries(session, MILESTONE) == 1  # unstarted, none before
+    assert gate_boundaries(session, M6) == 1  # one open before
+    assert gate_boundaries(session, M7) == 2  # two open before
+    _history(session, [(MILESTONE, [(_at((10, 5)), None)])])
+    assert gate_boundaries(session, MILESTONE) == 0  # started, none before
+
+
+def test_shift_moves_each_finish_by_working_days_and_keeps_none():
+    finishes = [date(2026, 10, 9), None, WEDNESDAY]
+    assert shift(finishes, 2) == [date(2026, 10, 13), None, date(2026, 10, 9)]
+    assert shift(finishes, 0) == finishes
+
+
+def test_gate_days_move_every_finish_and_keep_the_milestones_in_order(session, in_sequence):
+    samples = real_throughput(session, today=WEDNESDAY)
+    m6 = epic_forecast(session, WEDNESDAY, M6, runs=500)
+    m7 = epic_forecast(session, WEDNESDAY, M7, runs=500)
+    assert m7.gate_days == 2
+    unshifted = simulate(14, samples, start=WEDNESDAY, runs=500, seed=m7.seed)
+    shifted = shift(unshifted, 2)
+    assert all(
+        later == (forecast.next_workday(forecast.next_workday(day)) if day else None)
+        for day, later in zip(unshifted, shifted, strict=True)
+    )
+    assert (m7.p50, m7.p85) == (percentile_date(shifted, 0.5), percentile_date(shifted, 0.85))
+    assert m7.on_time_probability == on_time_share(shifted, date(2026, 11, 13), 14)
+    assert m7.p50 >= m6.p50 and m7.p85 >= m6.p85
+
+
+def test_a_measured_gap_multiplies_by_the_boundaries(session, epics):
+    _history(
+        session,
+        [
+            ("M1 A", [(_at((9, 1)), _at((9, 1)))]),
+            ("M2 B", [(_at((9, 3)), _at((9, 3)))]),  # 2
+            ("M3 C", [(_at((9, 7)), _at((9, 7)))]),  # 2
+            ("M4 D", [(_at((9, 9)), _at((9, 9)))]),  # 2
+        ],
+    )
+    # M5 has no pull request and none open before it: one gate of 2 working days.
+    result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=200)
+    assert result.gate_days == 2
+    assert "plus 2 working day(s) for gates and specs" in describe_epic(result)
+
+
+def test_a_milestone_with_nothing_left_waits_for_no_gate(session, epics):
+    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+        issue.state = "closed"
+    session.flush()
+    result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=50)
+    assert result.gate_days == 0 and result.p50 == WEDNESDAY
 
 
 def _epic(**values):
@@ -767,6 +935,15 @@ def test_describe_epic_names_the_items_in_earlier_milestones():
         "Self-governance (M7): 4 items left, after 10 items in earlier milestones; P50 Oct 14, "
     )
     assert "earlier milestones" not in describe_epic(_epic(epic=M7, ahead_items=0))
+
+
+def test_describe_epic_names_the_working_days_for_gates_and_specs():
+    gated = _epic(epic=M7, remaining_items=4, remaining_real=4, ahead_items=10, gate_days=2)
+    assert describe_epic(gated).startswith(
+        "Self-governance (M7): 4 items left, after 10 items in earlier milestones, plus 2 working "
+        "day(s) for gates and specs; P50 Oct 14, "
+    )
+    assert "gates" not in describe_epic(_epic(gate_days=0))
 
 
 def test_describe_epic_for_a_simulated_epic():

@@ -305,11 +305,11 @@ def test_epic_inputs_list_open_stories_and_the_due_date(engine, milestone):
     with Session(engine) as db:
         rows = epic_inputs(db, MILESTONE)
         ids = [issue.id for issue in db.scalars(select(Issue).where(Issue.epic == MILESTONE))]
-    assert sorted(rows[:-1], key=lambda row: row["id"]) == [
+    assert sorted(rows[:-2], key=lambda row: row["id"]) == [
         {"id": ids[0], "points": 3, "source": "github"},
         {"id": ids[1], "points": None, "source": "github"},
     ]
-    assert rows[-1] == {"due_on": "2026-10-16"}
+    assert rows[-2:] == [{"due_on": "2026-10-16"}, {"gate_days": 1}]  # unstarted, none before
 
 
 def test_epic_rows_are_saved_with_their_source_target_and_probability(engine, runner, milestone):

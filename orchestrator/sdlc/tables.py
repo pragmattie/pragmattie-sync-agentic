@@ -313,7 +313,8 @@ class Forecast(Base):
 
     ``source`` is "synthetic", "github" or "mixed"; ``end_date`` is a sprint's last day or an
     epic's target. ``ahead_items`` is how many open items in earlier milestones a real milestone
-    was forecast after (0 for sprints and simulated epics).
+    was forecast after, and ``gate_days`` how many working days for gates and specs it includes
+    (both 0 for sprints and simulated epics).
     """
 
     __tablename__ = "sdlc_forecasts"
@@ -339,3 +340,4 @@ class Forecast(Base):
     seed: Mapped[int] = mapped_column(BigInteger)
     at_risk: Mapped[list | None] = mapped_column(JSON)
     ahead_items: Mapped[int] = _count()
+    gate_days: Mapped[int] = _count()
