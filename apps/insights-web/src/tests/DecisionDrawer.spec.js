@@ -74,6 +74,33 @@ describe("DecisionDrawer", () => {
     );
   });
 
+  it("marks a decision by v1 and shows v1's /tier ruling keys", async () => {
+    const wrapper = await mountDrawer({
+      ...DECISION,
+      agent: "tier_override",
+      subject_source: "v1",
+      trigger: "human",
+      human_override: { from: "T1", to: "T2" },
+      signals: null,
+    });
+
+    expect(wrapper.find("[data-test='drawer-title']").text()).toBe("Tier override · PR #42");
+    expect(wrapper.find("[data-test='drawer-chip-v1']").text()).toBe("v1");
+    expect(wrapper.findComponent({ name: "VTooltip" }).props("text")).toBe(
+      "Decided by v1, which governed this repository until cutover",
+    );
+    expect(wrapper.find("[data-test='override-From']").text()).toContain("T1");
+    expect(wrapper.find("[data-test='override-To']").text()).toContain("T2");
+  });
+
+  it("names the simulated second approver, and shows no v1 chip on v2's rows", async () => {
+    const approval = await mountDrawer({ ...DECISION, agent: "simulated_approver" });
+    expect(approval.find("[data-test='drawer-title']").text()).toBe(
+      "Simulated second approver · PR #42",
+    );
+    expect(approval.find("[data-test='drawer-chip-v1']").exists()).toBe(false);
+  });
+
   it("says what a missed test selector result means", async () => {
     const wrapper = await mountDrawer({ ...DECISION, agent: "test_selector", status: "missed" });
 

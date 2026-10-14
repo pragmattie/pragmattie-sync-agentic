@@ -13,6 +13,8 @@ import {
   filtersFromQuery,
   formatCost,
   formatTime,
+  IMPORTED_TOOLTIP,
+  isImported,
   kindOf,
   listParams,
   PAGE_SIZE,
@@ -221,7 +223,7 @@ function rowProps({ item }) {
           @update:model-value="setFilter('tier', $event)"
         />
       </v-col>
-      <v-col cols="12" md="3" class="d-flex align-center">
+      <v-col cols="12" md="auto" class="d-flex align-center">
         <v-btn-toggle
           :model-value="filters.source ?? 'all'"
           mandatory
@@ -281,6 +283,16 @@ function rowProps({ item }) {
             data-test="chip-simulated"
           >
             Simulated
+          </v-chip>
+          <v-chip
+            v-if="isImported(item)"
+            size="x-small"
+            variant="tonal"
+            prepend-icon="mdi-history"
+            data-test="chip-v1"
+          >
+            v1
+            <v-tooltip activator="parent" location="top" :text="IMPORTED_TOOLTIP" />
           </v-chip>
         </div>
         <div class="text-caption text-medium-emphasis">{{ kindOf(item) }}</div>

@@ -7,6 +7,8 @@ import {
   formatCost,
   formatNumber,
   formatTime,
+  IMPORTED_TOOLTIP,
+  isImported,
   MISSING,
   prettyJson,
   signalRows,
@@ -65,8 +67,9 @@ const override = computed(() => {
   if (!value) return [];
   const rows = [
     ["Who", value.actor],
-    ["From", value.from_tier],
-    ["To", value.to_tier],
+    // v1 recorded its /tier rulings as `from` and `to`.
+    ["From", value.from_tier ?? value.from],
+    ["To", value.to_tier ?? value.to],
     ["Why", value.reason],
     ["Outcome", value.why],
     ["Changed", value.dimensions?.join(", ")],
@@ -112,6 +115,17 @@ const signals = computed(() => signalRows(props.decision?.signals));
             data-test="drawer-status"
           >
             {{ decision.status }}
+          </v-chip>
+          <v-chip
+            v-if="isImported(decision)"
+            size="small"
+            variant="tonal"
+            prepend-icon="mdi-history"
+            class="mt-1 ml-1"
+            data-test="drawer-chip-v1"
+          >
+            v1
+            <v-tooltip activator="parent" location="bottom" :text="IMPORTED_TOOLTIP" />
           </v-chip>
           <div
             v-if="STATUS_LABELS[decision.status]"

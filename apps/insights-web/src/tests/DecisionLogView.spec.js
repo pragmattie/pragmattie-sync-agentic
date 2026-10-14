@@ -256,6 +256,37 @@ describe("DecisionLogView", () => {
     );
   });
 
+  it("marks rows decided by v1 with a chip and its tooltip, and filters to them", async () => {
+    const imported = decision({
+      id: 4,
+      agent: "simulated_approver",
+      subject_source: "v1",
+      subject_id: 8,
+      head_sha: "approval-8",
+      trigger: "human",
+      output: { approver_id: "owner", status: "approved" },
+    });
+    mockApi(page({ decisions: [...ROWS, imported] }));
+    const { wrapper, router } = await mountView();
+
+    const row = wrapper.find("[data-test='row-4']");
+    expect(row.text()).toContain("Simulated second approver");
+    expect(row.text()).toContain("approval");
+    const chip = row.find("[data-test='chip-v1']");
+    expect(chip.text()).toBe("v1");
+    expect(row.findComponent({ name: "VTooltip" }).props("text")).toBe(
+      "Decided by v1, which governed this repository until cutover",
+    );
+    expect(wrapper.find("[data-test='row-1'] [data-test='chip-v1']").exists()).toBe(false);
+    expect(wrapper.find("[data-test='row-2'] [data-test='chip-v1']").exists()).toBe(false);
+    expect(listCalls()[0][1].subject_source).toBeUndefined();
+
+    await navigate(router, () => wrapper.find("[data-test='source-v1']").trigger("click"));
+
+    expect(router.currentRoute.value.query).toEqual({ source: "v1" });
+    expect(listCalls().at(-1)[1]).toMatchObject({ subject_source: "v1", offset: 0 });
+  });
+
   it("offers every failure kind as its own status filter option", async () => {
     mockApi();
     const { wrapper, router } = await mountView();

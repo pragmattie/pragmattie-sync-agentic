@@ -6,11 +6,14 @@ import {
   filtersFromQuery,
   formatCost,
   formatTime,
+  IMPORTED_TOOLTIP,
+  isImported,
   kindOf,
   listParams,
   parseUtc,
   prettyJson,
   signalRows,
+  SOURCE_OPTIONS,
   STATUS_OPTIONS,
   STATUS_VALUES,
   statusColor,
@@ -33,12 +36,13 @@ describe("agentLabel", () => {
     ["planner", "Planner"],
     ["test_selector", "Test selector"],
     ["release_gate", "Release gate"],
+    ["simulated_approver", "Simulated second approver"],
   ])("names %s %s", (agent, label) => {
     expect(agentLabel(agent)).toBe(label);
   });
 
   it("covers every agent in the spec", () => {
-    expect(Object.keys(AGENT_LABELS)).toHaveLength(11);
+    expect(Object.keys(AGENT_LABELS)).toHaveLength(12);
   });
 
   it("falls back to the raw name", () => {
@@ -77,6 +81,7 @@ describe("kindOf", () => {
     ["review-99", "review"],
     ["window-abc", "window sign-off"],
     ["comment-555", "a person's comment"],
+    ["approval-8", "approval"],
   ])("reads %s as %s", (head_sha, kind) => {
     expect(kindOf({ subject_type: "pr", head_sha })).toBe(kind);
   });
@@ -222,6 +227,26 @@ describe("filtersFromQuery and listParams", () => {
       subject_source: "synthetic",
       offset: 0,
     });
+  });
+
+  it("filters to the rows decided by v1, and All includes them", () => {
+    expect(SOURCE_OPTIONS.map((option) => option.title)).toEqual([
+      "All",
+      "Real",
+      "Simulated",
+      "Decided by v1",
+    ]);
+    expect(filtersFromQuery({ source: "v1" })).toEqual({ filters: { source: "v1" }, page: 1 });
+    expect(listParams({ source: "v1" }, 1)).toMatchObject({ subject_source: "v1" });
+    expect(listParams({}, 1).subject_source).toBeUndefined();
+  });
+});
+
+describe("isImported", () => {
+  it("marks the rows imported from v1 and only those", () => {
+    expect(isImported({ subject_source: "v1" })).toBe(true);
+    expect(isImported({ subject_source: "github" })).toBe(false);
+    expect(IMPORTED_TOOLTIP).toBe("Decided by v1, which governed this repository until cutover");
   });
 });
 

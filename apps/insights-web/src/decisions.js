@@ -15,6 +15,7 @@ export const AGENT_LABELS = {
   planner: "Planner",
   test_selector: "Test selector",
   release_gate: "Release gate",
+  simulated_approver: "Simulated second approver",
 };
 
 export function agentLabel(agent) {
@@ -46,6 +47,7 @@ const KIND_PREFIXES = [
   ["review-", "review"],
   ["window-", "window sign-off"],
   ["comment-", "a person's comment"],
+  ["approval-", "approval"],
 ];
 
 export function kindOf(decision) {
@@ -147,9 +149,18 @@ export const SOURCE_OPTIONS = [
   { title: "All", value: "all" },
   { title: "Real", value: "real" },
   { title: "Simulated", value: "simulated" },
+  { title: "Decided by v1", value: "v1" },
 ];
 
-const SOURCE_PARAMS = { real: "github", simulated: "synthetic" };
+const SOURCE_PARAMS = { real: "github", simulated: "synthetic", v1: "v1" };
+
+// Rows imported from v1's audit trail before cutover carry this source.
+export const IMPORTED_SOURCE = "v1";
+export const IMPORTED_TOOLTIP = "Decided by v1, which governed this repository until cutover";
+
+export function isImported(decision) {
+  return decision?.subject_source === IMPORTED_SOURCE;
+}
 
 export const FILTER_KEYS = ["agent", "subject", "status", "tier", "source"];
 
