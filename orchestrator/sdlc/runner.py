@@ -173,6 +173,7 @@ class Runner:
     ) -> None:
         sha = item["head"]["sha"]
         pr = collector.collect_pull_request(item)
+        db.commit()  # the stored PR is shared with the collector: hold no lock while assessing
         rows = decisions_for(db, pr_risk.AGENT, head_sha=sha, **_subject(pr))
         decision = next((row for row in reversed(rows) if row.status == "ok"), None)
         if decision is None and may_attempt(rows, now):

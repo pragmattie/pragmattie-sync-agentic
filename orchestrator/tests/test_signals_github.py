@@ -1,17 +1,23 @@
 import logging
+import os
+import threading
+import time
 from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from alembic import command
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import Session
 
+from sdlc.config import get_settings
 from sdlc.db import Base
 from sdlc.github_client import GitHubClient, GitHubError
 from sdlc.signals import github
 from sdlc.signals.github import Collector, labels_of, linked_issue_number, suite_of
 from sdlc.tables import CIRun, Deployment, Engineer, Epic, Incident, Issue, PullRequest
 from tests.fakes import FakeGitHub
+from tests.test_migrations import _alembic_config
 
 REPO = "acme/widgets"
 API = f"/repos/{REPO}"
@@ -991,3 +997,78 @@ def test_the_collector_reads_the_policys_environments(sqlite_engine, client):
         collector.collect_deployments = lambda environments: asked.append(environments) or 0
         collector.run()
     assert asked == [("production", "production-signoff")]
+
+
+# Two services storing the same row
+
+
+def test_an_issue_another_service_stored_first_is_read_again_and_updated(sqlite_engine, client):
+    """The collector and the agents both store issues; the later insert updates the stored row."""
+    Base.metadata.create_all(sqlite_engine)
+    first, second = Session(sqlite_engine), Session(sqlite_engine)
+    try:
+        theirs = Collector(second, client)
+        theirs._stored = lambda table, external_id: None  # read before the other one committed
+        Collector(first, client).collect_issue(ISSUES[0])
+        first.commit()
+
+        issue = theirs.collect_issue(dict(ISSUES[0], title="Lead scoring rules, renamed"))
+        second.commit()
+
+        assert issue.title == "Lead scoring rules, renamed"
+        rows = second.scalars(select(Issue).where(Issue.external_id == "issue-12")).all()
+        assert [row.id for row in rows] == [issue.id]
+    finally:
+        first.close()
+        second.close()
+
+
+def test_two_sessions_upserting_the_same_issue_concurrently_leave_one_row_on_mysql(client):
+    """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("mysql"):
+        pytest.skip("DATABASE_URL is not MySQL")
+    get_settings.cache_clear()
+    item = dict(ISSUES[1], number=990216, title="Stored by both services")
+    external_id = f"issue-{item['number']}"
+    try:
+        command.upgrade(_alembic_config(), "head")
+        mysql = create_engine(url)
+        errors = []
+
+        def forget():
+            with Session(mysql) as db:
+                db.execute(
+                    delete(Issue).where(Issue.source == "github", Issue.external_id == external_id)
+                )
+                db.commit()
+
+        def later():
+            try:
+                with Session(mysql) as db:
+                    Collector(db, client).collect_issue(dict(item, title="Stored second"))
+                    db.commit()  # waits on the first session's insert, then hits its key
+            except Exception as error:
+                errors.append(error)
+
+        try:
+            forget()
+            with Session(mysql) as db:
+                Collector(db, client).collect_issue(item)
+                db.flush()  # inserted, not committed: the row's key is locked
+                thread = threading.Thread(target=later)
+                thread.start()
+                time.sleep(1)  # the other session is now waiting on the key
+                db.commit()
+            thread.join(timeout=60)
+            assert not thread.is_alive() and errors == []
+            with Session(mysql) as db:
+                rows = db.scalars(
+                    select(Issue).where(Issue.source == "github", Issue.external_id == external_id)
+                ).all()
+                assert [row.title for row in rows] == ["Stored second"]
+        finally:
+            forget()
+            mysql.dispose()
+    finally:
+        get_settings.cache_clear()

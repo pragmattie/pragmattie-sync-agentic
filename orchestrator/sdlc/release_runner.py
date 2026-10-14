@@ -129,6 +129,7 @@ class ReleaseRunner:
             stored = _stored_pr(db, item["number"])
             if stored is None or stored.merge_commit_sha is None:
                 collector.collect_pull_request(item)
+                db.commit()  # shared with the collector: hold no lock over the next requests
 
     def head_pr(self, db: Session, collector: Collector, sha: str) -> PullRequest | None:
         """The merged PR whose merge commit is ``sha``, or None for a direct push."""
