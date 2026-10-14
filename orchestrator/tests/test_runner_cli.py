@@ -61,6 +61,7 @@ def test_the_mode_defaults_to_off_and_anything_else_is_refused():
     assert Settings(_env_file=None).poll_seconds == 30
     assert Settings(_env_file=None).diff_char_limit == 60000
     assert Settings(_env_file=None, orchestrator_mode="enforce").orchestrator_mode == "enforce"
+    assert Settings(_env_file=None, orchestrator_mode="observe").orchestrator_mode == "observe"
     with pytest.raises(ValidationError):
         Settings(_env_file=None, orchestrator_mode="on")
 

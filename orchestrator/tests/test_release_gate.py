@@ -160,6 +160,21 @@ def test_shadow_always_succeeds_and_says_what_enforce_would_do(facts, would_be, 
     assert verdict.description == f"T2 · Shadow (would be {would_be}). {text}"
 
 
+@pytest.mark.parametrize(
+    ("facts", "would_be", "text"),
+    [
+        (_facts(), "success", "Release: checks passed"),
+        (_facts(ci="running"), "pending", "Held: waiting for CI on the release commit"),
+    ],
+)
+def test_observe_decides_like_shadow_and_says_observe(facts, would_be, text):
+    verdict = evaluate(POLICY, facts, mode="observe")
+
+    assert verdict.state == "success"
+    assert verdict.would_be == would_be
+    assert verdict.description == f"T2 · Observe (would be {would_be}). {text}"
+
+
 def test_descriptions_are_cut_to_the_limit_and_start_with_the_tier():
     incidents = tuple(OpenIncident(f"module-{i}", 1000 + i) for i in range(10))
 

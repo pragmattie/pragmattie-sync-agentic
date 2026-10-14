@@ -148,6 +148,11 @@ def render(
             "> **Shadow mode.** This check always passes for now. "
             f"It shows what enforce mode would do: **{gate.would_be}**."
         )
+    elif meta.mode == "observe":
+        sections.append(
+            "> **Observe mode.** Nothing is posted to GitHub; this is what v2 would show. "
+            f"It would be: **{gate.would_be}**."
+        )
     if assessment.ok:
         sections += _score_lines(assessment)
     else:

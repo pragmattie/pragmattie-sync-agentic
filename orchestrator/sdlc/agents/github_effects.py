@@ -1,8 +1,8 @@
 """The only place the orchestrator writes to GitHub.
 
-Reads always work. Every write goes through ``_write``, which does nothing in ``off`` mode and
-returns what happened for the audit row: ``{"done": ...}``, ``{"skipped": "mode is off"}`` or
-``{"error": ...}``. A failing write never raises, so one never stops the others.
+Reads always work. Every write goes through ``_write``, which does nothing in ``off`` or
+``observe`` mode (not even the reads inside it) and returns what happened for the audit row:
+``{"done": ...}``, ``{"skipped": "mode is off"}`` (or ``observe``) or ``{"error": ...}``. A failing write never raises, so one never stops the others.
 
 There is deliberately no method that merges, approves, closes, pushes, edits an issue's text or
 changes repository settings.
@@ -17,6 +17,7 @@ from sdlc.agents.gate import DESCRIPTION_LIMIT
 TIER_COLOURS = {"T0": "0E8A16", "T1": "FBCA04", "T2": "F9A03F", "T3": "B60205"}
 DIMENSION_COLOUR = "C5DEF5"
 ERROR_CHARS = 300
+NO_WRITES = ("off", "observe")
 
 
 class Effects:
@@ -63,8 +64,8 @@ class Effects:
     # Writes
 
     def _write(self, done: str, action: Callable[[], Any]) -> dict[str, str]:
-        if self.mode == "off":
-            return {"skipped": "mode is off"}
+        if self.mode in NO_WRITES:
+            return {"skipped": f"mode is {self.mode}"}
         try:
             action()
         except Exception as error:  # a failed write is reported, never raised

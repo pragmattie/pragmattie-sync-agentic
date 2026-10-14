@@ -2,7 +2,8 @@
 
 Code decides it from the tier and from what people and the AI reviewer have done, never from the
 model's judgment. These are pure functions with no I/O: the caller gathers the approvals and posts
-the result. In shadow mode the status always passes and its description says what it would be.
+the result. In shadow mode the status always passes and its description says what it would be;
+observe decides the same way, though nothing is posted.
 """
 
 from dataclasses import dataclass
@@ -78,6 +79,8 @@ def evaluate(
             note = f"{tier}: requirements met"
     if mode == "shadow":
         state, description = "success", f"Shadow mode (would be {would_be}). {note}"
+    elif mode == "observe":
+        state, description = "success", f"Observe (would be {would_be}). {note}"
     else:
         state, description = would_be, note
     return Gate(
