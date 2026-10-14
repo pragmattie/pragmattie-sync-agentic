@@ -229,4 +229,9 @@ are running and that both web apps answer on `CRM_WEB_PORT` and `INSIGHTS_WEB_PO
 by default; the dev servers refuse requests from inside Docker), then runs the checklist with the
 CRM's head from the api container.
 
+**v1 and v2 side by side.** `python -m sdlc.compare_v1 FILE [--since DATE] [--markdown OUT]`
+compares v2's decisions with v1's export (`sdlc/v1_export.py` loads and validates it) on the same
+PRs, issues and deploys, and reports agreement, every difference and the bar for cutover. It is
+read-only; see `docs/v1-comparison.md`.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
