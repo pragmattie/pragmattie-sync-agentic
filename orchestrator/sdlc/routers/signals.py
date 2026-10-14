@@ -131,7 +131,7 @@ def accuracy_report(db: Session = Depends(get_session)) -> dict:
 def decisions(
     agent: str | None = None,
     subject_type: Literal["pr", "issue", "sprint", "epic", "release"] | None = None,
-    subject_source: Literal["synthetic", "github"] | None = None,
+    subject_source: Literal["synthetic", "github", "v1"] | None = None,
     status: str | None = None,
     tier: str | None = None,
     limit: int = Query(50, ge=1, le=200),

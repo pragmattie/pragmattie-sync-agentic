@@ -41,6 +41,7 @@ RESULT = "ci_result"  # a settled row; never a recommendation
 SETTLE_WINDOW = timedelta(days=7)
 FINISHED = ("success", "failure")
 SHOWN_IN = {"shown_in": "the risk comment's Tests section"}
+OWN_SOURCES = ("github", "synthetic")  # rows imported from v1 are history, not ours to settle
 
 
 def _rows_for(pr: PullRequest, sha: str):
@@ -136,6 +137,7 @@ def unsettled(db: Session, now: datetime) -> list[AgentDecision]:
     query = select(AgentDecision).where(
         AgentDecision.agent == AGENT,
         AgentDecision.subject_type == "pr",
+        AgentDecision.subject_source.in_(OWN_SOURCES),
         AgentDecision.trigger != TRIAL,
         AgentDecision.created_at >= now - SETTLE_WINDOW,
     )
@@ -199,9 +201,11 @@ def settle(db: Session, gh, now: datetime) -> int:
 
 
 def report(db: Session) -> dict:
-    """The track record from every ``ci_result`` row."""
+    """The track record from every ``ci_result`` row of v2's own."""
     query = select(AgentDecision).where(
-        AgentDecision.agent == AGENT, AgentDecision.trigger == RESULT
+        AgentDecision.agent == AGENT,
+        AgentDecision.subject_source.in_(OWN_SOURCES),
+        AgentDecision.trigger == RESULT,
     )
     rows = list(db.scalars(query.order_by(AgentDecision.id)))
     return {
