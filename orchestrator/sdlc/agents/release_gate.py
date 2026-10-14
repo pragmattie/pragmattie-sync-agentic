@@ -7,7 +7,8 @@ deploys causing incidents; ``signoff`` needs the checks and then a person's appr
 deployment. No Claude call is involved.
 
 These are pure functions with no I/O: the caller gathers the facts and acts on the verdict. In
-shadow mode the state always passes and the description says what enforce would do.
+shadow mode the state always passes and the description says what enforce would do; observe
+decides the same way, though nothing is posted.
 """
 
 from dataclasses import dataclass
@@ -104,6 +105,8 @@ def evaluate(policy: Policy, facts: ReleaseFacts, *, mode: str) -> Verdict:
     would_be = STATES[verdict]
     if mode == "shadow":
         state, description = "success", f"{facts.tier} · Shadow (would be {would_be}). {text}"
+    elif mode == "observe":
+        state, description = "success", f"{facts.tier} · Observe (would be {would_be}). {text}"
     else:
         state, description = would_be, f"{facts.tier} · {text}"
     return Verdict(

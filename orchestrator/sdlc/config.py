@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     planner_max_output_tokens: int = 2000
     planner_mode: Literal["off", "on"] = "off"
     agent_timeout_seconds: float = 60
-    orchestrator_mode: Literal["off", "shadow", "enforce"] = "off"
+    orchestrator_mode: Literal["off", "observe", "shadow", "enforce"] = "off"
     poll_seconds: float = 30
     diff_char_limit: int = 60000
 

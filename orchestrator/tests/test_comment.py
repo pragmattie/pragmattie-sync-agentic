@@ -159,6 +159,25 @@ def test_render_a_t1_in_shadow_mode_shows_the_shadow_line_and_the_signoff_box():
     )
 
 
+def test_render_in_observe_mode_shows_the_observe_banner_in_place_of_the_shadow_line():
+    assessment = _assessment(
+        "T1", raw=30, adjustment=5, top_reasons=["Edits the lead form."], test_gaps=["Empty name"]
+    )
+    shadow_line = (
+        "> **Shadow mode.** This check always passes for now. "
+        "It shows what enforce mode would do: **pending**."
+    )
+    observe_line = (
+        "> **Observe mode.** Nothing is posted to GitHub; this is what v2 would show. "
+        "It would be: **pending**."
+    )
+
+    body = _render(assessment, mode="observe")
+
+    assert body == _render(assessment, mode="shadow").replace(shadow_line, observe_line)
+    assert "Shadow mode" not in body
+
+
 def test_render_a_clamped_t3_has_both_boxes_and_waits_for_the_simulated_approval():
     assessment = _assessment("T3", raw=70, adjustment=15, clamped=True, top_reasons=["Auth."])
 

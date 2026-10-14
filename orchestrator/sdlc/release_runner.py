@@ -20,7 +20,8 @@ posted again, except once after a restart (with no new row).
 
 ``ORCHESTRATOR_MODE`` switches it like every agent: ``off`` does nothing at all, ``shadow`` posts
 success with what enforce would do (a T3 still deploys through the sign-off environment, since
-its description starts with T3), ``enforce`` posts the real state.
+its description starts with T3), ``observe`` records the verdict shadow would post but posts
+nothing, ``enforce`` posts the real state.
 
 ``python -m sdlc.release_runner once`` polls once and prints the summary.
 """

@@ -104,6 +104,64 @@ def test_shadow_posts_success_saying_what_it_would_be(gh, engine, policy):
     assert (gate.state, gate.would_be, gate.mode) == ("success", "pending", "shadow")
 
 
+def test_observe_decides_and_records_like_shadow_and_writes_nothing(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    summary = _runner(gh, engine, policy, "observe").poll_once(NOON)
+
+    assert summary == {"mode": "observe", "prs": 1, "assessed": 1, "failed": 0, "errors": 0}
+    assert gh.writes() == []
+    [row] = _rows(engine)
+    assert (row.status, row.tier) == ("ok", "T2")
+    comment = row.action_taken["comment"]
+    assert comment["skipped"] == "mode is observe"
+    assert "> **Observe mode.** Nothing is posted to GitHub" in comment["body"]
+    assert "It would be: **pending**." in comment["body"]
+    assert row.action_taken["label"] == {"skipped": "mode is observe"}
+    assert row.action_taken["status"] == {"skipped": "mode is observe"}
+    [selection] = _rows(engine, "test_selector")
+    assert selection.head_sha == SHA
+    gate = _gate(engine, 1)
+    assert (gate.state, gate.would_be, gate.mode) == ("success", "pending", "observe")
+    assert gate.description.startswith("Observe (would be pending). T2")
+
+
+def test_observe_notes_the_skipped_status_once_a_commit_and_never_repairs_or_rerenders(
+    gh, engine, policy, caplog
+):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy, "observe")
+    caplog.set_level(logging.INFO, logger="sdlc.runner")
+
+    for minute in range(4):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    gh.comment(1, "LGTM")  # a change on the PR doesn't note it again
+    runner.poll_once(NOON + timedelta(minutes=5))
+    gh.push(1, NEW_SHA)
+    for minute in range(6, 9):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+
+    noted = [record for record in caplog.records if "observe mode, so risk-gate" in record.message]
+    assert [record.args[1] for record in noted] == [SHA[:7], NEW_SHA[:7]]
+    assert gh.writes() == []
+    assert len(_rows(engine)) == 2  # scored once per commit
+    assert _gate(engine, 1).description.startswith("Observe (would be pending). T2")
+
+
+def test_observe_rules_on_a_tier_command_and_records_it_without_writing(gh, engine, policy):
+    gh.add_pr(1, SHA, additions=T1_SIZE)
+    runner = _runner(gh, engine, policy, "observe")
+    runner.poll_once(NOON)
+    gh.comment(1, "/tier T3 this touches the forecast maths")
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+
+    [ruling] = _overrides(engine)
+    assert (ruling.tier, ruling.status) == ("T3", "ok")
+    assert [row.trigger for row in _selector(engine)] == ["poll", "tier_change"]
+    assert _gate(engine, 1).tier == "T3"
+    assert gh.writes() == []
+
+
 def test_a_new_commit_writes_comment_label_and_status_in_order_and_records_them(gh, engine, policy):
     gh.add_pr(1, SHA, files=PIPELINE)
     _runner(gh, engine, policy).poll_once(NOON)

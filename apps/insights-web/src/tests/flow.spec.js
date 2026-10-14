@@ -85,6 +85,17 @@ describe("flow helpers", () => {
     );
   });
 
+  it("shows an observe verdict's own chip, marked observe", () => {
+    const description = "T2 · Observe (would be pending)";
+    const release = { state: "pending", description, shadow: false, observe: true };
+
+    expect(releaseChip({ release })).toEqual({
+      text: "Release held (observe)",
+      color: "warning",
+      tooltip: description,
+    });
+  });
+
   it("makes the merged rows with a Simulated flag for simulated items", () => {
     const rows = mergedRows({
       recently_merged: [

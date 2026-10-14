@@ -78,10 +78,14 @@ ports, and the web apps' API addresses follow the host ports.
 ## Running beside v1
 
 v2 can run on the same machine as v1 and read this repository, so Delivery Insights shows the
-real agent build. It only reads: the agents stay off (`ORCHESTRATOR_MODE=off`), and the
-`collector` service sends GET requests only, collecting milestones (as epics), issues, pull
-requests and CI jobs every `COLLECT_SECONDS` (900 by default). A failed run is logged and the next
-one tries again; a spent rate limit waits until it resets.
+real agent build. It only reads: the `collector` service sends GET requests only, collecting
+milestones (as epics), issues, pull requests and CI jobs every `COLLECT_SECONDS` (900 by default).
+A failed run is logged and the next one tries again; a spent rate limit waits until it resets.
+
+v2's agents can watch beside it, in the `agents` service with `ORCHESTRATOR_MODE=observe`: they
+score each pull request, triage each issue and judge each release, and record every decision in
+v2's own audit trail, but write nothing to GitHub. v1 keeps governing this repository (its
+comments, `risk-gate` status and labels) until cutover, so the two never fight.
 
 v2 reads with its own token, never v1's, so the two never share a rate limit. Create a
 fine-grained personal access token for `pragmattie/pragmattie-sync-agentic` only, with these
@@ -94,7 +98,10 @@ Deployments.
    `GITHUB_REPO=pragmattie/pragmattie-sync-agentic`), and set the token as `GITHUB_TOKEN`.
 3. Run `docker compose --profile collect up -d`. On a new database, apply the migrations first
    (see [Database migrations](#database-migrations)).
-4. Open Delivery Insights on <http://insights.pragmattie-sync.localhost:18080> (or
+4. To have v2's agents watch too, set `ORCHESTRATOR_MODE=observe` (and `ANTHROPIC_API_KEY`) in
+   v2's `.env` and run `docker compose --profile agents up -d`. The read-only token is enough:
+   nothing writes.
+5. Open Delivery Insights on <http://insights.pragmattie-sync.localhost:18080> (or
    <http://localhost:15174>), and the CRM on <http://pragmattie-sync.localhost:18080>. v1 keeps
    port 80 and <http://pragmattie-sync.localhost>.
 

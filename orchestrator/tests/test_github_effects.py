@@ -28,6 +28,21 @@ def test_off_mode_writes_nothing_and_says_so(gh):
     assert gh.requests == []
 
 
+def test_observe_mode_writes_nothing_says_so_and_sends_no_request_at_all(gh):
+    effects = Effects(gh, "observe")
+    results = [
+        effects.upsert_comment(5, MARKER, "hello"),
+        effects.add_comment(5, "hello"),
+        effects.set_status(SHA, "pending", "waiting"),
+        effects.set_tier_label(5, "T1"),
+        effects.set_dimension_label(5, "module", "leads"),
+        effects.add_label_if_absent(5, "triaged"),
+        effects.remove_label(5, "triaged"),
+    ]
+    assert results == [{"skipped": "mode is observe"}] * 7
+    assert gh.requests == []  # not even the reads inside a write
+
+
 def test_reads_work_in_off_mode(gh):
     effects = Effects(gh, "off")
     assert effects.read_pr(5)["number"] == 5

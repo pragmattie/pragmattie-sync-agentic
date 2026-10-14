@@ -108,12 +108,13 @@ export const RELEASE_CHIPS = {
 };
 
 // The chip for a merged item, with the verdict's description as its tooltip,
-// or null when no release verdict names it. A shadow verdict was never enforced,
-// so its chip says so.
+// or null when no release verdict names it. A shadow or observe verdict was never
+// enforced, so its chip says so.
 export function releaseChip(item) {
   const chip = RELEASE_CHIPS[item?.release?.state];
   if (!chip) return null;
-  const text = item.release.shadow ? `${chip.text} (shadow)` : chip.text;
+  const mode = item.release.observe ? "observe" : item.release.shadow ? "shadow" : null;
+  const text = mode ? `${chip.text} (${mode})` : chip.text;
   return { ...chip, text, tooltip: item.release.description ?? "" };
 }
 

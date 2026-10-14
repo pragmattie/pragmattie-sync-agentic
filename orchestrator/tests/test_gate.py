@@ -128,6 +128,22 @@ def test_a_failed_risk_agent_passes_in_shadow_mode_saying_it_would_fail():
     )
 
 
+@pytest.mark.parametrize("ok", [True, False])
+def test_observe_decides_like_shadow_and_says_observe(ok):
+    shadow = evaluate(POLICY, "T1", ok=ok, approvals=Approvals(), mode="shadow")
+    observe = evaluate(POLICY, "T1", ok=ok, approvals=Approvals(), mode="observe")
+
+    assert (observe.state, observe.would_be, observe.missing) == (
+        shadow.state,
+        shadow.would_be,
+        shadow.missing,
+    )
+    assert observe.description == shadow.description.replace(
+        "Shadow mode (would be", "Observe (would be"
+    )
+    assert observe.description.startswith(f"Observe (would be {shadow.would_be}). T1")
+
+
 def test_descriptions_are_cut_to_the_status_limit():
     tier = "T3-with-a-name-long-enough-to-need-the-cut-here"
     policy = replace(POLICY, tiers={**POLICY.tiers, tier: POLICY.tiers["T3"]})

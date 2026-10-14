@@ -61,6 +61,7 @@ def test_the_mode_defaults_to_off_and_anything_else_is_refused():
     assert Settings(_env_file=None).poll_seconds == 30
     assert Settings(_env_file=None).diff_char_limit == 60000
     assert Settings(_env_file=None, orchestrator_mode="enforce").orchestrator_mode == "enforce"
+    assert Settings(_env_file=None, orchestrator_mode="observe").orchestrator_mode == "observe"
     with pytest.raises(ValidationError):
         Settings(_env_file=None, orchestrator_mode="on")
 
@@ -341,3 +342,20 @@ def test_run_skips_the_release_runner_while_rate_limited(runner, gh, monkeypatch
         release_runner=Poller("release", order),
     )
     assert order == ["plan", "plan"]
+
+
+@pytest.mark.parametrize(
+    ("planner_mode", "mode", "runs"),
+    [
+        ("on", "observe", True),
+        ("on", "shadow", True),
+        ("on", "off", False),
+        ("off", "observe", False),
+    ],
+)
+def test_the_planner_runs_in_observe_as_in_shadow(planner_mode, mode, runs):
+    settings = Settings(_env_file=None, planner_mode=planner_mode, anthropic_api_key="test")
+    planner = runner_module.plan_runner_for(settings, mode)
+    assert (planner is not None) == runs
+    if runs:
+        assert planner.mode == "on"
