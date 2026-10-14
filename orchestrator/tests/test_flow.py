@@ -431,6 +431,16 @@ def test_recently_merged_shows_the_newest_verdict_naming_each_pr(db):
     }
 
 
+def test_recently_merged_ignores_verdicts_imported_from_v1(db):
+    issue = _issue(db, 1, datetime(2026, 9, 1))
+    _pr(db, issue, 40, datetime(2026, 9, 9), merged_at=datetime(2026, 9, 10))
+    _verdict(db, [40], datetime(2026, 9, 10, 13), source="v1", state="success", verdict="release")
+
+    [item] = recently_merged(db)
+
+    assert item["release"] is None
+
+
 def test_a_shadow_verdict_shows_what_it_would_be_not_the_posted_success(db):
     issue = _issue(db, 1, datetime(2026, 9, 1))
     _pr(db, issue, 40, datetime(2026, 9, 9), merged_at=datetime(2026, 9, 10))

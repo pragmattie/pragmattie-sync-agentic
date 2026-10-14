@@ -36,7 +36,7 @@ from sdlc.db import get_engine
 from sdlc.epics import MILESTONE_TITLE, epic_label, milestone_order
 from sdlc.forecast import EpicForecast, real_epics
 from sdlc.forecaster import latest
-from sdlc.tables import AgentDecision, Epic, Forecast
+from sdlc.tables import SOURCES, AgentDecision, Epic, Forecast
 
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(minutes=5)
@@ -73,13 +73,14 @@ def may_attempt(rows: list[AgentDecision], now: datetime) -> bool:
 
 
 def _milestone_rows(epic_name: str):
-    """A query for the planner's rows about any forecast of ``epic_name``."""
+    """A query for v2's own planner rows (never v1's) about any forecast of ``epic_name``."""
     return (
         select(AgentDecision)
         .join(Forecast, Forecast.id == AgentDecision.subject_id)
         .where(
             AgentDecision.agent == planner.AGENT,
             AgentDecision.subject_type == "epic",
+            AgentDecision.subject_source.in_(SOURCES),
             Forecast.kind == "epic",
             Forecast.subject == epic_name,
         )
