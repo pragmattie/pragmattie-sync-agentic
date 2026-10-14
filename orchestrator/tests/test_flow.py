@@ -410,8 +410,18 @@ def test_recently_merged_shows_the_newest_verdict_naming_each_pr(db):
 
     assert releases == {
         ("github", 42): None,
-        ("github", 41): {"state": "failure", "description": "T2 · blocked", "shadow": False, "observe": False},
-        ("github", 40): {"state": "success", "description": "T2 · release", "shadow": False, "observe": False},
+        ("github", 41): {
+            "state": "failure",
+            "description": "T2 · blocked",
+            "shadow": False,
+            "observe": False,
+        },
+        ("github", 40): {
+            "state": "success",
+            "description": "T2 · release",
+            "shadow": False,
+            "observe": False,
+        },
         ("synthetic", 40): {
             "state": "pending",
             "description": "T2 · Held: open incident in pipeline",
@@ -480,6 +490,11 @@ def test_flow_route_returns_the_recently_merged_items(api, sqlite_engine):
             "number": 40,
             "title": "PR 40",
             "merged_at": "2026-09-03T10:00:00",
-            "release": {"state": "pending", "description": "T2 · hold", "shadow": False, "observe": False},
+            "release": {
+                "state": "pending",
+                "description": "T2 · hold",
+                "shadow": False,
+                "observe": False,
+            },
         }
     ]

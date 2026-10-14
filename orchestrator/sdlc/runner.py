@@ -12,8 +12,9 @@ in the same mode, and posts each waiting deploy's ``release-gate`` status.
 does everything, but the status always passes and says what it would be. ``observe`` decides and
 records exactly as shadow does but writes nothing to GitHub, so v2 can watch beside v1: the risk
 comment it would post is kept in the audit row, and the status and tier label it would set are
-noted once a commit. ``enforce`` makes the gate real. It fails closed: an exception on one pull request leaves that PR as it was (gated),
-and a risk agent that fails leaves a failing gate, never a pass.
+noted once a commit. ``enforce`` makes the gate real. It fails closed: an exception on one pull
+request leaves that PR as it was (gated), and a risk agent that fails leaves a failing gate, never
+a pass.
 
 ``python -m sdlc.runner run`` polls forever, ``once`` polls once, ``dry-run <pr>`` shows the exact
 request and a cost ceiling without calling the model or writing anything, and ``try <pr> --yes``

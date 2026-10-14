@@ -2,7 +2,8 @@
 
 Reads always work. Every write goes through ``_write``, which does nothing in ``off`` or
 ``observe`` mode (not even the reads inside it) and returns what happened for the audit row:
-``{"done": ...}``, ``{"skipped": "mode is off"}`` (or ``observe``) or ``{"error": ...}``. A failing write never raises, so one never stops the others.
+``{"done": ...}``, ``{"skipped": "mode is off"}`` (or ``observe``) or ``{"error": ...}``. A
+failing write never raises, so one never stops the others.
 
 There is deliberately no method that merges, approves, closes, pushes, edits an issue's text or
 changes repository settings.
