@@ -106,6 +106,14 @@ def test_the_planner_takes_the_saved_rows_items_ahead(engine):
         assert plan_runner.as_epic_forecast(row).ahead_items == 10
 
 
+def test_the_planner_takes_the_saved_rows_gate_days(engine):
+    with Session(engine) as db:
+        row = db.get(Forecast, save_forecast(engine))
+        assert plan_runner.as_epic_forecast(row).gate_days == 0
+        row.gate_days = 2
+        assert plan_runner.as_epic_forecast(row).gate_days == 2
+
+
 def planner_rows(engine):
     with Session(engine) as db:
         query = select(AgentDecision).where(AgentDecision.agent == planner.AGENT)

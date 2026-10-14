@@ -4,9 +4,11 @@ Its subjects are the current simulated sprint and every epic: each open GitHub m
 work) and each simulated epic. For each it fingerprints the inputs (the day and the open items;
 for a sprint each item's id, points, module and first pull request, for an epic each story's id,
 points and source plus the epic's due date, and for a real milestone each open item ahead of it
-in an earlier milestone), and saves a forecast with ``sdlc.forecast`` when the
-fingerprint differs from the latest saved one: a new day, an item added, closed or re-estimated,
-work starting, or a target date moved. Each save is one ``sdlc_forecasts`` row and one audit row.
+in an earlier milestone and its working days for gates and specs), and saves a forecast with
+``sdlc.forecast`` when the fingerprint differs from the latest saved one: a new day, an item
+added, closed or re-estimated, work starting, a target date moved, a milestone opening its first
+pull request, or the measured gap between milestones changing. Each save is one
+``sdlc_forecasts`` row and one audit row.
 It makes no model call and no GitHub request, so it costs nothing to run.
 
 It runs after the PR risk and triage agents in ``python -m sdlc.runner run``, where
@@ -42,6 +44,8 @@ from sdlc.forecast import (
     describe,
     describe_epic,
     epic_forecast,
+    gate_boundaries,
+    gate_gap,
     open_items_ahead,
     real_epic,
     real_epics,
@@ -92,8 +96,9 @@ def sprint_inputs(db: Session, sprint: Sprint) -> list[dict[str, Any]]:
 
 
 def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
-    """Each open story of ``epic`` (its id, points and source), the epic's due date, and each
-    open item ahead of it in an earlier milestone (its id, points and milestone)."""
+    """Each open story of ``epic`` (its id, points and source), the epic's due date, each open
+    item ahead of it in an earlier milestone (its id, points and milestone), and, for a real
+    milestone, its working days for gates and specs (``gate_boundaries × gate_gap``)."""
     rows = db.execute(
         select(Issue.id, Issue.estimate_points, Issue.source).where(
             Issue.epic == epic, Issue.state == "open"
@@ -101,6 +106,7 @@ def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
     ).all()
     milestone = real_epic(db, epic)
     due_on = milestone.due_on if milestone else None
+    gate_days = gate_boundaries(db, epic) * gate_gap(db) if milestone else 0
     return (
         [{"id": issue_id, "points": points, "source": source} for issue_id, points, source in rows]
         + [{"due_on": _iso(due_on)}]
@@ -108,6 +114,7 @@ def epic_inputs(db: Session, epic: str) -> list[dict[str, Any]]:
             {"id": issue_id, "points": points, "milestone": name}
             for issue_id, points, name in open_items_ahead(db, epic)
         ]
+        + [{"gate_days": gate_days}]
     )
 
 
@@ -138,11 +145,11 @@ def _save(
 ) -> Forecast:
     """Write one forecast row and the audit row that records it; flushes, never commits."""
     if isinstance(forecast, SprintForecast):
-        subject, remaining_real, ahead_items = forecast.sprint, 0, 0
+        subject, remaining_real, ahead_items, gate_days = forecast.sprint, 0, 0, 0
         at_risk, rationale = [_risk(risk) for risk in forecast.at_risk], describe(forecast)
     else:
         subject, remaining_real = forecast.epic, forecast.remaining_real
-        ahead_items = forecast.ahead_items
+        ahead_items, gate_days = forecast.ahead_items, forecast.gate_days
         at_risk, rationale = [], describe_epic(forecast)
     row = Forecast(
         created_at=now.replace(microsecond=0),
@@ -165,6 +172,7 @@ def _save(
         seed=forecast.seed,
         at_risk=at_risk,
         ahead_items=ahead_items,
+        gate_days=gate_days,
     )
     db.add(row)
     db.flush()

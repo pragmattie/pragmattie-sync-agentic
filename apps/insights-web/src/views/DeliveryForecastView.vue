@@ -175,6 +175,10 @@ const trailOptions = {
             <v-card-subtitle v-if="epic.ahead_items > 0" data-test="ahead">
               After {{ epic.ahead_items }} items in earlier milestones
             </v-card-subtitle>
+            <v-card-subtitle v-if="epic.gate_days > 0" data-test="gate-days">
+              Includes {{ epic.gate_days }} working day(s) for gates and specs (measured from past
+              milestones)
+            </v-card-subtitle>
             <v-card-text>
               <v-row>
                 <v-col cols="12" md="6">

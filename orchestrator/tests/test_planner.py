@@ -24,7 +24,7 @@ from sdlc.agents.planner import (
 from sdlc.agents.pr_risk import prompt_hash
 from sdlc.config import Settings
 from sdlc.db import Base
-from sdlc.forecast import epic_forecast, percentile_date, real_throughput, simulate
+from sdlc.forecast import epic_forecast, percentile_date, real_throughput, shift, simulate
 from sdlc.tables import Epic, Issue, PullRequest
 from tests.fakes import FakeLLM
 
@@ -206,6 +206,15 @@ def test_the_prompt_says_when_items_in_earlier_milestones_come_first(session, mi
     plain = build_prompt(forecast, items, "Planning (M6)").splitlines()
     assert "earlier milestones" not in "\n".join(plain)
     assert plain[2] == "" and plain[3] == "<items>"
+
+
+def test_the_prompt_says_when_gates_and_specs_are_included(session, milestone, forecast):
+    items = milestone_items(session, MILESTONE)
+    gated = build_prompt(replace(forecast, ahead_items=10, gate_days=2), items, "Planning (M6)")
+    lines = gated.splitlines()
+    assert lines[3] == "2 working day(s) for gates and specs are included."
+    assert lines[4] == "" and lines[5] == "<items>"
+    assert "gates and specs" not in build_prompt(forecast, items, "Planning (M6)")
 
 
 def test_an_injected_title_appears_only_inside_items_and_cannot_act(session, milestone, forecast):
@@ -410,6 +419,20 @@ def test_the_effect_keeps_the_items_ahead_in_the_queue(session, forecast):
     everything = effect_of_deferring(session, ahead, list(range(101, 107)))
     assert everything["on_time_probability"] < 1.0
     assert everything["p50"] > WEDNESDAY.isoformat()
+
+
+def test_the_effect_includes_the_forecasts_gate_days(session, forecast):
+    gated = replace(forecast, gate_days=2)
+    effect = effect_of_deferring(session, gated, [102, 104])
+    samples = real_throughput(session, today=WEDNESDAY)
+    results = shift(simulate(4, samples, start=WEDNESDAY, runs=RUNS, seed=forecast.seed), 2)
+    assert effect["p50"] == percentile_date(results, 0.5).isoformat()
+    assert effect["p85"] == percentile_date(results, 0.85).isoformat()
+    on_time = sum(1 for day in results if day is not None and day <= TARGET) / RUNS
+    assert effect["on_time_probability"] == on_time
+    # With nothing left to build there is no gate to wait for.
+    everything = effect_of_deferring(session, gated, list(range(101, 107)))
+    assert everything["p50"] == WEDNESDAY.isoformat()
 
 
 def test_deferring_every_item_finishes_on_the_first_working_day(session, forecast):

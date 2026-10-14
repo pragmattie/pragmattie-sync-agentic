@@ -11,8 +11,10 @@ Sprints are simulated only: nothing assigns real issues a sprint, so the sprint 
 simulated history (calibration data). Real work is forecast by milestone: each open GitHub milestone
 is an epic, forecast at the agents' pace across all real work and in sequence: the agents finish one
 milestone before the next starts, so a milestone's forecast plays forward the open items in the
-earlier open milestones and then its own, with one seed per day shared by every milestone. The
-simulated history's epics are forecast at their own pace, each alone.
+earlier open milestones and then its own, with one seed per day shared by every milestone. Each
+milestone boundary still ahead (a person's gate, then the next milestone's specs and their
+approval) adds the gap measured between past milestones (``gate_gap``). The simulated history's
+epics are forecast at their own pace, each alone.
 
 Run ``python -m sdlc.forecast`` to print the current simulated sprint's forecast.
 """
@@ -20,6 +22,7 @@ Run ``python -m sdlc.forecast`` to print the current simulated sprint's forecast
 import argparse
 import math
 import random
+import statistics
 import sys
 import zlib
 from collections import Counter
@@ -42,6 +45,8 @@ OVERRUN_FACTOR = 1.5
 OVERRUN_SLACK_DAYS = 2
 DEFAULT_DAYS_PER_POINT = 1.0  # v1's rate when there is no history at all
 RUN_SEED_STEP = 1_000_003  # run i of seed s draws from random.Random(s * RUN_SEED_STEP + i)
+DEFAULT_GATE_GAP = 1  # working days between milestones while too few have been measured
+MIN_GATE_SAMPLES = 3
 
 
 def is_workday(day: date) -> bool:
@@ -432,6 +437,78 @@ def items_ahead(db: Session, epic: str) -> int:
     return len(open_items_ahead(db, epic))
 
 
+def _milestone_prs(db: Session) -> dict[str, list[tuple[datetime, datetime | None]]]:
+    """Each numbered real milestone's linked real pull requests: (opened, merged), any state."""
+    rows = db.execute(
+        select(Issue.epic, PullRequest.created_at, PullRequest.merged_at)
+        .join(Issue, PullRequest.issue_id == Issue.id)
+        .where(PullRequest.source == "github", Issue.source == "github", Issue.epic.is_not(None))
+    ).all()
+    prs: dict[str, list[tuple[datetime, datetime | None]]] = {}
+    for epic, opened, merged in rows:
+        if milestone_order(epic)[0] != sys.maxsize:
+            prs.setdefault(epic, []).append((opened, merged))
+    return prs
+
+
+def gate_gaps(db: Session) -> list[int]:
+    """The working days between consecutive real milestones, open and closed alike.
+
+    Milestones with a merged real pull request are taken in milestone order; each gap counts the
+    working days strictly after the earlier one's last merge, up to and including the day the
+    later one's first pull request was opened. An overlap is 0.
+    """
+    spans = []
+    by_milestone = sorted(_milestone_prs(db).items(), key=lambda item: milestone_order(item[0]))
+    for _, prs in by_milestone:
+        merges = [merged for _, merged in prs if merged is not None]
+        if merges:
+            spans.append((min(opened for opened, _ in prs).date(), max(merges).date()))
+    return [
+        len(working_days(last_merge + timedelta(days=1), first_opened))
+        for (_, last_merge), (first_opened, _) in zip(spans, spans[1:], strict=False)
+    ]
+
+
+def gate_gap(db: Session) -> int:
+    """The median gap (rounded half up), or ``DEFAULT_GATE_GAP`` with too few measured."""
+    gaps = gate_gaps(db)
+    if len(gaps) < MIN_GATE_SAMPLES:
+        return DEFAULT_GATE_GAP
+    return math.floor(statistics.median(gaps) + 0.5)
+
+
+def gate_boundaries(db: Session, epic: str) -> int:
+    """How many gates ``epic``'s work waits for: each open real milestone before it, or, with
+    none, 1 while ``epic`` has no real pull request opened (its specs are still to come)."""
+    number = milestone_order(epic)[0]
+    earlier = sum(
+        1
+        for other in real_epics(db)
+        if number != sys.maxsize and milestone_order(other.name)[0] < number
+    )
+    if earlier:
+        return earlier
+    started = db.scalars(
+        select(PullRequest.id)
+        .join(Issue, PullRequest.issue_id == Issue.id)
+        .where(PullRequest.source == "github", Issue.source == "github", Issue.epic == epic)
+        .limit(1)
+    ).first()
+    return 0 if started is not None else 1
+
+
+def shift(results: list[date | None], days: int) -> list[date | None]:
+    """Each finish ``days`` working days later; a run with no finish stays ``None``."""
+    moved: dict[date, date] = {}
+    for day in set(results) - {None}:
+        later = day
+        for _ in range(days):
+            later = next_workday(later)
+        moved[day] = later
+    return [moved[day] if day is not None else None for day in results]
+
+
 @dataclass
 class EpicForecast:
     epic: str
@@ -450,6 +527,7 @@ class EpicForecast:
     runs: int
     seed: int
     ahead_items: int = 0
+    gate_days: int = 0
 
 
 def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> EpicForecast:
@@ -458,7 +536,9 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
     A real epic counts only its real stories; its source is mixed if open synthetic stories share
     its name. Items without points count as 0 points. A real milestone is forecast after the items
     ahead of it (``items_ahead``), with the seed every real milestone shares that day, so a later
-    milestone is never forecast earlier than one before it.
+    milestone is never forecast earlier than one before it. Its finishes then move later by its
+    ``gate_days``, ``gate_boundaries × gate_gap`` working days; a milestone with nothing left
+    to build, here or ahead, is done and waits for no gate.
     """
     milestone = real_epic(db, epic)
     story_source = "github" if milestone else "synthetic"
@@ -479,6 +559,7 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         source = "mixed" if shared is not None else "github"
         ahead = items_ahead(db, epic)
         seed = epic_seed("github", today)
+        gate_days = gate_boundaries(db, epic) * gate_gap(db) if ahead + len(items) else 0
     else:
         samples = daily_throughput(db, today=today, epic=epic)
         history_days = HISTORY_DAYS
@@ -486,8 +567,9 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         source = "synthetic"
         ahead = 0
         seed = epic_seed(epic, today)
+        gate_days = 0
     total = ahead + len(items)
-    results = simulate(total, samples, start=today, runs=runs, seed=seed)
+    results = shift(simulate(total, samples, start=today, runs=runs, seed=seed), gate_days)
     on_time = None
     if end_date is not None and runs and (any(samples) or not total):
         on_time = on_time_share(results, end_date, total)
@@ -508,6 +590,7 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         runs=runs,
         seed=seed,
         ahead_items=ahead,
+        gate_days=gate_days,
     )
 
 
@@ -538,6 +621,8 @@ def describe_epic(forecast: EpicForecast) -> str:
     ahead = ""
     if forecast.ahead_items > 0:
         ahead = f", after {forecast.ahead_items} items in earlier milestones"
+    if forecast.gate_days > 0:
+        ahead += f", plus {forecast.gate_days} working day(s) for gates and specs"
     return (
         f"{epic_label(forecast.epic)}: {forecast.remaining_items} items left{ahead}; "
         f"P50 {_short(forecast.p50)}, P85 {_short(forecast.p85)}{target} ({pace})."

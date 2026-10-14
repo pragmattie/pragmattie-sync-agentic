@@ -27,6 +27,7 @@ function epic(overrides = {}) {
     source: "github",
     remaining_items: 6,
     ahead_items: 0,
+    gate_days: 0,
     end_date: "2026-10-30",
     p50: "2026-10-20",
     p85: "2026-10-27",
@@ -170,6 +171,23 @@ describe("DeliveryForecastView", () => {
     expect(first.find("[data-test='ahead']").exists()).toBe(false);
     expect(first.text()).not.toContain("earlier milestones");
     expect(second.find("[data-test='ahead']").text()).toBe("After 10 items in earlier milestones");
+  });
+
+  it("says how many working days for gates and specs are included, only when above 0", async () => {
+    const epics = [
+      epic(),
+      epic({ id: 11, subject: "M6", label: "Release gate (M6)", gate_days: 2 }),
+    ];
+    vi.spyOn(api, "getJson").mockResolvedValue(feed({ epics }));
+
+    const wrapper = await mountView();
+
+    const [first, second] = wrapper.findAll("[data-test='real-card']");
+    expect(first.find("[data-test='gate-days']").exists()).toBe(false);
+    expect(first.text()).not.toContain("gates and specs");
+    expect(second.find("[data-test='gate-days']").text()).toBe(
+      "Includes 2 working day(s) for gates and specs (measured from past milestones)",
+    );
   });
 
   it("shows a card's target chance, or No target set", async () => {
