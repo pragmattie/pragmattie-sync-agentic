@@ -286,6 +286,67 @@ def test_off_makes_no_request(gh, llm, engine):
     assert _rows(engine) == []
 
 
+def _observe(gh, llm, engine):
+    return IssueRunner(gh, llm, "observe", engine=engine)
+
+
+def test_observe_triages_and_records_but_writes_nothing(gh, llm, engine):
+    summary = _observe(gh, llm, engine).poll_once(NOON)
+
+    assert summary == {"mode": "observe", "issues": 1, "triaged": 1, "failed": 0, "errors": 0}
+    assert gh.writes() == []
+    [row] = _rows(engine)
+    assert (row.status, row.trigger) == ("ok", "opened")
+    assert row.action_taken["module"] == {"skipped": "mode is observe"}
+    assert row.action_taken["comment"] == {"skipped": "mode is observe"}
+
+
+def test_observe_honours_retriage_once_per_version(gh, llm, engine):
+    runner = _observe(gh, llm, engine)
+    runner.poll_once(NOON)
+    gh.label(1, "retriage", NOON + timedelta(minutes=1))
+    for minute in (2, 3, 4, 5):  # the label stays: it can't be removed in observe
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    assert len(llm.calls) == 2
+    assert [row.trigger for row in _rows(engine)] == ["opened", "retriage"]
+    assert "retriage" in gh.issue_labels[1]
+
+    gh.issues[1]["body"] = BODY + " Up to 5,000 rows."  # a new version is triaged again
+    for minute in (6, 7, 8):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+    assert len(llm.calls) == 3
+    assert [row.trigger for row in _rows(engine)] == ["opened", "retriage", "retriage"]
+    assert gh.writes() == []
+
+
+def test_observe_never_gives_up_in_a_comment(gh, llm, engine):
+    runner = _observe(gh, llm, engine)
+    runner.poll_once(NOON)
+    llm.error = LLMError("error", "Anthropic API 529")
+    gh.label(1, "retriage", NOON + timedelta(minutes=1))
+    for minute in range(2, 8):
+        runner.poll_once(NOON + timedelta(minutes=minute))
+
+    assert len(llm.calls) == 4  # still capped at three failed retriage runs
+    assert gh.writes() == []
+    assert _gave_up(gh) == []
+
+
+def test_observe_records_no_human_override_for_labels_that_differ(gh, llm, engine):
+    IssueRunner(gh, llm, "shadow", engine=engine).poll_once(NOON)  # labels written once
+    labels = gh.issue_labels[1]
+    labels[labels.index("module:leads")] = "module:pipeline"  # v1 or a person changed it
+    writes = len(gh.writes())
+    gh.issues[1]["body"] = BODY + " Edited."
+    _observe(gh, llm, engine).poll_once(NOON + timedelta(minutes=1))
+
+    second = _rows(engine)[-1]
+    assert second.human_override is None
+    assert second.trigger == "edit"
+    assert second.action_taken["module"] == {"skipped": "mode is observe"}
+    assert len(gh.writes()) == writes
+
+
 def test_a_person_quoting_the_triage_comment_is_never_a_tier_command(gh, engine):
     gh.add_pr(5, "a" * 40)
     pr_runner = Runner(gh, FakeLLM(), load_policy(), "enforce", engine=engine)
