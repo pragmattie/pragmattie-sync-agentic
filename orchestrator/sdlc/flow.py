@@ -222,6 +222,7 @@ def recently_merged(db: Session, limit: int = RECENTLY_MERGED) -> list[dict]:
         select(AgentDecision)
         .where(
             AgentDecision.agent == release_gate.AGENT,
+            AgentDecision.subject_source.in_(SOURCES),
             AgentDecision.trigger != TRIAL,
             # a verdict naming a PR comes after its merge
             AgentDecision.created_at >= min(pr.merged_at for pr in prs),

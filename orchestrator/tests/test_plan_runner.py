@@ -296,6 +296,29 @@ def test_latest_proposal_leaves_out_failed_and_trial_rows(engine, llm, capsys):
         assert latest_proposal(db, MILESTONE) is None
 
 
+def test_an_imported_v1_planner_row_is_never_the_proposal_or_counted_toward_the_cap(engine):
+    forecast_id = save_forecast(engine)
+    with Session(engine) as db:
+        db.add(
+            AgentDecision(
+                created_at=NOW,
+                agent=planner.AGENT,
+                agent_version="v1",
+                subject_type="epic",
+                subject_source="v1",
+                subject_id=forecast_id,
+                head_sha="a" * 40,
+                trigger="schedule",
+                status="ok",
+                output={"summary": "v1's proposal.", "options": [], "recommended": 0},
+            )
+        )
+        db.commit()
+
+        assert latest_proposal(db, MILESTONE) is None
+        assert plan_runner.calls_today(db, MILESTONE, NOW) == 0
+
+
 def test_the_dashboard_shows_the_proposal_and_marks_it_stale_after_the_forecast_moves(engine, llm):
     first = save_forecast(engine, key="a")
     runner = PlannerRunner(llm, "on", engine=engine)
