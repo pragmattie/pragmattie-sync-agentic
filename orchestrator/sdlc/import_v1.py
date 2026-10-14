@@ -4,8 +4,9 @@
 decision as an ``AgentDecision`` with source ``v1``, every field as v1 recorded it except a new
 ``id`` and ``supersedes_id`` remapped to the imported row. ``implementer`` and ``reviewer`` rows
 (v2 records those runs itself) and trial rows are left out and counted. Each approval becomes one
-``simulated_approver`` row; v2's live ``sdlc_approvals`` table is never touched. A row whose unique
-key is already there is skipped, so a second import, or a newer export, adds only what is new.
+``simulated_approver`` row, keyed by its PR and approver; v2's live ``sdlc_approvals`` table is
+never touched. A row whose unique key is already there is skipped, so a second import, or a newer
+export, adds only what is new.
 
 It is a dry run unless ``--apply`` is given, and append-only (ADR 0004): it only inserts. The file
 is checked before anything is written; on any error nothing is.
@@ -87,7 +88,7 @@ def approval_row(approval: Approval) -> AgentDecision:
         subject_type="pr",
         subject_source=IMPORTED,
         subject_id=approval.pr,
-        head_sha=f"approval-{approval.pr}",
+        head_sha=f"approval-{approval.pr}-{approval.approver_id or ''}"[:40],
         attempt=1,
         trigger="human",
         tier=approval.tier,
@@ -110,8 +111,16 @@ def _left_out(decision: Decision) -> bool:
 def plan_import(db: Session, export: Export) -> Plan:
     """What importing ``export`` would add, oldest first; it reads but never writes.
 
-    Raises ``ExportError`` for an approval without ``requested_at``, before anything is planned."""
+    Raises ``ExportError`` for an approval without ``requested_at``, or a second approval for the
+    same PR and approver, before anything is planned."""
     approvals = [approval_row(approval) for approval in export.approvals]
+    pairs: set[tuple[int, str | None]] = set()
+    for approval in export.approvals:
+        pair = (approval.pr, approval.approver_id)
+        if pair in pairs:
+            approver = approval.approver_id or "nobody"
+            raise ExportError(f"PR {approval.pr} has more than one approval by {approver}.")
+        pairs.add(pair)
     existing = _existing(db)
     plan = Plan()
     candidates: list[tuple[int | None, AgentDecision]] = []

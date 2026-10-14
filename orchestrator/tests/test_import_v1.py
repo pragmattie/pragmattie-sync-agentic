@@ -190,7 +190,8 @@ def test_approvals_become_simulated_approver_rows(engine, tmp_path, capsys):
 
     approved, pending = [row for row in _rows(engine) if row.agent == "simulated_approver"]
     assert (approved.subject_type, approved.subject_source, approved.subject_id) == ("pr", "v1", 8)
-    assert (approved.head_sha, approved.trigger, approved.tier) == ("approval-8", "human", "T3")
+    assert approved.head_sha == "approval-8-owner"
+    assert (approved.trigger, approved.tier) == ("human", "T3")
     assert approved.status == "ok"
     assert approved.created_at == datetime(2026, 10, 6, 13, 0)
     assert approved.output == {
@@ -201,7 +202,7 @@ def test_approvals_become_simulated_approver_rows(engine, tmp_path, capsys):
         "requested_at": "2026-10-06T12:00:00",
         "decided_at": "2026-10-06T13:00:00",
     }
-    assert (pending.status, pending.head_sha) == ("pending", "approval-9")
+    assert (pending.status, pending.head_sha) == ("pending", "approval-9-")
     assert pending.created_at == datetime(2026, 10, 7, 8, 0)
     assert "- simulated_approver: 2 in the file, 2 imported" in capsys.readouterr().out
 
@@ -281,6 +282,28 @@ def test_an_approval_without_requested_at_writes_nothing_and_says_why(engine, tm
 
     assert _count(engine) == 0
     assert capsys.readouterr().err == "The approval for PR 9 is missing 'requested_at'.\n"
+
+
+def test_approvals_by_different_approvers_on_one_pr_are_both_imported(engine, tmp_path):
+    approvals = _approvals()
+    approvals[1].update(pr=8, approver_id="a-very-long-approver-name-from-v1")
+
+    main([_write(tmp_path, approvals=approvals), "--apply"], engine=engine)
+
+    rows = [row for row in _rows(engine) if row.agent == "simulated_approver"]
+    assert [row.head_sha for row in rows] == [
+        "approval-8-owner",
+        "approval-8-a-very-long-approver-name-fro",
+    ]
+
+
+def test_a_second_approval_by_the_same_approver_on_a_pr_writes_nothing(engine, tmp_path, capsys):
+    approvals = [*_approvals(), {**_approvals()[0], "status": "rejected"}]
+
+    assert main([_write(tmp_path, approvals=approvals), "--apply"], engine=engine) == 1
+
+    assert _count(engine) == 0
+    assert capsys.readouterr().err == "PR 8 has more than one approval by owner.\n"
 
 
 # v2's own runners read source ``github`` only, so v1's rows on the same PRs change nothing.
