@@ -315,3 +315,12 @@ def test_an_export_for_another_repository_stops_the_comparison(engine, monkeypat
     assert main([str(PASS)], engine=engine) == 1
 
     assert f"This export is for {REPO}, not pragmattie/elsewhere." in capsys.readouterr().err
+
+
+def test_a_malformed_export_stops_the_comparison_with_a_readable_message(engine, tmp_path, capsys):
+    broken = tmp_path / "export.json"
+    broken.write_text("{not json")
+
+    assert main([str(broken)], engine=engine) == 1
+
+    assert f"The export {broken} isn't valid JSON: " in capsys.readouterr().err
