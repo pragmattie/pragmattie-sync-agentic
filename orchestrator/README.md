@@ -47,7 +47,12 @@ Real milestones are forecast in sequence, the way the agents build them: a miles
 plays forward the open items of the open milestones before it (by the number after M) and then
 its own, and every real milestone shares one seed per day, so a later milestone is never forecast
 earlier than one before it. The saved `ahead_items` is that count, and the planner measures a
-deferral against the same queue. Simulated epics are each forecast alone, at their own pace.
+deferral against the same queue. Each gate still ahead (an open milestone before it, or, with none,
+its own specs while it has no pull request) moves every run's finish later by the gap measured
+between past milestones: the median working days from one milestone's last merge to the next's
+first pull request, or 1 while fewer than 3 gaps are known. The saved `gate_days` is that total,
+and the planner's deferral effect includes it. Simulated epics are each forecast alone, at their
+own pace, with no gates.
 
 The forecaster agent in `sdlc/forecaster.py` saves forecasts to `sdlc_forecasts` (append-only), so
 a page can show how a date moved. It fingerprints what the forecast depends on (the day, and each
