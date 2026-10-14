@@ -28,7 +28,8 @@ v2 started observing with that agent (its first non-trial row), as information.
   difference shows both scores and the signals and inputs that differ, since each side scores from
   its own history.
 - **Test selector**, per PR and commit: the newest ok recommendation's suites, with both sides'
-  reasons; a side whose runs all failed is counted as a failed run, not compared. Where both sides settled a commit's CI, the results must match; a mismatch is a bug.
+  reasons; a side whose runs all failed is counted as a failed run, not compared. Where both
+  sides settled a commit's CI, the results must match; a mismatch is a bug.
 - **Triage**, per issue and content hash: module, type, priority and points, each counted alone.
 - **Release gate**, per deploy commit: each side's final verdict and tier.
 
