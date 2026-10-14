@@ -1,4 +1,5 @@
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -126,18 +127,22 @@ def _count(engine):
         return db.scalar(select(func.count()).select_from(AgentDecision))
 
 
-def _report(engine, fixture=PASS, since=None):
+def _report(engine, fixture=PASS, since=None, v1=None):
     with Session(engine) as db:
         observing = compare_v1.observing_since(db)
-        rows = v2_rows(db, since or observing)
-    return compare(
-        v1_rows(load_export(fixture)), rows, start=since or observing, observing=observing
-    )
+        rows = v2_rows(db)
+    v1 = v1 if v1 is not None else v1_rows(load_export(fixture))
+    return compare(v1, rows, since=since, observing=observing)
 
 
-def test_v2_starts_observing_at_its_first_real_pr_risk_row(engine):
+def test_v2_observing_since_is_each_agents_first_real_row(engine):
     with Session(engine) as db:
-        assert compare_v1.observing_since(db) == OBSERVING
+        assert compare_v1.observing_since(db) == {
+            "pr_risk": OBSERVING,
+            "test_selector": datetime(2026, 10, 5, 9, 31),
+            "triage": datetime(2026, 10, 6, 10),
+            "release_gate": datetime(2026, 10, 7, 10),
+        }
 
 
 def test_equal_tiers_and_scores_agree_and_a_different_tier_shows_scores_and_signals(engine):
@@ -172,7 +177,11 @@ def test_trial_rows_and_rows_imported_from_v1_are_ignored(engine):
 def test_rows_on_one_side_only_are_counted_with_their_reason(engine):
     risk = _report(engine).risk
 
-    assert risk.one_sided.counts == {("v2", None): 1, ("v1", "v2's run failed"): 1}
+    assert risk.one_sided.counts == {
+        ("v2", None): 1,
+        ("v1", "v2's run failed"): 1,
+        ("v1", compare_v1.NOT_OBSERVING): 1,  # PR 13, scored by v1 only, before v2 started
+    }
 
 
 def test_v1_rows_before_v2_observed_are_counted_as_such_with_since(engine):
@@ -180,6 +189,76 @@ def test_v1_rows_before_v2_observed_are_counted_as_such_with_since(engine):
 
     assert risk.one_sided.counts[("v1", compare_v1.NOT_OBSERVING)] == 1
     assert risk.compared == 10
+
+
+def test_a_v1_row_seconds_before_v2s_first_on_the_same_commit_is_paired(engine):
+    v1 = [
+        replace(r, created_at=OBSERVING - timedelta(seconds=11)) if r.key == (1, _sha(1)) else r
+        for r in v1_rows(load_export(PASS))
+    ]
+
+    risk = _report(engine, v1=v1).risk
+
+    assert risk.compared == 10
+    assert risk.one_sided.counts[("v1", compare_v1.NOT_OBSERVING)] == 1  # PR 13 only
+
+
+def test_triage_pairs_made_before_v2s_first_risk_score_are_compared(engine):
+    early = datetime(2026, 10, 4, 15)
+    output = {"module": "leads", "type": "bug", "priority": "P1", "estimate_points": 2}
+    with Session(engine) as db:
+        db.add(_row("triage", "issue", 52, "h52" + "b" * 9, early, output=output))
+        db.commit()
+    v1 = v1_rows(load_export(PASS))
+    v1.append(
+        replace(
+            v1[-1],
+            id=9001,
+            created_at=early,
+            agent="triage",
+            subject_type="issue",
+            subject_id=52,
+            head_sha="h52" + "b" * 9,
+            output=output,
+        )
+    )
+
+    report = _report(engine, v1=v1)
+
+    assert report.triage.compared == 3
+    assert report.triage.agreed["module"] == 3
+    assert report.triage.observing_since == early
+    assert report.risk.observing_since == OBSERVING
+
+
+def test_since_limits_v2s_subjects_and_pairs_them_with_older_v1_rows(engine):
+    report = _report(engine, since=datetime(2026, 10, 6))
+
+    assert report.risk.compared == 0  # v2 scored every commit before the 6th
+    assert report.risk.one_sided.counts == {}  # and v1's scores from before it are left out
+    assert report.triage.compared == 2
+    assert report.gate.compared == 2
+
+
+def test_a_failed_recommendation_is_not_a_difference(engine):
+    sha = _sha(3)
+    with Session(engine) as db:
+        at = datetime(2026, 10, 5, 11, 31)
+        db.add(_row("test_selector", "pr", 3, sha, at, status="error", error="timeout"))
+        # On PR 1, a failed run after an ok one: the ok one is compared.
+        at = datetime(2026, 10, 5, 9, 45)
+        db.add(_row("test_selector", "pr", 1, _sha(1), at, attempt=3, status="error"))
+        db.commit()
+    v1 = v1_rows(load_export(PASS))
+    recommended = next(r for r in v1 if r.agent == "test_selector" and r.subject_id == 2)
+    v1.append(replace(recommended, id=9002, subject_id=3, head_sha=sha))
+
+    suites = _report(engine, v1=v1).suites
+
+    assert suites.compared == 2
+    assert suites.agreed == {"suites": 1}
+    assert suites.differences == ["PR #2 @ 02aaaaa: v2 only crm-web (code changed for crm-web)"]
+    assert suites.one_sided.counts == {("v1", "v2's run failed"): 1}
 
 
 def test_suites_differences_list_both_sides_reasons(engine):
@@ -239,9 +318,9 @@ def test_v2_floors_are_used_when_v1_lists_none(engine):
     v1 = [r for r in v1_rows(load_export(FAIL)) if r.agent == "pr_risk"]
     v1 = [compare_v1.replace(r, output={"floors": []}) if r.subject_id == 6 else r for r in v1]
     with Session(engine) as db:
-        rows = v2_rows(db, OBSERVING)
+        rows = v2_rows(db)
 
-    bar = compare(v1, rows, start=OBSERVING, observing=OBSERVING).bar
+    bar = compare(v1, rows, observing={"pr_risk": OBSERVING}).bar
 
     assert len(bar.floored_lower) == 1
 
@@ -276,6 +355,7 @@ def test_the_report_shows_agreement_and_the_bar_met(engine, offline, capsys):
     assert "- Agreement on points: 1 of 2 (50%)" in out
     assert "- Not compared, v1 only: 1 commits (v2's run failed)" in out
     assert "- Not compared, v2 only: 1 commits" in out
+    assert "- v2 observing since: 2026-10-06 10:00 UTC" in out  # triage
     assert "- v1 `/tier` rulings: 1" in out
     assert "## The bar for cutover (fixed 2026-10-14): met" in out
     assert _count(engine) == before
