@@ -74,7 +74,8 @@ into an issue or print it.
 
 **Check:** `docker compose up -d --force-recreate orchestrator`, then
 `docker compose exec orchestrator python -m sdlc.cutover check`: "Token: repository" and "Token:
-statuses" pass. "Token: write statuses" is a WARN on purpose: it can't be tested without writing a
+statuses" pass, and "Token: identity" names the token's owner, whose comments starting with v2's
+markers v2 treats as its own. "Token: write statuses" is a WARN on purpose: it can't be tested without writing a
 status, so step 5 confirms it. The mode and polling lines still fail at this point.
 
 **Undo:** put the read-only token back as `GITHUB_TOKEN` and revoke the new one on GitHub.
@@ -107,7 +108,9 @@ docker compose --profile agents up -d --force-recreate agents orchestrator
 - Within a minute, `docker compose exec orchestrator python -m sdlc.demo_check` shows
   `ORCHESTRATOR_MODE` enforce.
 - The next open PR (or a test PR from a `demo-` branch) gets v2's risk comment, its `tier:` label
-  and the `risk-gate` status. This is what confirms the token may write.
+  and the `risk-gate` status. This is what confirms the token may write. It gets **one** risk
+  comment, edited in place on the next poll; a second copy at the next poll means v2 doesn't
+  recognise its own comments, so roll back (step 8).
 - `docker compose exec agents python -m sdlc.cutover check` passes every line (exit code 0):
   - the agents have polled in the last 5 minutes (their newest audit row; on a quiet repository
     there may be nothing to decide, so open the test PR first);

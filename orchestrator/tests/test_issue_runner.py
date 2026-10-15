@@ -134,9 +134,7 @@ def test_editing_the_body_retriages_with_the_trigger_edit(runner, gh, llm, engin
     assert comment_version(comment["body"]) == second.head_sha
 
 
-def test_with_a_persons_token_a_new_issue_version_edits_the_triage_comment(
-    runner, gh, llm, engine
-):
+def test_with_a_persons_token_a_new_issue_version_edits_the_triage_comment(runner, gh, llm, engine):
     gh.as_person("geoffsmattie")
     runner.poll_once(NOON)
     gh.issues[1]["body"] = BODY + " Up to 5,000 rows."
