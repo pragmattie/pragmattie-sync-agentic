@@ -57,7 +57,9 @@ class Effects:
             user = comment.get("user") or {}
             if user.get("type") == "Bot":
                 return comment
-            own = self.gh.own_login()  # looked up once, and only when a person's copy is seen
+            # looked up once, and only when a person's copy is seen; a transient failure raises,
+            # so a write records an error and the runner retries the PR, never posting a copy
+            own = self.gh.own_login()
             if own is not None and user.get("login") == own:
                 return comment
         return None

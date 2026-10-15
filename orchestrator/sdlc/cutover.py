@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -64,7 +65,10 @@ def github_checks(gh: Any) -> list[Check]:
 
 def identity_check(gh: Any) -> Check:
     """Who v2's comments come from, so it can find and edit them (``find_comment``)."""
-    login = gh.own_login()
+    try:
+        login = gh.own_login()
+    except (GitHubError, httpx.HTTPError) as error:  # a transient failure: nothing was cached
+        return Check("Token: identity", FAIL, f"couldn't ask GitHub who the token is: {error}")
     if login is None:
         return Check("Token: identity", PASS, "an app token: comments are posted by a bot")
     detail = f"comments are posted as {login}; v2 recognises them as its own"

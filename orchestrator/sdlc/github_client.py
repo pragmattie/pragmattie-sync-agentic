@@ -28,6 +28,7 @@ JSON_ACCEPT = "application/vnd.github+json"
 DIFF_ACCEPT = "application/vnd.github.diff"
 DEFAULT_LIMIT_SECONDS = 60
 _UNKNOWN = object()  # own_login not looked up yet
+NOT_A_USER = {401, 403, 404}  # /user's answers to a token that has no user (an app's)
 
 
 class GitHubError(Exception):
@@ -179,15 +180,19 @@ class GitHubClient:
         return items
 
     def own_login(self) -> str | None:
-        """The token's own login from ``GET /user``, looked up once; ``None`` if that fails.
+        """The token's own login from ``GET /user``, looked up once.
 
-        A GitHub App installation token can't call ``/user``, so it gives ``None``: its comments
-        are posted by a bot.
+        Only a definite answer is cached. A GitHub App installation token can't call ``/user``,
+        so a 401, 403 or 404 gives ``None``: its comments are posted by a bot. Any other failure
+        (the rate limit, another status, a network error) caches nothing and is raised, so the
+        next call asks again.
         """
         if self._own_login is _UNKNOWN:
             try:
                 self._own_login = self.get("/user").get("login")
-            except Exception:  # any failure means "a bot", as before
+            except GitHubError as error:
+                if isinstance(error, RateLimited) or error.status not in NOT_A_USER:
+                    raise
                 self._own_login = None
         return self._own_login
 

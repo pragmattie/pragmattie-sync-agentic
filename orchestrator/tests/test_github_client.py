@@ -144,8 +144,8 @@ def test_own_login_asks_user_once_and_caches_it():
     assert seen == ["/user"]
 
 
-@pytest.mark.parametrize("status", [403, 404, 500])
-def test_own_login_is_none_when_user_fails_and_is_not_asked_again(status):
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_own_login_is_none_when_user_refuses_and_is_not_asked_again(status):
     seen = []
 
     def handler(request):
@@ -156,6 +156,61 @@ def test_own_login_is_none_when_user_fails_and_is_not_asked_again(status):
     assert client.own_login() is None
     assert client.own_login() is None
     assert seen == ["/user"]
+
+
+def test_own_login_caches_nothing_after_a_server_error_and_asks_again():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if len(seen) == 1:
+            return httpx.Response(500, json={"message": "Server Error"})
+        return httpx.Response(200, json={"login": "geoffsmattie", "type": "User"})
+
+    client = _client(handler)
+    with pytest.raises(GitHubError) as raised:
+        client.own_login()
+    assert raised.value.status == 500
+    assert client.own_login() == "geoffsmattie"
+    assert seen == ["/user", "/user"]
+
+
+def test_own_login_caches_nothing_when_rate_limited():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if len(seen) == 1:
+            return httpx.Response(
+                403,
+                json={"message": "API rate limit exceeded for user."},
+                headers={"x-ratelimit-reset": str(RESET)},
+            )
+        return httpx.Response(200, json={"login": "geoffsmattie", "type": "User"})
+
+    clock = Clock(NOON)
+    client = _client(handler, now=clock)
+    with pytest.raises(github_client.RateLimited):
+        client.own_login()
+    clock.moment = datetime(2026, 10, 6, 12, 30)
+    assert client.own_login() == "geoffsmattie"
+    assert seen == ["/user", "/user"]
+
+
+def test_own_login_caches_nothing_after_a_network_error():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if len(seen) == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json={"login": "geoffsmattie", "type": "User"})
+
+    client = _client(handler)
+    with pytest.raises(httpx.ConnectError):
+        client.own_login()
+    assert client.own_login() == "geoffsmattie"
+    assert seen == ["/user", "/user"]
 
 
 def test_parse_time():

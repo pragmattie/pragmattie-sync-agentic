@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from urllib.parse import unquote
 
 from sdlc.agents.llm import LLMResult, StructuredLLM
-from sdlc.github_client import GitHubError
+from sdlc.github_client import NOT_A_USER, GitHubError, RateLimited
 
 REPO = "acme/widgets"
 BOT = {"login": "pragmattie-orchestrator[bot]", "type": "Bot"}
@@ -55,6 +55,7 @@ class FakeGitHub:
         self._next_id = 1000
         self.login: str | None = None  # the token's login from /user; unset is an app token (404)
         self.poster: dict = BOT  # who the comments the client posts come from
+        self.user_error: Exception | None = None  # raised by the next GET /user, then cleared
         self._own_login = None
         self._own_looked_up = False
 
@@ -227,11 +228,13 @@ class FakeGitHub:
 
     def own_login(self) -> str | None:
         if not self._own_looked_up:
-            self._own_looked_up = True
             try:
                 self._own_login = self.get("/user").get("login")
-            except Exception:
+            except GitHubError as error:
+                if isinstance(error, RateLimited) or error.status not in NOT_A_USER:
+                    raise
                 self._own_login = None
+            self._own_looked_up = True
         return self._own_login
 
     def _log(self, method: str, path: str) -> str:
@@ -246,6 +249,9 @@ class FakeGitHub:
         path = self._log("GET", path)
         if path == "":
             return {"full_name": REPO, "default_branch": self.default_branch}
+        if path == "/user" and self.user_error is not None:
+            error, self.user_error = self.user_error, None
+            raise error
         if path == "/user" and self.login is not None:
             return {"login": self.login, "type": "User"}
         if match := re.fullmatch(r"/pulls/(\d+)", path):

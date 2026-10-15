@@ -1,6 +1,7 @@
 import pytest
 
 from sdlc.agents.github_effects import TIER_COLOURS, Effects
+from sdlc.github_client import GitHubError
 from tests.fakes import BOT, PERSON, FakeGitHub
 
 SHA = "a" * 40
@@ -112,6 +113,19 @@ def test_with_user_failing_bots_are_found_people_are_not_and_user_is_asked_once(
     bot = gh.comment(5, f"{MARKER}\nbot", user=BOT)
     assert effects.find_comment(5, MARKER)["id"] == bot["id"]
     assert gh.requests.count(("GET", "/user")) == 1
+
+
+def test_a_transient_user_failure_posts_no_second_copy_and_the_next_poll_edits_it(gh):
+    me = gh.as_person("geoffsmattie")
+    mine = gh.comment(5, f"{MARKER}\nold", user=me)
+    gh.user_error = GitHubError("GitHub 502 on /user: Bad Gateway", status=502)
+    effects = Effects(gh, "enforce")
+    result = effects.upsert_comment(5, MARKER, f"{MARKER}\nnew")
+    assert result == {"error": "comment: GitHub 502 on /user: Bad Gateway"}
+    assert gh.writes() == []
+    assert effects.upsert_comment(5, MARKER, f"{MARKER}\nnew") == {"done": "comment"}
+    assert gh.writes() == [("PATCH", f"/issues/comments/{mine['id']}")]
+    assert gh.requests.count(("GET", "/user")) == 2
 
 
 def test_set_status_cuts_the_description_to_140(gh):
