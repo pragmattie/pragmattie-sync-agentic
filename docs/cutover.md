@@ -75,8 +75,8 @@ into an issue or print it.
 **Check:** `docker compose up -d --force-recreate orchestrator`, then
 `docker compose exec orchestrator python -m sdlc.cutover check`: "Token: repository" and "Token:
 statuses" pass, and "Token: identity" names the token's owner, whose comments starting with v2's
-markers v2 treats as its own. "Token: write statuses" is a WARN on purpose: it can't be tested without writing a
-status, so step 5 confirms it. The mode and polling lines still fail at this point.
+markers v2 treats as its own. "Token: write statuses" is a WARN on purpose: it can't be tested
+without writing a status, so step 5 confirms it. The mode and polling lines still fail at this point.
 
 **Undo:** put the read-only token back as `GITHUB_TOKEN` and revoke the new one on GitHub.
 
