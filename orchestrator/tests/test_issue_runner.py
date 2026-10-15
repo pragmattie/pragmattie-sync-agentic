@@ -134,6 +134,24 @@ def test_editing_the_body_retriages_with_the_trigger_edit(runner, gh, llm, engin
     assert comment_version(comment["body"]) == second.head_sha
 
 
+def test_with_a_persons_token_a_new_issue_version_edits_the_triage_comment(
+    runner, gh, llm, engine
+):
+    gh.as_person("geoffsmattie")
+    runner.poll_once(NOON)
+    gh.issues[1]["body"] = BODY + " Up to 5,000 rows."
+    runner.poll_once(NOON + timedelta(minutes=1))
+    first, second = _rows(engine)
+    assert second.trigger == "edit"
+    comment_writes = [
+        method for method, path in gh.writes() if "comments" in path and "labels" not in path
+    ]
+    assert comment_writes == ["POST", "PATCH"]
+    [comment] = [c for c in gh.comments if c["number"] == 1]
+    assert comment["user"]["login"] == "geoffsmattie"
+    assert comment_version(comment["body"]) == second.head_sha
+
+
 def test_retriage_runs_on_the_same_version_and_is_then_removed(runner, gh, llm, engine):
     runner.poll_once(NOON)
     gh.issue_labels[1].append("retriage")
