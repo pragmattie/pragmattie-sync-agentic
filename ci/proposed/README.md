@@ -8,7 +8,9 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing pending.
+- **`CLAUDE.cutover.md`** (7.6): the post-cutover wording of `CLAUDE.md`'s "### Modes"
+  subsection (v2 governs in `enforce`, v1 archived). Geoff applies it at step 7 of
+  `docs/cutover.md`, after the switch, then deletes the copy.
 
 ## Applied
 

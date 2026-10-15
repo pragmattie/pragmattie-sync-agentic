@@ -75,7 +75,7 @@ Every published host port comes from `.env`: `CRM_WEB_PORT`, `INSIGHTS_WEB_PORT`
 `ORCH_PORT`, `MYSQL_HOST_PORT` and `PROXY_PORT`, defaulting to the addresses above. Containers keep their own
 ports, and the web apps' API addresses follow the host ports.
 
-## Running beside v1
+## Before cutover (beside v1)
 
 v2 can run on the same machine as v1 and read this repository, so Delivery Insights shows the
 real agent build. It only reads: the `collector` service sends GET requests only, collecting
@@ -93,8 +93,8 @@ repository permissions, all **read-only**: Metadata, Contents, Issues, Pull requ
 Deployments.
 
 1. Create the read-only token above.
-2. Copy `.env.example` to `.env` (v2's own, separate from v1's), uncomment the "Running beside
-   v1" block (ports 15173, 15174, 18000, 18001, 13307 and proxy port 18080, and
+2. Copy `.env.example` to `.env` (v2's own, separate from v1's), uncomment the "Before cutover
+   (beside v1)" block (ports 15173, 15174, 18000, 18001, 13307 and proxy port 18080, and
    `GITHUB_REPO=pragmattie/pragmattie-sync-agentic`), and set the token as `GITHUB_TOKEN`.
 3. Run `docker compose --profile collect up -d`. On a new database, apply the migrations first
    (see [Database migrations](#database-migrations)).
@@ -104,6 +104,27 @@ Deployments.
 5. Open Delivery Insights on <http://insights.pragmattie-sync.localhost:18080> (or
    <http://localhost:15174>), and the CRM on <http://pragmattie-sync.localhost:18080>. v1 keeps
    port 80 and <http://pragmattie-sync.localhost>.
+
+## After cutover
+
+After cutover ([`docs/cutover.md`](docs/cutover.md)), v2 governs this repository on its own: v1's
+stack is stopped and its repository archived read-only. There is one stack, v2's:
+
+- `ORCHESTRATOR_MODE=enforce` in `.env`: the agents post their comments, `tier:` labels and
+  `risk-gate` and `release-gate` statuses, and the gates are real.
+- `docker compose --profile agents up -d` runs the poll loop (with `--profile collect` for the
+  collector). After changing `.env`, recreate the services that read it:
+  `docker compose --profile agents up -d --force-recreate agents orchestrator`.
+- `GITHUB_TOKEN` is v2's **write** token: a fine-grained personal access token, resource owner
+  `pragmattie`, for `pragmattie-sync-agentic` only, with a 90-day expiry, and these repository
+  permissions: Metadata read; Contents read; Issues, Pull requests, Commit statuses and
+  Deployments read and write; Actions read. Renew it before it expires.
+- `docker compose exec agents python -m sdlc.cutover check` confirms v2 has taken over: the token
+  reaches the repository and its statuses, the mode is enforce, the agents polled in the last 5
+  minutes, and v2 itself posted the newest open PR's `risk-gate`. It only reads.
+
+The ports from the "Before cutover" block can stay, or go back to the defaults now that v1's stack
+is down (the addresses in [Development](#development) follow them).
 
 ## CRM API
 

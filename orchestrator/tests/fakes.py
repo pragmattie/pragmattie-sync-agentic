@@ -240,6 +240,8 @@ class FakeGitHub:
             return self._issue(number) if number in self.issues else self._pr(number)
         if match := re.fullmatch(r"/deployments/(\d+)/statuses", path):
             return list(self.deployment_statuses[int(match.group(1))])
+        if match := re.fullmatch(r"/commits/([\w.-]+)/statuses", path):
+            return self.statuses_for(match.group(1))
         if match := re.fullmatch(r"/environments/(.+)", path):
             name = unquote(match.group(1))
             if name in self.environments:
