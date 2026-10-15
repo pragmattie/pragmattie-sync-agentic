@@ -18,7 +18,7 @@ from sdlc.github_client import GitHubError
 from sdlc.runner import Runner
 from sdlc.signals.github import SUITES
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
-from sdlc.tiers import load_policy
+from sdlc.tiers import ObjectionWindow, load_policy
 from tests.fakes import BOT, PERSON, WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
 
 NOON = datetime(2026, 10, 6, 12, 0)
@@ -31,7 +31,11 @@ MIGRATION = ("orchestrator/migrations/versions/0009_more.py",)  # floored at T3
 
 @pytest.fixture(scope="module")
 def policy():
-    return load_policy()
+    # The front-end window is pinned so these tests hold whatever window the committed policy sets.
+    window = ObjectionWindow(
+        tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
+    )
+    return replace(load_policy(), objection_window=window)
 
 
 @pytest.fixture

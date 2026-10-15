@@ -16,9 +16,13 @@ from sdlc.agents.signoff import (
     window_signoff_fields,
 )
 from sdlc.tables import AgentDecision, PullRequest
-from sdlc.tiers import load_policy
+from sdlc.tiers import ObjectionWindow, load_policy
 
-POLICY = load_policy()
+# The front-end window is pinned so these tests hold whatever window the committed policy sets.
+FRONT_END = ObjectionWindow(
+    tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
+)
+POLICY = replace(load_policy(), objection_window=FRONT_END)
 SHA, OLD_SHA = "a" * 40, "b" * 40
 APPROVED_AT = datetime(2026, 10, 6, 9, 15)
 

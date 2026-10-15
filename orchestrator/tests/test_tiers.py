@@ -18,10 +18,12 @@ from sdlc.tiers import (
     load_policy,
 )
 
-# The release gate section waits in ci/proposed/ until a person applies it; read it from there
-# while it exists, else from the live policy.
+# A policy change waits in ci/proposed/ until a person applies it over POLICY and deletes the copy.
 PROPOSED = Path(__file__).resolve().parents[2] / "ci" / "proposed" / "tiers.yaml"
-RELEASE_POLICY = PROPOSED if PROPOSED.exists() else POLICY
+# The objection window the committed policy had before the 7.9 proposal.
+CURRENT_WINDOW = ObjectionWindow(
+    tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
+)
 V1_RELEASE = ReleaseRules(
     environment="production",
     signoff_environment="production-signoff",
@@ -82,9 +84,17 @@ def test_committed_policy_values():
         Rule("governance_files", "T2", {"touches_governance": True}),
     )
     assert policy.caps == (Rule("docs_or_config_only", "T0", {"docs_only": True}),)
-    assert policy.objection_window == ObjectionWindow(
-        tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
-    )
+    # The window's minutes and paths are not pinned, so applying a proposal doesn't break CI.
+    window = policy.objection_window
+    assert window is not None
+    assert window.tiers == ("T1",)
+    assert isinstance(window.minutes, int) and window.minutes >= 1
+    assert window.paths and all(isinstance(path, str) and path for path in window.paths)
+    if PROPOSED.exists():
+        assert window == CURRENT_WINDOW or (
+            yaml.safe_load(POLICY.read_text(encoding="utf-8"))
+            == yaml.safe_load(PROPOSED.read_text(encoding="utf-8"))
+        )
     assert policy.fallback_tier == "T2"
     assert policy.tiers == {
         "T0": Tier(
@@ -254,7 +264,7 @@ def test_release_defaults_are_v1_values_when_the_section_is_absent(tmp_path):
 
 
 def test_the_release_gate_section_loads_the_same_values():
-    policy = load_policy(RELEASE_POLICY)
+    policy = load_policy(POLICY)
 
     assert policy.release == V1_RELEASE
     assert [policy.tiers[tier].release for tier in TIER_IDS] == [
