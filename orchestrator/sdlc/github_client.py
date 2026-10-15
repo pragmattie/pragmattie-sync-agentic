@@ -27,6 +27,8 @@ MISSING_SETTINGS = "Set GITHUB_TOKEN and GITHUB_REPO (owner/name) in your .env f
 JSON_ACCEPT = "application/vnd.github+json"
 DIFF_ACCEPT = "application/vnd.github.diff"
 DEFAULT_LIMIT_SECONDS = 60
+_UNKNOWN = object()  # own_login not looked up yet
+NOT_A_USER = {401, 403, 404}  # /user's answers to a token that has no user (an app's)
 
 
 class GitHubError(Exception):
@@ -84,6 +86,7 @@ class GitHubClient:
         self.limited_until: datetime | None = None
         self.sent = 0
         self.not_modified = 0
+        self._own_login: Any = _UNKNOWN
 
     def _path(self, path: str) -> str:
         return path.replace("{repo}", self.repo)
@@ -175,6 +178,23 @@ class GitHubClient:
             url = response.links.get("next", {}).get("url")
             request_params = None  # the next link already carries them
         return items
+
+    def own_login(self) -> str | None:
+        """The token's own login from ``GET /user``, looked up once.
+
+        Only a definite answer is cached. A GitHub App installation token can't call ``/user``,
+        so a 401, 403 or 404 gives ``None``: its comments are posted by a bot. Any other failure
+        (the rate limit, another status, a network error) caches nothing and is raised, so the
+        next call asks again.
+        """
+        if self._own_login is _UNKNOWN:
+            try:
+                self._own_login = self.get("/user").get("login")
+            except GitHubError as error:
+                if isinstance(error, RateLimited) or error.status not in NOT_A_USER:
+                    raise
+                self._own_login = None
+        return self._own_login
 
     def close(self) -> None:
         self._http.close()

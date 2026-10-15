@@ -1,10 +1,11 @@
 """The cutover check: whether v2 has taken over governing this repository (docs/cutover.md).
 
 ``python -m sdlc.cutover check`` only reads, and prints one line for each of the runbook's steps
-3 to 5: the token reaches the repository and its commit statuses, ``ORCHESTRATOR_MODE`` is
-enforce, the ``agents`` service has polled lately (its newest audit row), and the newest open PR
-has a ``pr_risk`` row in v2's own audit trail whose status was posted. Both tokens belong to the
-same person, so GitHub's status author can't tell v1 from v2; v2's audit trail can.
+3 to 5: the token reaches the repository and its commit statuses, whose comments v2 treats as its
+own (the token's login from ``/user``, or a bot), ``ORCHESTRATOR_MODE`` is enforce, the ``agents``
+service has polled lately (its newest audit row), and the newest open PR has a ``pr_risk`` row in
+v2's own audit trail whose status was posted. Both tokens belong to the same person, so GitHub's
+status author can't tell v1 from v2; v2's audit trail can.
 
 Whether the token may write statuses can't be tested without writing one, so the check says so
 and step 5 confirms it. Exit code 1 means at least one check failed; a WARN doesn't.
@@ -16,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -57,7 +59,20 @@ def github_checks(gh: Any) -> list[Check]:
         detail = f"{error}. The token needs Commit statuses (step 3)."
         checks.append(Check("Token: statuses", FAIL, detail))
     checks.append(Check("Token: write statuses", WARN, WRITE_UNTESTED))
+    checks.append(identity_check(gh))
     return checks
+
+
+def identity_check(gh: Any) -> Check:
+    """Who v2's comments come from, so it can find and edit them (``find_comment``)."""
+    try:
+        login = gh.own_login()
+    except (GitHubError, httpx.HTTPError) as error:  # a transient failure: nothing was cached
+        return Check("Token: identity", FAIL, f"couldn't ask GitHub who the token is: {error}")
+    if login is None:
+        return Check("Token: identity", PASS, "an app token: comments are posted by a bot")
+    detail = f"comments are posted as {login}; v2 recognises them as its own"
+    return Check("Token: identity", PASS, detail)
 
 
 def mode_check(mode: str) -> Check:

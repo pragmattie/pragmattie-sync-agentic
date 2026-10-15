@@ -72,6 +72,32 @@ def test_all_good_passes_and_never_writes(engine, capsys, monkeypatch):
     assert gh.writes() == []
 
 
+def test_identity_names_a_persons_login(engine):
+    gh = _ready(engine)
+    gh.as_person("geoffsmattie")
+    check = _run(engine, gh)["Token: identity"]
+    assert check.state == PASS
+    assert check.detail == "comments are posted as geoffsmattie; v2 recognises them as its own"
+    assert gh.requests.count(("GET", "/user")) == 1
+    assert gh.writes() == []
+
+
+def test_identity_of_an_app_token_is_a_bot(engine):
+    gh = _ready(engine)  # /user answers 404, as for an installation token
+    check = _run(engine, gh)["Token: identity"]
+    assert check.state == PASS
+    assert check.detail == "an app token: comments are posted by a bot"
+
+
+def test_identity_fails_with_the_error_when_user_fails_transiently(engine):
+    gh = _ready(engine)
+    gh.as_person("geoffsmattie")
+    gh.user_error = GitHubError("GitHub 503 on /user: Service Unavailable", status=503)
+    check = _run(engine, gh)["Token: identity"]
+    assert check.state == FAIL
+    assert "GitHub 503 on /user: Service Unavailable" in check.detail
+
+
 def test_a_failure_exits_1(engine, capsys, monkeypatch):
     gh = _ready(engine)
     monkeypatch.setattr(cutover, "utcnow", lambda: NOW)

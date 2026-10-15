@@ -3,7 +3,8 @@
 Reads always work. Every write goes through ``_write``, which does nothing in ``off`` or
 ``observe`` mode (not even the reads inside it) and returns what happened for the audit row:
 ``{"done": ...}``, ``{"skipped": "mode is off"}`` (or ``observe``) or ``{"error": ...}``. A
-failing write never raises, so one never stops the others.
+failing write never raises, so one never stops the others. Looking up the token's own login (to
+recognise v2's comments) is a read.
 
 There is deliberately no method that merges, approves, closes, pushes, edits an issue's text or
 changes repository settings.
@@ -43,12 +44,23 @@ class Effects:
     def find_comment(
         self, number: int, marker: str, comments: list[Mapping] | None = None
     ) -> Mapping | None:
-        """The first comment by a bot starting with ``marker``; a person's copy never counts."""
+        """The oldest comment starting with ``marker`` by a bot or by v2's own login.
+
+        A personal access token posts as its owner, so v2's comments carry that person's login.
+        Anyone else's copy of the marker never counts.
+        """
         if comments is None:
             comments = self.read_comments(number)
         for comment in comments:
+            if not (comment.get("body") or "").startswith(marker):
+                continue
             user = comment.get("user") or {}
-            if user.get("type") == "Bot" and (comment.get("body") or "").startswith(marker):
+            if user.get("type") == "Bot":
+                return comment
+            # looked up once, and only when a person's copy is seen; a transient failure raises,
+            # so a write records an error and the runner retries the PR, never posting a copy
+            own = self.gh.own_login()
+            if own is not None and user.get("login") == own:
                 return comment
         return None
 

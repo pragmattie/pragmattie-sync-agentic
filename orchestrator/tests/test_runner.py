@@ -18,7 +18,7 @@ from sdlc.runner import Runner
 from sdlc.signals.github import SUITES
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
 from sdlc.tiers import load_policy
-from tests.fakes import BOT, WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
+from tests.fakes import BOT, PERSON, WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
 
 NOON = datetime(2026, 10, 6, 12, 0)
 SHA = "a" * 40
@@ -683,6 +683,84 @@ def test_enforce_passes_t3_only_with_signoff_qa_and_the_simulated_approval(
     runner.poll_once(NOON + timedelta(minutes=4))
     assert gh.statuses[-1]["state"] == "success"
     assert _gate(engine, 1).state == "success"
+
+
+def _comment_writes(gh, number=1):
+    return [
+        method
+        for method, path in gh.writes()
+        if path == f"/issues/{number}/comments" or path.startswith("/issues/comments/")
+    ]
+
+
+def test_with_a_persons_token_two_polls_post_the_risk_comment_once(gh, engine, policy):
+    gh.as_person("geoffsmattie")
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    runner.poll_once(NOON + timedelta(minutes=1))
+    gh.push(1, NEW_SHA)  # a new commit rewrites the same comment
+    runner.poll_once(NOON + timedelta(minutes=2))
+
+    writes = _comment_writes(gh)
+    assert writes[0] == "POST"
+    assert writes.count("POST") == 1
+    assert set(writes[1:]) <= {"PATCH"}
+    [comment] = [c for c in gh.comments if c["number"] == 1]
+    assert comment["user"]["login"] == "geoffsmattie"
+    assert f"<!-- head:{NEW_SHA} -->" in comment["body"]
+
+
+def test_with_a_persons_token_their_ticks_pass_a_t3_pr(gh, engine, policy, approver):
+    gh.as_person("geoffsmattie")
+    gh.add_pr(1, SHA, files=MIGRATION)
+    runner = _runner(gh, engine, policy, approver=approver)
+    runner.poll_once(NOON)
+    with Session(engine) as db:  # the owner's explicit instruction, as the CLI would carry out
+        pr = db.scalar(select(PullRequest).where(PullRequest.number == 1))
+        approver_module.approve(db, pr, approver, now=NOON + timedelta(minutes=1))
+        db.commit()
+    comment = gh.risk_comment(1)
+    comment["body"] = (
+        comment["body"]
+        .replace("- [ ] **Human sign-off", "- [x] **Human sign-off")
+        .replace("- [ ] **Manual QA done", "- [x] **Manual QA done")
+    )
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.statuses[-1]["state"] == "success"
+    assert _gate(engine, 1).state == "success"
+    assert _comment_writes(gh).count("POST") == 1
+
+
+def test_another_users_ticked_copy_of_the_risk_comment_is_ignored(gh, engine, policy):
+    gh.as_person("geoffsmattie")
+    gh.add_pr(1, SHA, files=PIPELINE)
+    forged_body = (
+        f"{COMMENT_MARKER}\n<!-- head:{SHA} -->\n- [x] **Human sign-off** (senior engineer)\n"
+    )
+    forged = gh.comment(1, forged_body, user=PERSON)
+    runner = _runner(gh, engine, policy)
+    runner.poll_once(NOON)
+    runner.poll_once(NOON + timedelta(minutes=1))
+    assert gh.statuses[-1]["state"] == "pending"
+    assert forged["body"] == forged_body
+    assert _comment_writes(gh)[0] == "POST"
+
+
+def test_observe_reads_the_ticks_in_v1s_comment_posted_under_the_same_login(gh, engine, policy):
+    me = gh.as_person("geoffsmattie")
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy, "observe")
+    runner.poll_once(NOON)
+    assert _gate(engine, 1).would_be == "pending"
+    v1 = _v1_comment(gh, 1, "c" * 40, signoff="x", qa="x")
+    v1["user"] = dict(me)
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+
+    assert _gate(engine, 1).would_be == "success"
+    assert gh.writes() == []
+    assert ("GET", "/user") in gh.requests
 
 
 def test_nothing_in_the_runner_ever_approves(gh, engine, policy, approver):
