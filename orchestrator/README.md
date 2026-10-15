@@ -142,6 +142,8 @@ their issue texts live in `eval/` and are added by a person.
 The demo product backlog (four epics and 40 issues) lives in `backlog/backlog.yaml`.
 `python -m sdlc.backlog` lists the labels and issues it would create in `GITHUB_REPO`; add
 `--apply` to create them. Existing labels and issue titles are skipped, so it is safe to re-run.
+`--labels-only` leaves the issues out: it lists the missing fixed labels (`demo`, `incident`,
+`caused-incident`) and prefix labels, and with `--apply` creates only those.
 
 The delivery board is the existing GitHub Projects board "PragMattie Sync delivery"
 (`BOARD_OWNER`, default `pragmattie`, and `BOARD_NUMBER`, default `1`); `sdlc/board.py` adopts it
@@ -223,7 +225,7 @@ today, both APIs' health, GitHub access (if it fails, the GitHub checks are skip
 demo baseline, the release setup (the `demo` and `incident` labels, `deploy.yml` on the default
 branch, the policy's two environments, the sign-off one with a required reviewer, and reading
 deployments), a clean start (the reset would do nothing; notes it leaves behind and real work don't
-count) and `ORCHESTRATOR_MODE` (off fails, observe and shadow warn, enforce passes). It ends with "Ready for the
+count) and `ORCHESTRATOR_MODE` (since cutover only enforce passes; off, observe and shadow fail). It ends with "Ready for the
 demo." or "Not ready: {n} check(s) failed." and exits 1 on a failure; a warning alone is ready. The
 container can't see the CRM's migrations, so `--crm-head` takes its head; run outside the
 container, the check reads `apps/api/migrations` itself. `--smoke --yes` also runs the runners'
