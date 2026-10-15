@@ -95,6 +95,9 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
         prog="python -m sdlc.backlog", description="Create the demo backlog as GitHub issues."
     )
     parser.add_argument("--apply", action="store_true", help="create them (default: dry run)")
+    parser.add_argument(
+        "--labels-only", action="store_true", help="only the missing labels, no issues"
+    )
     parser.add_argument("--file", type=Path, default=BACKLOG_PATH, help="backlog YAML file")
     args = parser.parse_args(argv)
 
@@ -104,11 +107,16 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
         titles = {issue["title"] for issue in client.paginate("/repos/{repo}/issues", state="all")}
         labels = {label["name"] for label in client.paginate("/repos/{repo}/labels")}
         todo = plan(items, titles, labels)
+        if args.labels_only:
+            todo["issues"] = []
         print(
             f"{client.repo}: {len(todo['labels'])} labels and "
             f"{len(todo['issues'])} issues to create."
         )
         if not args.apply:
+            if args.labels_only:
+                for name in todo["labels"]:
+                    print(f"  {name}")
             for item in todo["issues"]:
                 print(f"  {item['title']}  [{', '.join(labels_for(item))}]")
             print("Dry run only. Re-run with --apply to create them.")

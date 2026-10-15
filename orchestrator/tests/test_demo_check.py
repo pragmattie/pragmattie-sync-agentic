@@ -191,14 +191,25 @@ def test_a_ready_setup_passes_every_check_in_order(engine, gh, baseline):
     ("mode", "state", "start"),
     [
         ("off", FAIL, "off: the agents won't react during the demo. Set it to shadow in .env."),
-        ("shadow", WARN, "shadow: the release gate will only say what it would do"),
+        (
+            "shadow",
+            FAIL,
+            "shadow: v2 says what it would do but gates nothing, and since cutover nothing else "
+            "governs this repository. Set ORCHESTRATOR_MODE=enforce in .env (docs/cutover.md).",
+        ),
         (
             "observe",
-            WARN,
-            "observe: v2 decides but posts nothing; v1 still governs this repository until "
-            "cutover (7.5).",
+            FAIL,
+            "observe: v2 posts nothing, and since cutover nothing else governs this repository "
+            "(v1 is archived). Set ORCHESTRATOR_MODE=enforce in .env, or follow the rollback in "
+            "docs/cutover.md step 8.",
         ),
-        ("enforce", PASS, "enforce: the release gate holds deploys and risk-gate shows"),
+        (
+            "enforce",
+            PASS,
+            "enforce: v2 governs this repository; the release gate holds deploys and "
+            "risk-gate shows its real state.",
+        ),
     ],
 )
 def test_the_mode_check(mode, state, start):
@@ -230,14 +241,16 @@ def test_main_prints_each_check_and_exits_1_on_a_failure(engine, gh, baseline, c
     options = {"engine": engine, "gh": gh, "http": _http(), "baseline_path": baseline}
     options["environments"] = ENVIRONMENTS
 
-    assert demo_check.main([], mode="shadow", **options) == 0
+    assert demo_check.main([], mode="enforce", **options) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "  PASS  Database                 reachable"
-    assert lines[-2].startswith("  WARN  ORCHESTRATOR_MODE        shadow:")
+    assert lines[-2].startswith("  PASS  ORCHESTRATOR_MODE        enforce:")
     assert lines[-1] == "Ready for the demo."
 
-    assert demo_check.main([], mode="off", **options) == 1
-    assert capsys.readouterr().out.splitlines()[-1] == "Not ready: 1 check(s) failed."
+    assert demo_check.main([], mode="shadow", **options) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2].startswith("  FAIL  ORCHESTRATOR_MODE        shadow:")
+    assert lines[-1] == "Not ready: 1 check(s) failed."
 
 
 def test_smoke_without_yes_stops_with_the_cost(capsys):
@@ -375,7 +388,7 @@ def test_missing_labels_fail(engine, gh, baseline):
 
     assert found["Label demo"].state == PASS
     assert found["Label incident"] == Check(
-        "Label incident", FAIL, "missing: run `python -m sdlc.backlog --apply`."
+        "Label incident", FAIL, "missing: run `python -m sdlc.backlog --labels-only --apply`."
     )
 
 

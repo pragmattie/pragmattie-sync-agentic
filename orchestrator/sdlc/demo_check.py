@@ -153,9 +153,8 @@ def release_checks(gh: Any, default_branch: str, environments: tuple[str, str]) 
         if name in labels:
             checks.append(Check(f"Label {name}", PASS, exists))
         else:
-            checks.append(
-                Check(f"Label {name}", FAIL, "missing: run `python -m sdlc.backlog --apply`.")
-            )
+            detail = "missing: run `python -m sdlc.backlog --labels-only --apply`."
+            checks.append(Check(f"Label {name}", FAIL, detail))
 
     path = f".github/workflows/{DEPLOY_WORKFLOW}"
     try:
@@ -214,22 +213,23 @@ def clean_start_check(gh: Any, baseline: dict[str, Any]) -> Check:
 def mode_check(mode: str) -> Check:
     if mode == "enforce":
         detail = (
-            "enforce: the release gate holds deploys and risk-gate shows its real state. "
-            "Set shadow again after the demo."
+            "enforce: v2 governs this repository; the release gate holds deploys and "
+            "risk-gate shows its real state."
         )
         return Check("ORCHESTRATOR_MODE", PASS, detail)
     if mode == "shadow":
         detail = (
-            "shadow: the release gate will only say what it would do and never hold a deploy. "
-            "Set enforce in .env for the demo, and shadow again afterwards."
+            "shadow: v2 says what it would do but gates nothing, and since cutover nothing else "
+            "governs this repository. Set ORCHESTRATOR_MODE=enforce in .env (docs/cutover.md)."
         )
-        return Check("ORCHESTRATOR_MODE", WARN, detail)
+        return Check("ORCHESTRATOR_MODE", FAIL, detail)
     if mode == "observe":
         detail = (
-            "observe: v2 decides but posts nothing; v1 still governs this repository until "
-            "cutover (7.5)."
+            "observe: v2 posts nothing, and since cutover nothing else governs this repository "
+            "(v1 is archived). Set ORCHESTRATOR_MODE=enforce in .env, or follow the rollback in "
+            "docs/cutover.md step 8."
         )
-        return Check("ORCHESTRATOR_MODE", WARN, detail)
+        return Check("ORCHESTRATOR_MODE", FAIL, detail)
     detail = "off: the agents won't react during the demo. Set it to shadow in .env."
     return Check("ORCHESTRATOR_MODE", FAIL, detail)
 

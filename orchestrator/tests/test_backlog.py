@@ -199,3 +199,31 @@ def test_cli_apply_creates_and_says_done(capsys):
     assert out.startswith("acme/widgets: 1 labels and 1 issues to create.\n")
     assert f"  #{100 + len(requests)} {items[0]['title']}\n" in out
     assert out.endswith("Done.\n")
+
+
+def test_cli_labels_only_dry_run_lists_labels_and_writes_nothing(capsys):
+    requests = []
+    labels = sorted(set(plan(load_backlog(), set(), set())["labels"]) - {"demo", "incident"})
+    assert main(["--labels-only"], client=_client(_github(requests, labels=labels))) == 0
+
+    assert {r.method for r in requests} == {"GET"}
+    assert capsys.readouterr().out == (
+        "acme/widgets: 2 labels and 0 issues to create.\n"
+        "  demo\n"
+        "  incident\n"
+        "Dry run only. Re-run with --apply to create them.\n"
+    )
+
+
+def test_cli_labels_only_apply_creates_missing_labels_and_no_issues(capsys):
+    requests = []
+    labels = sorted(set(plan(load_backlog(), set(), set())["labels"]) - {"demo", "module:leads"})
+    client = _client(_github(requests, labels=labels))
+    assert main(["--labels-only", "--apply"], client=client) == 0
+
+    posts = [r for r in requests if r.method == "POST"]
+    assert [r.url.path for r in posts] == ["/repos/acme/widgets/labels"] * 2
+    assert [json.loads(r.content)["name"] for r in posts] == ["demo", "module:leads"]
+    assert json.loads(posts[0].content)["description"].startswith("Made during a demo")
+    out = capsys.readouterr().out
+    assert out == "acme/widgets: 2 labels and 0 issues to create.\nDone.\n"
