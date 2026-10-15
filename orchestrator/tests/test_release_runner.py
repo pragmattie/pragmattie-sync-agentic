@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -212,6 +213,26 @@ def test_observe_records_the_verdict_and_posts_nothing(gh, engine, policy):
         "skipped": "mode is observe",
     }
     assert row.output["mode"] == "observe" and row.output["would_be"] == "pending"
+
+
+def test_observe_notes_the_skipped_status_once_a_commit(gh, engine, policy, caplog):
+    _release(gh)
+    _incident(gh)
+    runner = _runner(gh, engine, policy, "observe")
+
+    with caplog.at_level(logging.INFO, logger="sdlc.release_runner"):
+        runner.poll_once(NOON)
+        runner.poll_once(NOON + timedelta(minutes=1))
+        gh.close_issue(61, NOON + timedelta(minutes=2))  # the verdict changes: a new row
+        runner.poll_once(NOON + timedelta(minutes=3))
+
+    notes = [r.getMessage() for r in caplog.records if "is not posted" in r.getMessage()]
+    assert notes == [
+        "Release mmmmmmm: observe mode, so release-gate "
+        "(T2 · Observe (would be pending). Held: open incident in pipeline (#61)) is not posted"
+    ]
+    assert len(_rows(engine)) == 2
+    assert gh.writes() == []
 
 
 def test_off_does_nothing_at_all(gh, engine, policy):

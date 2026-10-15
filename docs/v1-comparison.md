@@ -12,19 +12,24 @@ impression.
 2. Compare, in the orchestrator (with `GITHUB_REPO` set to this repository):
    `python -m sdlc.compare_v1 v1-export.json [--since 2026-10-01] [--markdown report.md]`.
 
-The export is refused if it is for another repository ("This export is for {x}, not {y}.") or a
-decision lacks a field. The comparison is read-only: it writes nothing to the database or GitHub.
+The export is refused, with a message and exit code 1, if it isn't valid JSON, is for another
+repository ("This export is for {x}, not {y}."), or has a decision that isn't an object, lacks a
+field or has a bad time. The comparison is read-only: it writes nothing to the database or GitHub.
 
 ## What it compares
 
-v1's rows from the export are paired with v2's own rows (source `github`, trial rows left out) from
-the day v2 started observing (its first `pr_risk` row) or `--since`:
+v1's rows from the export are paired with v2's own rows (source `github`, trial rows left out) by
+subject and version only, never by time: every subject v2 decided is compared with v1's decision on
+the same subject, whichever was made first. `--since` only limits which of v2's subjects are
+included (and which of v1's subjects v2 never decided are counted). Each agent's section shows when
+v2 started observing with that agent (its first non-trial row), as information.
 
 - **PR risk**, per PR and commit: each side's newest ok row. Tiers equal count as agreement; a
   difference shows both scores and the signals and inputs that differ, since each side scores from
   its own history.
-- **Test selector**, per PR and commit: the newest recommendation's suites, with both sides'
-  reasons. Where both sides settled a commit's CI, the results must match; a mismatch is a bug.
+- **Test selector**, per PR and commit: the newest ok recommendation's suites, with both sides'
+  reasons; a side whose runs all failed is counted as a failed run, not compared. Where both
+  sides settled a commit's CI, the results must match; a mismatch is a bug.
 - **Triage**, per issue and content hash: module, type, priority and points, each counted alone.
 - **Release gate**, per deploy commit: each side's final verdict and tier.
 

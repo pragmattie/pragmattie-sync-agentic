@@ -21,7 +21,8 @@ posted again, except once after a restart (with no new row).
 ``ORCHESTRATOR_MODE`` switches it like every agent: ``off`` does nothing at all, ``shadow`` posts
 success with what enforce would do (a T3 still deploys through the sign-off environment, since
 its description starts with T3), ``observe`` records the verdict shadow would post but posts
-nothing, ``enforce`` posts the real state.
+nothing (noting that in the log once a commit, as the PR runner does), ``enforce`` posts the real
+state.
 
 ``python -m sdlc.release_runner once`` polls once and prints the summary.
 """
@@ -129,6 +130,7 @@ class ReleaseRunner:
             stored = _stored_pr(db, item["number"])
             if stored is None or stored.merge_commit_sha is None:
                 collector.collect_pull_request(item)
+                db.commit()  # shared with the collector: hold no lock over the next requests
 
     def head_pr(self, db: Session, collector: Collector, sha: str) -> PullRequest | None:
         """The merged PR whose merge commit is ``sha``, or None for a direct push."""
@@ -258,6 +260,15 @@ class ReleaseRunner:
             sha, verdict.state, verdict.description, context=release_gate.STATUS_CONTEXT
         )
         if "done" in effect:
+            self._posted[sha] = posted
+        elif self.mode == "observe":
+            # noted once a commit, not every poll; each changed verdict still gets its audit row
+            if sha not in self._posted:
+                log.info(
+                    "Release %s: observe mode, so release-gate (%s) is not posted",
+                    sha[:7],
+                    verdict.description,
+                )
             self._posted[sha] = posted
         if recorded:
             return False

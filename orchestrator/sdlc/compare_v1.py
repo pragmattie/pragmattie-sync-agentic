@@ -1,11 +1,16 @@
 """Compare v2's decisions with v1's on the same PRs, issues and deploys, and report the differences.
 
 ``python -m sdlc.compare_v1 FILE [--since DATE] [--markdown OUT]`` pairs v1's rows from its export
-(``sdlc.v1_export``) with v2's own rows (source ``github``, trial rows left out) from the day v2
-started observing (its first non-trial ``pr_risk`` row) or ``--since``. Per agent it counts the
-subjects both sides decided, how often they agree, and lists every difference with what caused it;
-rows only one side has are counted, not compared. It ends with the bar for cutover, fixed on
-2026-10-14 before any comparison was run. It is read-only: one query, then a rollback.
+(``sdlc.v1_export``) with v2's own rows (source ``github``, trial rows left out) by subject and
+version only (the PR and commit, the issue and content hash, the deploy commit), never by time:
+every subject v2 decided is compared with v1's decision on the same subject, whenever either was
+made. ``--since`` only limits which of v2's subjects are included (and v1's subjects that v2 never
+decided). Per agent it shows when v2 started observing (that agent's first non-trial row), counts
+the subjects both sides decided, how often they agree, and lists every difference with what caused
+it; rows only one side has are counted, not compared. Each side's newest ``ok`` run is compared; a
+subject with only failed runs on one side is counted as that side's failed run. It ends with the
+bar for cutover, fixed on 2026-10-14 before any comparison was run. It is read-only: two queries,
+then a rollback.
 """
 
 import argparse
@@ -15,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -82,6 +87,7 @@ class Comparison:
 
     agent: str
     unit: str
+    observing_since: datetime | None = None
     compared: int = 0
     agreed: dict[str, int] = field(default_factory=dict)
     differences: list[str] = field(default_factory=list)
@@ -116,7 +122,6 @@ class Bar:
 class Report:
     start: datetime | None
     end: datetime | None
-    observing_since: datetime | None
     risk: Comparison
     suites: Comparison
     triage: Comparison
@@ -165,27 +170,21 @@ def _row(d: AgentDecision) -> Row:
     )
 
 
-def observing_since(db: Session) -> datetime | None:
-    """When v2 started observing: its first non-trial ``pr_risk`` row on real work."""
-    return db.scalar(
-        select(AgentDecision.created_at)
-        .where(
-            AgentDecision.agent == pr_risk.AGENT,
-            AgentDecision.subject_source == SOURCE,
-            AgentDecision.trigger != audit.TRIAL,
-        )
-        .order_by(AgentDecision.created_at, AgentDecision.id)
-        .limit(1)
+def observing_since(db: Session) -> dict[str, datetime]:
+    """When v2 started observing, per agent: its first non-trial row on real work."""
+    query = (
+        select(AgentDecision.agent, func.min(AgentDecision.created_at))
+        .where(AgentDecision.subject_source == SOURCE, AgentDecision.trigger != audit.TRIAL)
+        .group_by(AgentDecision.agent)
     )
+    return {agent: first for agent, first in db.execute(query)}
 
 
-def v2_rows(db: Session, start: datetime | None) -> list[Row]:
-    """v2's own non-trial rows on real work from ``start`` on, oldest first."""
+def v2_rows(db: Session) -> list[Row]:
+    """v2's own non-trial rows on real work, oldest first."""
     query = select(AgentDecision).where(
         AgentDecision.subject_source == SOURCE, AgentDecision.trigger != audit.TRIAL
     )
-    if start is not None:
-        query = query.where(AgentDecision.created_at >= start)
     return [_row(d) for d in db.scalars(query.order_by(AgentDecision.created_at, AgentDecision.id))]
 
 
@@ -202,15 +201,29 @@ def _newest(rows: Iterable[Row], ok_only: bool = True) -> dict[tuple, Row]:
     return newest
 
 
+def _since(v1: list[Row], v2: list[Row], since: datetime | None) -> tuple[list[Row], list[Row]]:
+    """The subjects v2 decided from ``since`` on, with every row on them from both sides; and v1's
+    rows from ``since`` on subjects v2 never decided."""
+    if since is None:
+        return v1, v2
+    included = {r.key for r in v2 if r.created_at >= since}
+    v2 = [r for r in v2 if r.key in included]
+    v1 = [r for r in v1 if r.key in included or r.created_at >= since]
+    return v1, v2
+
+
 def _pairs(
     comparison: Comparison,
     v1: list[Row],
     v2: list[Row],
     observing: datetime | None,
-    ok_only: bool = True,
+    since: datetime | None,
 ) -> list[tuple[tuple, Row, Row]]:
-    """The subjects both sides decided, paired; the rest counted on ``comparison`` with a reason."""
-    new1, new2 = _newest(v1, ok_only), _newest(v2, ok_only)
+    """The subjects both sides decided, paired by subject and version alone; the rest counted on
+    ``comparison`` with a reason. ``observing`` is when v2's agent started; it only explains why
+    v1 alone decided a subject."""
+    v1, v2 = _since(v1, v2, since)
+    new1, new2 = _newest(v1), _newest(v2)
     keys1, keys2 = {r.key for r in v1}, {r.key for r in v2}
     for key in sorted(keys1 | keys2, key=str):
         if key in new1 and key in new2:
@@ -258,11 +271,12 @@ def _rank(tier: str | None) -> int:
 
 
 def compare_risk(
-    v1: list[Row], v2: list[Row], observing: datetime | None
+    v1: list[Row], v2: list[Row], observing: datetime | None, since: datetime | None = None
 ) -> tuple[Comparison, list[str]]:
     """PR risk per (PR, commit); also the commits where v2's tier is below v1's on a floored PR."""
-    result = Comparison(pr_risk.AGENT, "commits")
-    pairs = _pairs(result, _of(v1, pr_risk.AGENT, "pr"), _of(v2, pr_risk.AGENT, "pr"), observing)
+    result = Comparison(pr_risk.AGENT, "commits", observing_since=observing)
+    rows1, rows2 = _of(v1, pr_risk.AGENT, "pr"), _of(v2, pr_risk.AGENT, "pr")
+    pairs = _pairs(result, rows1, rows2, observing, since)
     lower: list[str] = []
     agreed = 0
     for key, a, b in pairs:
@@ -285,13 +299,15 @@ def compare_risk(
     return result, lower
 
 
-def compare_suites(v1: list[Row], v2: list[Row], observing: datetime | None) -> Comparison:
+def compare_suites(
+    v1: list[Row], v2: list[Row], observing: datetime | None, since: datetime | None = None
+) -> Comparison:
     """The test selector per (PR, commit), and CI results where both sides settled the commit."""
-    result = Comparison(suite_select.AGENT, "commits")
+    result = Comparison(suite_select.AGENT, "commits", observing_since=observing)
     recs1 = [r for r in _of(v1, suite_select.AGENT, "pr") if r.trigger != RESULT]
     recs2 = [r for r in _of(v2, suite_select.AGENT, "pr") if r.trigger != RESULT]
     agreed = 0
-    for key, a, b in _pairs(result, recs1, recs2, observing, ok_only=False):
+    for key, a, b in _pairs(result, recs1, recs2, observing, since):
         out1, out2 = a.output or {}, b.output or {}
         suites1, suites2 = set(out1.get("suites") or []), set(out2.get("suites") or [])
         if suites1 == suites2:
@@ -322,12 +338,14 @@ def _dimension(row: Row, name: str):
     return output.get("estimate_points") if name == "points" else output.get(name)
 
 
-def compare_triage(v1: list[Row], v2: list[Row], observing: datetime | None) -> Comparison:
+def compare_triage(
+    v1: list[Row], v2: list[Row], observing: datetime | None, since: datetime | None = None
+) -> Comparison:
     """Triage per (issue, content hash), dimension by dimension."""
-    result = Comparison(triage.AGENT, "issue versions")
+    result = Comparison(triage.AGENT, "issue versions", observing_since=observing)
     agreed = dict.fromkeys(DIMENSIONS, 0)
     rows1, rows2 = _of(v1, triage.AGENT, "issue"), _of(v2, triage.AGENT, "issue")
-    for key, a, b in _pairs(result, rows1, rows2, observing):
+    for key, a, b in _pairs(result, rows1, rows2, observing, since):
         parts = []
         for name in DIMENSIONS:
             first, second = _dimension(a, name), _dimension(b, name)
@@ -341,14 +359,16 @@ def compare_triage(v1: list[Row], v2: list[Row], observing: datetime | None) -> 
     return result
 
 
-def compare_gate(v1: list[Row], v2: list[Row], observing: datetime | None) -> Comparison:
+def compare_gate(
+    v1: list[Row], v2: list[Row], observing: datetime | None, since: datetime | None = None
+) -> Comparison:
     """The release gate per deploy commit: each side's final verdict and tier."""
-    result = Comparison(release_gate.AGENT, "deploys")
+    result = Comparison(release_gate.AGENT, "deploys", observing_since=observing)
     # A deploy is keyed by its commit alone: the PR number beside it may differ between sides.
     gate1 = [replace(r, subject_id=0) for r in _of(v1, release_gate.AGENT, "release")]
     gate2 = [replace(r, subject_id=0) for r in _of(v2, release_gate.AGENT, "release")]
     agreed = 0
-    for key, a, b in _pairs(result, gate1, gate2, observing):
+    for key, a, b in _pairs(result, gate1, gate2, observing, since):
         verdict1, verdict2 = (a.output or {}).get("verdict"), (b.output or {}).get("verdict")
         if verdict1 == verdict2:
             agreed += 1
@@ -371,22 +391,21 @@ def compare(
     v1: list[Row],
     v2: list[Row],
     *,
-    start: datetime | None,
-    observing: datetime | None,
+    since: datetime | None = None,
+    observing: dict[str, datetime] | None = None,
     not_compared: dict[str, int] | None = None,
 ) -> Report:
-    """Every comparison and the bar, over v1's rows from ``start`` on and v2's rows as given."""
-    v1 = [r for r in v1 if start is None or r.created_at >= start]
-    risk, lower = compare_risk(v1, v2, observing)
-    gate = compare_gate(v1, v2, observing)
-    times = [r.created_at for r in (*v1, *v2)]
+    """Every comparison and the bar, over v2's subjects (decided from ``since`` on, if given)."""
+    observing = observing or {}
+    risk, lower = compare_risk(v1, v2, observing.get(pr_risk.AGENT), since)
+    gate = compare_gate(v1, v2, observing.get(release_gate.AGENT), since)
+    times = [r.created_at for r in v2 if since is None or r.created_at >= since]
     return Report(
-        start=start or (min(times) if times else None),
+        start=since or (min(times) if times else None),
         end=max(times) if times else None,
-        observing_since=observing,
         risk=risk,
-        suites=compare_suites(v1, v2, observing),
-        triage=compare_triage(v1, v2, observing),
+        suites=compare_suites(v1, v2, observing.get(suite_select.AGENT), since),
+        triage=compare_triage(v1, v2, observing.get(triage.AGENT), since),
         gate=gate,
         bar=Bar(
             tier_agreement=_share(risk.agreed["tier"], risk.compared),
@@ -407,7 +426,12 @@ def _percent(agreed: int, compared: int) -> str:
 
 
 def _section(title: str, c: Comparison) -> list[str]:
-    lines = [f"## {title} (`{c.agent}`)", "", f"- {c.unit.capitalize()} compared: {c.compared}"]
+    lines = [
+        f"## {title} (`{c.agent}`)",
+        "",
+        f"- v2 observing since: {_time(c.observing_since)}",
+        f"- {c.unit.capitalize()} compared: {c.compared}",
+    ]
     for name, agreed in c.agreed.items():
         lines.append(f"- Agreement on {name}: {_percent(agreed, c.compared)}")
     for (side, reason), count in sorted(c.one_sided.counts.items(), key=str):
@@ -440,7 +464,6 @@ def format_report(report: Report) -> str:
         "# v1 and v2 side by side",
         "",
         f"Period: {_time(report.start)} to {_time(report.end)}",
-        f"v2 observing since: {_time(report.observing_since)}",
         "",
         *_section("PR risk", report.risk),
         *_section("Test selector", report.suites),
@@ -492,7 +515,7 @@ def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
         prog="python -m sdlc.compare_v1", description="Compare v2's decisions with v1's."
     )
     parser.add_argument("file", help="v1's export (python -m sdlc.export_rebuild --out FILE)")
-    parser.add_argument("--since", type=_date, help="compare from this date (UTC)")
+    parser.add_argument("--since", type=_date, help="v2's subjects decided from this date (UTC)")
     parser.add_argument("--markdown", metavar="OUT", help="also write the report to this file")
     args = parser.parse_args(argv)
 
@@ -505,15 +528,14 @@ def main(argv: list[str] | None = None, engine: Engine | None = None) -> int:
     with Session(engine or get_engine()) as db:
         try:
             observing = observing_since(db)
-            start = args.since or observing
-            rows = v2_rows(db, start)
+            rows = v2_rows(db)
         finally:
             db.rollback()
 
     report = compare(
         v1_rows(export),
         rows,
-        start=start,
+        since=args.since,
         observing=observing,
         not_compared=_not_compared(export),
     )

@@ -62,3 +62,57 @@ def test_a_decision_missing_a_field_is_refused_by_field_and_id(tmp_path):
         load_export(_write(tmp_path, data))
 
     assert str(error.value) == "Decision 5002 is missing the field 'inputs_digest'."
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("{not json", "isn't valid JSON: "),
+        ("[]", "The export isn't a JSON object."),
+    ],
+)
+def test_a_file_that_is_not_a_json_object_is_refused(tmp_path, text, message):
+    path = tmp_path / "export.json"
+    path.write_text(text)
+
+    with pytest.raises(ExportError) as error:
+        load_export(path)
+
+    assert message in str(error.value)
+
+
+def test_a_missing_file_is_refused(tmp_path):
+    with pytest.raises(ExportError) as error:
+        load_export(tmp_path / "nowhere.json")
+
+    assert str(error.value).startswith("Can't read the export ")
+
+
+def test_a_decision_that_is_not_an_object_is_refused(tmp_path):
+    data = json.loads(FIXTURE.read_text())
+    data["decisions"][2] = "pr_risk"
+
+    with pytest.raises(ExportError) as error:
+        load_export(_write(tmp_path, data))
+
+    assert str(error.value) == "Decision 3 in the file isn't a JSON object."
+
+
+def test_a_bad_time_is_refused_by_field_and_id(tmp_path):
+    data = json.loads(FIXTURE.read_text())
+    data["decisions"][0]["created_at"] = "yesterday"
+
+    with pytest.raises(ExportError) as error:
+        load_export(_write(tmp_path, data))
+
+    assert str(error.value) == "Decision 5001 has a bad time in 'created_at': 'yesterday'."
+
+
+def test_an_approval_with_a_bad_time_is_refused(tmp_path):
+    data = json.loads(FIXTURE.read_text())
+    data["approvals"][0]["decided_at"] = "soon"
+
+    with pytest.raises(ExportError) as error:
+        load_export(_write(tmp_path, data))
+
+    assert str(error.value) == "The approval for PR 8 has a bad time in 'decided_at': 'soon'."

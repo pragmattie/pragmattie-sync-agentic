@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sdlc import approver as approver_module
 from sdlc import runner as runner_module
 from sdlc.agents.llm import LLMError
-from sdlc.agents.signoff import WINDOW_AGENT
+from sdlc.agents.signoff import COMMENT_MARKER, WINDOW_AGENT
 from sdlc.agents.suite_select import CI_SUITES
 from sdlc.approver import load_approvers
 from sdlc.db import Base
@@ -18,7 +18,7 @@ from sdlc.runner import Runner
 from sdlc.signals.github import SUITES
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
 from sdlc.tiers import load_policy
-from tests.fakes import WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
+from tests.fakes import BOT, WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
 
 NOON = datetime(2026, 10, 6, 12, 0)
 SHA = "a" * 40
@@ -145,6 +145,47 @@ def test_observe_notes_the_skipped_status_once_a_commit_and_never_repairs_or_rer
     assert gh.writes() == []
     assert len(_rows(engine)) == 2  # scored once per commit
     assert _gate(engine, 1).description.startswith("Observe (would be pending). T2")
+
+
+def _v1_comment(gh, number, sha, signoff=" ", qa=" "):
+    """v1's risk comment: the same marker as v2's, written by v1 for ``sha``."""
+    body = (
+        f"{COMMENT_MARKER}\n<!-- head:{sha} -->\n## Risk review: T2 (Standard)\n\n"
+        f"- [{signoff}] **Human sign-off** (senior engineer)\n"
+        f"- [{qa}] **Manual QA done**\n"
+    )
+    return gh.comment(number, body, user=BOT)
+
+
+def test_observe_counts_the_boxes_in_v1s_comment_whatever_commit_it_names(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy, "observe")
+    runner.poll_once(NOON)
+    assert _gate(engine, 1).would_be == "pending"
+    v1 = _v1_comment(gh, 1, "c" * 40, signoff="x", qa="x")  # v1's head isn't v2's commit
+    before = v1["body"]
+
+    runner.poll_once(NOON + timedelta(minutes=1))
+
+    gate = _gate(engine, 1)
+    assert (gate.state, gate.would_be) == ("success", "success")
+    assert gh.writes() == []
+    assert v1["body"] == before  # never refreshed or rendered again
+
+
+def test_observe_never_treats_v1s_comment_for_this_commit_as_its_own(gh, engine, policy):
+    gh.add_pr(1, SHA, files=PIPELINE)
+    runner = _runner(gh, engine, policy, "observe")
+    runner.poll_once(NOON)
+    _v1_comment(gh, 1, SHA)  # unticked, and naming the commit v2 scored
+    runner.poll_once(NOON + timedelta(minutes=1))
+    gh.push(1, NEW_SHA)
+
+    runner.poll_once(NOON + timedelta(minutes=2))
+    runner.poll_once(NOON + timedelta(minutes=3))
+
+    assert _gate(engine, 1).would_be == "pending"
+    assert gh.writes() == []
 
 
 def test_observe_rules_on_a_tier_command_and_records_it_without_writing(gh, engine, policy):

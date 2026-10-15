@@ -13,7 +13,11 @@ deployment deleted on GitHub (or a removed label) disappears here too. Incidents
 they never become issue rows.
 
 Every row is stored with ``source = "github"`` and matched on its ``external_id``, so running
-the collector again updates rows in place instead of adding new ones.
+the collector again updates rows in place instead of adding new ones. The agents store the same
+rows (an issue, a pull request) through this class while the collector runs, so a new row is
+inserted at once in a savepoint: when the other service inserted it a moment earlier, only that
+insert rolls back and their row is read again and updated. Each issue, pull request and phase is
+committed as it is done, so neither service holds row locks the other waits for.
 
 The collector only reads: it sends GET requests and never writes to GitHub.
 ``python -m sdlc.signals.github`` (or ``once``) collects once and prints the counts;
@@ -37,6 +41,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from sdlc.changes import classify_files, infer_module
@@ -128,15 +133,17 @@ class Collector:
         """Collect everything; ``environments`` defaults to the policy's release environments."""
         if environments is None:
             environments = release_environments()
-        counts = {
-            "epics": self.collect_milestones(),
-            "issues": self.collect_issues(),
-            "pull_requests": self.collect_pull_requests(),
-            "ci_jobs": self.collect_ci(),
-        }
-        # Committed before the deployments, so a token that can't read them loses nothing else;
-        # their error still fails the pass.
-        self.db.commit()
+        counts = {}
+        for name, collect in (
+            ("epics", self.collect_milestones),
+            ("issues", self.collect_issues),
+            ("pull_requests", self.collect_pull_requests),
+            ("ci_jobs", self.collect_ci),
+        ):
+            counts[name] = collect()
+            # Each phase is committed, so a token that can't read the deployments loses nothing
+            # else (their error still fails the pass) and no phase holds locks into the next.
+            self.db.commit()
         # Remembered only once committed, so a failed pass reads those runs again.
         self.memory.finished_runs |= self._finished_runs
         self.memory.suites |= self._suites
@@ -145,14 +152,37 @@ class Collector:
         self.db.commit()
         return counts
 
-    def _row(self, table, external_id: str):
-        row = self.db.scalar(
-            select(table).where(table.source == self.source, table.external_id == external_id)
-        )
+    def _row(self, table, external_id: str, **values):
+        """Store or update this source's row with ``values``."""
+        row = self._stored(table, external_id)
         if row is None:
-            row = table(source=self.source, external_id=external_id)
-            self.db.add(row)
+            row, inserted = self._insert(
+                table(source=self.source, external_id=external_id, **values),
+                table.source == self.source,
+                table.external_id == external_id,
+            )
+            if inserted:
+                return row
+        for name, value in values.items():
+            setattr(row, name, value)
         return row
+
+    def _insert(self, row, *match) -> tuple[object, bool]:
+        """Insert ``row`` now; if another service stored the same row first, return theirs.
+
+        The insert runs in a savepoint, so a duplicate key rolls back only this row. Theirs is read
+        with a locking read, which sees a row committed after this transaction's snapshot (MySQL's
+        repeatable read would hide it from a plain read).
+        """
+        try:
+            with self.db.begin_nested():
+                self.db.add(row)
+            return row, True
+        except IntegrityError:
+            stored = self.db.scalar(select(type(row)).where(*match).with_for_update())
+            if stored is None:
+                raise
+            return stored, False
 
     def _engineer(self, user: dict | None) -> Engineer | None:
         if not user or not user.get("login"):
@@ -163,8 +193,11 @@ class Collector:
                 select(Engineer).where(Engineer.source == self.source, Engineer.login == login)
             )
             if engineer is None:
-                engineer = Engineer(login=login, name=login, source=self.source)
-                self.db.add(engineer)
+                engineer, _ = self._insert(
+                    Engineer(login=login, name=login, source=self.source),
+                    Engineer.source == self.source,
+                    Engineer.login == login,
+                )
             self._engineers[login] = engineer
         return self._engineers[login]
 
@@ -172,14 +205,17 @@ class Collector:
         """Store or update every milestone, open and closed, as an epic."""
         count = 0
         for item in self.client.paginate("/repos/{repo}/milestones", state="all"):
-            epic = self._row(Epic, f"milestone-{item['number']}")
-            epic.number = item["number"]
-            epic.name = item["title"][:EPIC_LENGTH]
-            epic.state = item["state"]
             due_on = parse_time(item.get("due_on"))
-            epic.due_on = due_on.date() if due_on else None
-            epic.created_at = parse_time(item["created_at"])
-            epic.closed_at = parse_time(item.get("closed_at"))
+            self._row(
+                Epic,
+                f"milestone-{item['number']}",
+                number=item["number"],
+                name=item["title"][:EPIC_LENGTH],
+                state=item["state"],
+                due_on=due_on.date() if due_on else None,
+                created_at=parse_time(item["created_at"]),
+                closed_at=parse_time(item.get("closed_at")),
+            )
             count += 1
         self.db.flush()
         return count
@@ -197,26 +233,31 @@ class Collector:
     def collect_issue(self, item: dict) -> Issue:
         """Store or update one issue from its list entry, with its current dimension labels."""
         labels = labels_of(item)
-        issue = self._row(Issue, f"issue-{item['number']}")
-        issue.number = item["number"]
-        issue.title = item["title"][:300]
-        issue.module = labels.get("module")
-        issue.type = labels.get("type", "feature")
-        issue.priority = labels.get("priority")
         milestone = item.get("milestone")
-        issue.epic = milestone["title"][:EPIC_LENGTH] if milestone else labels.get("epic")
-        issue.estimate_points = _points(labels.get("points"))
-        issue.state = item["state"]
-        issue.created_at = parse_time(item["created_at"])
-        issue.closed_at = parse_time(item.get("closed_at"))
-        issue.actual_days = _days(issue.created_at, issue.closed_at) if issue.closed_at else None
-        issue.assignee = self._engineer(item.get("assignee"))
-        return issue
+        created_at = parse_time(item["created_at"])
+        closed_at = parse_time(item.get("closed_at"))
+        return self._row(
+            Issue,
+            f"issue-{item['number']}",
+            number=item["number"],
+            title=item["title"][:300],
+            module=labels.get("module"),
+            type=labels.get("type", "feature"),
+            priority=labels.get("priority"),
+            epic=milestone["title"][:EPIC_LENGTH] if milestone else labels.get("epic"),
+            estimate_points=_points(labels.get("points")),
+            state=item["state"],
+            created_at=created_at,
+            closed_at=closed_at,
+            actual_days=_days(created_at, closed_at) if closed_at else None,
+            assignee=self._engineer(item.get("assignee")),
+        )
 
     def collect_pull_requests(self) -> int:
         count = 0
         for item in self.client.paginate("/repos/{repo}/pulls", state="all"):
             self.collect_pull_request(item)
+            self.db.commit()  # before the next one's requests, so no lock waits on GitHub
             count += 1
         self.db.flush()
         return count
@@ -255,31 +296,33 @@ class Collector:
             else None
         )
 
-        pr = self._row(PullRequest, f"pr-{detail['number']}")
-        pr.number = detail["number"]
-        pr.title = detail["title"][:300]
-        pr.author = author
-        pr.issue = issue
-        pr.module = labels.get("module") or infer_module(paths)
-        pr.files_changed = detail.get("changed_files", len(files))
-        pr.additions = detail.get("additions", 0)
-        pr.deletions = detail.get("deletions", 0)
-        pr.touches_migration = facts.touches_migration
-        pr.touches_governance = facts.touches_governance
-        pr.test_files_changed = facts.test_files_changed
-        pr.docs_only = facts.docs_only
-        pr.modules_touched = facts.modules_touched
-        pr.review_count = len(submitted)
-        pr.first_review_hours = _hours(created_at, submitted[0]) if submitted else None
-        pr.rework_commits = max(0, detail.get("commits", 1) - 1)
-        pr.state = "merged" if merged_at else detail["state"]
-        pr.created_at = created_at
-        pr.merged_at = merged_at
-        pr.merge_commit_sha = detail.get("merge_commit_sha") if merged_at else None
-        pr.closed_at = parse_time(detail.get("closed_at"))
-        pr.caused_incident = "caused-incident" in labels
-        pr.reverted = detail["title"].lower().startswith("revert")
-        return pr
+        return self._row(
+            PullRequest,
+            f"pr-{detail['number']}",
+            number=detail["number"],
+            title=detail["title"][:300],
+            author=author,
+            issue=issue,
+            module=labels.get("module") or infer_module(paths),
+            files_changed=detail.get("changed_files", len(files)),
+            additions=detail.get("additions", 0),
+            deletions=detail.get("deletions", 0),
+            touches_migration=facts.touches_migration,
+            touches_governance=facts.touches_governance,
+            test_files_changed=facts.test_files_changed,
+            docs_only=facts.docs_only,
+            modules_touched=facts.modules_touched,
+            review_count=len(submitted),
+            first_review_hours=_hours(created_at, submitted[0]) if submitted else None,
+            rework_commits=max(0, detail.get("commits", 1) - 1),
+            state="merged" if merged_at else detail["state"],
+            created_at=created_at,
+            merged_at=merged_at,
+            merge_commit_sha=detail.get("merge_commit_sha") if merged_at else None,
+            closed_at=parse_time(detail.get("closed_at")),
+            caused_incident="caused-incident" in labels,
+            reverted=detail["title"].lower().startswith("revert"),
+        )
 
     def collect_ci(self) -> int:
         """Store the CI workflow's finished jobs, then remove rows of jobs that aren't CI.
@@ -343,14 +386,19 @@ class Collector:
             for other in jobs
         )
 
-        ci_run = self._row(CIRun, f"job-{job['id']}")
-        ci_run.pull_request = pull_request
-        ci_run.suite = suite_of(job["name"])
-        ci_run.conclusion = job["conclusion"][:20]
-        ci_run.flaky = flaky
-        ci_run.started_at = started_at
-        ci_run.duration_seconds = (
-            int((completed_at - started_at).total_seconds()) if started_at and completed_at else 0
+        self._row(
+            CIRun,
+            f"job-{job['id']}",
+            pull_request=pull_request,
+            suite=suite_of(job["name"]),
+            conclusion=job["conclusion"][:20],
+            flaky=flaky,
+            started_at=started_at,
+            duration_seconds=(
+                int((completed_at - started_at).total_seconds())
+                if started_at and completed_at
+                else 0
+            ),
         )
 
     def collect_deployments(self, environments: Sequence[str]) -> int:
@@ -416,20 +464,25 @@ class Collector:
             labels = labels_of(item)
             if "pull_request" in item or "incident" not in labels:
                 continue
-            incident = self._row(Incident, f"issue-{item['number']}")
-            seen.add(incident.external_id)
-            incident.title = item["title"][:200]
-            incident.severity = next((s for s in labels if s in SEVERITIES), DEFAULT_SEVERITY)
+            external_id = f"issue-{item['number']}"
+            seen.add(external_id)
             module = labels.get("module")
-            incident.module = module[:30] if module else None
-            incident.opened_at = parse_time(item["created_at"])
-            incident.resolved_at = parse_time(item.get("closed_at"))
+            opened_at = parse_time(item["created_at"])
             before = [
                 (deployed_at, deploy_id)
                 for deploy_id, deployed_at in deploys
-                if deployed_at <= incident.opened_at <= deployed_at + INCIDENT_AFTER_DEPLOY
+                if deployed_at <= opened_at <= deployed_at + INCIDENT_AFTER_DEPLOY
             ]
-            incident.deployment_id = max(before)[1] if before else None
+            self._row(
+                Incident,
+                external_id,
+                title=item["title"][:200],
+                severity=next((s for s in labels if s in SEVERITIES), DEFAULT_SEVERITY),
+                module=module[:30] if module else None,
+                opened_at=opened_at,
+                resolved_at=parse_time(item.get("closed_at")),
+                deployment_id=max(before)[1] if before else None,
+            )
         self.db.flush()
         gone = Incident.external_id.not_in(seen)
         self.db.execute(delete(Incident).where(Incident.source == self.source, gone))

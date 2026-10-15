@@ -12,9 +12,10 @@ in the same mode, and posts each waiting deploy's ``release-gate`` status.
 does everything, but the status always passes and says what it would be. ``observe`` decides and
 records exactly as shadow does but writes nothing to GitHub, so v2 can watch beside v1: the risk
 comment it would post is kept in the audit row, and the status and tier label it would set are
-noted once a commit. ``enforce`` makes the gate real. It fails closed: an exception on one pull
-request leaves that PR as it was (gated), and a risk agent that fails leaves a failing gate, never
-a pass.
+noted once a commit. The risk comment on the PR is then v1's (the same marker): only its sign-off
+and QA boxes are read, whatever commit it names, and it is never refreshed. ``enforce`` makes the
+gate real. It fails closed: an exception on one pull request leaves that PR as it was (gated), and
+a risk agent that fails leaves a failing gate, never a pass.
 
 ``python -m sdlc.runner run`` polls forever, ``once`` polls once, ``dry-run <pr>`` shows the exact
 request and a cost ceiling without calling the model or writing anything, and ``try <pr> --yes``
@@ -45,6 +46,7 @@ from sdlc.agents.signoff import (
     WINDOW_AGENT,
     ai_approval,
     approved_on_github,
+    boxes,
     describe_window,
     objection_window,
     ticked,
@@ -173,6 +175,7 @@ class Runner:
     ) -> None:
         sha = item["head"]["sha"]
         pr = collector.collect_pull_request(item)
+        db.commit()  # the stored PR is shared with the collector: hold no lock while assessing
         rows = decisions_for(db, pr_risk.AGENT, head_sha=sha, **_subject(pr))
         decision = next((row for row in reversed(rows) if row.status == "ok"), None)
         if decision is None and may_attempt(rows, now):
@@ -290,7 +293,12 @@ class Runner:
         if self.mode != "observe" and tier_labels != [f"tier:{tier}"]:
             self.effects.set_tier_label(pr.number, tier)
         risk_comment = self.effects.find_comment(pr.number, COMMENT_MARKER, comments)
-        boxed, qa_done = ticked(risk_comment.get("body") if risk_comment else None, sha)
+        body = (risk_comment.get("body") or "") if risk_comment else ""
+        if self.mode == "observe":
+            # v2 posts no comment, so this one is v1's: only a person's ticks in it are read
+            boxed, qa_done = boxes(body)
+        else:
+            boxed, qa_done = ticked(body, sha)
         human = approved_on_github(self.effects.read_reviews(pr.number), sha)
         approval = ai_approval(_reviewer_rows(db, pr), sha)
         approvals = Approvals(
@@ -310,9 +318,9 @@ class Runner:
         if merges_at is not None and now < merges_at:
             gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
         self._post_status(pr.number, sha, gate)
-        body = (risk_comment.get("body") or "") if risk_comment else ""
         if self.mode == "observe":
-            # no comment to refresh or render again; a /tier change is still decided and recorded
+            # v1's comment is never refreshed or rendered again by v2, whatever commit it names;
+            # a /tier change is still decided and recorded
             self._retest(db, pr, sha, tier, decision, now)
         elif risk_comment and comment_head(body) == sha:
             # a tier_change recommendation belongs to the commit the comment was written for

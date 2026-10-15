@@ -8,6 +8,7 @@ from sdlc.agents.signoff import (
     COMMENT_MARKER,
     ai_approval,
     approved_on_github,
+    boxes,
     describe_window,
     objection_window,
     ticked,
@@ -66,6 +67,12 @@ def test_boxes_count_only_in_the_risk_comment():
 
     assert ticked(body, SHA) == (False, False)
     assert ticked(None, SHA) == (False, False)
+
+
+def test_boxes_read_a_risk_comment_whatever_commit_it_names():
+    assert boxes(_risk_comment(OLD_SHA, qa="x")) == (True, True)
+    assert boxes("Copied:\n" + _risk_comment(SHA)) == (False, False)
+    assert boxes(None) == (False, False)
 
 
 # GitHub reviews

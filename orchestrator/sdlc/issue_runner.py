@@ -92,6 +92,7 @@ class IssueRunner:
         self, db: Session, collector: Collector, item: dict, now: datetime, summary: dict
     ) -> None:
         collector.collect_issue(item)  # a person's label changes are kept on the row
+        db.commit()  # the stored issue is shared with the collector: hold no lock while triaging
         version = triage_comment.content_version(item["title"], item.get("body"))
         retriage = RETRIAGE in _names(item)
         rows = decisions_for(db, triage.AGENT, head_sha=version, **_subject(item["number"]))

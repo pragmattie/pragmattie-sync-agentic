@@ -1,15 +1,19 @@
 import json
+import os
 from datetime import date, datetime, timedelta
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from sdlc import accuracy, synth
+from sdlc.config import get_settings
 from sdlc.db import Base
 from sdlc.suite_selector import RESULT
-from sdlc.tables import AgentDecision, Epic, Forecast, Issue, Sprint
+from sdlc.tables import AgentDecision, Epic, Forecast, Issue, PullRequest, Sprint
 from sdlc.tiers import load_policy
+from tests.test_migrations import _alembic_config
 
 GENERATED_NOW = datetime(2026, 9, 16, 12, 0)
 RUNS = 200  # fewer than the report's runs, for speed
@@ -119,6 +123,41 @@ def test_risk_counts_caught_incident_prs_by_sprint(history):
     assert result["recall"] == round(result["caught"] / result["incident_prs"], 3)
     assert result["sprints"][-1]["recall_so_far"] == result["recall"]
     assert result["real"] == {"merged_prs": 0, "incident_prs": 0}
+
+
+def test_real_risk_counts_are_ints_on_mysql():
+    """Runs only when ``DATABASE_URL`` is set to MySQL, as in CI's MySQL job."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("mysql"):
+        pytest.skip("DATABASE_URL is not MySQL")
+    get_settings.cache_clear()
+    try:
+        command.upgrade(_alembic_config(), "head")
+        mysql = create_engine(url)
+        try:
+            with Session(mysql) as db:
+                db.add(
+                    PullRequest(
+                        source="github",
+                        external_id="mysql-check-real-incident",
+                        title="An incident",
+                        created_at=datetime(2031, 3, 1),
+                        merged_at=datetime(2031, 3, 2),
+                        state="merged",
+                        caused_incident=True,
+                    )
+                )
+                db.flush()
+                try:
+                    real = accuracy.risk_accuracy(db, load_policy())["real"]
+                finally:
+                    db.rollback()
+            assert type(real["merged_prs"]) is int and real["merged_prs"] >= 1
+            assert type(real["incident_prs"]) is int and real["incident_prs"] >= 1
+        finally:
+            mysql.dispose()
+    finally:
+        get_settings.cache_clear()
 
 
 # Triage, real

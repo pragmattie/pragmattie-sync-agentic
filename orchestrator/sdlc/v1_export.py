@@ -1,8 +1,9 @@
 """Load and validate v1's export of its decisions about this repository.
 
 v1 writes the file with ``python -m sdlc.export_rebuild --out FILE``; this repository never reads
-v1's code or database. ``load_export`` refuses a file for another repository, or one whose
-decisions lack a field. Times are naive UTC. Nothing here touches the database, so the comparison
+v1's code or database. ``load_export`` refuses, with ``ExportError``, a file that isn't JSON, is
+for another repository, or has a decision that isn't an object, lacks a field or has a bad time.
+Times are naive UTC. Nothing here touches the database, so the comparison
 (``sdlc.compare_v1``) and the import (7.3) can both use it.
 """
 
@@ -120,33 +121,54 @@ def parse_time(value: Any) -> datetime | None:
     return moment
 
 
-def _decision(item: dict) -> Decision:
+def _time(value: Any, what: str, name: str) -> datetime | None:
+    try:
+        return parse_time(value)
+    except (TypeError, ValueError) as error:
+        raise ExportError(f"{what} has a bad time in {name!r}: {value!r}.") from error
+
+
+def _object(item: Any, what: str) -> dict:
+    if not isinstance(item, dict):
+        raise ExportError(f"{what} isn't a JSON object.")
+    return item
+
+
+def _decision(item: Any, index: int) -> Decision:
+    item = _object(item, f"Decision {index + 1} in the file")
+    what = f"Decision {item.get('id', '(no id)')}"
     missing = [name for name in DECISION_FIELDS if name not in item]
     if missing:
-        raise ExportError(
-            f"Decision {item.get('id', '(no id)')} is missing the field {missing[0]!r}."
-        )
+        raise ExportError(f"{what} is missing the field {missing[0]!r}.")
     fields = {name: item[name] for name in DECISION_FIELDS}
-    fields["created_at"] = parse_time(item["created_at"])
+    fields["created_at"] = _time(item["created_at"], what, "created_at")
     return Decision(**fields)
 
 
-def _approval(item: dict) -> Approval:
+def _approval(item: Any, index: int) -> Approval:
+    item = _object(item, f"Approval {index + 1} in the file")
+    what = f"The approval for PR {item.get('pr')}"
     fields = {name: item.get(name) for name in APPROVAL_FIELDS}
-    fields["requested_at"] = parse_time(fields["requested_at"])
-    fields["decided_at"] = parse_time(fields["decided_at"])
+    fields["requested_at"] = _time(fields["requested_at"], what, "requested_at")
+    fields["decided_at"] = _time(fields["decided_at"], what, "decided_at")
     return Approval(**fields)
 
 
 def load_export(path: str | Path, repository: str | None = None) -> Export:
     """The export at ``path``, checked against ``repository`` (``GITHUB_REPO`` by default)."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as error:
+        raise ExportError(f"Can't read the export {path}: {error.strerror or error}.") from error
+    except ValueError as error:  # malformed JSON, or not UTF-8
+        raise ExportError(f"The export {path} isn't valid JSON: {error}.") from error
+    data = _object(data, "The export")
     expected = Settings().github_repo if repository is None else repository
     if data.get("repository") != expected:
         raise ExportError(f"This export is for {data.get('repository')}, not {expected}.")
     return Export(
-        exported_at=parse_time(data.get("exported_at")),
+        exported_at=_time(data.get("exported_at"), "The export", "exported_at"),
         repository=data["repository"],
-        decisions=tuple(_decision(item) for item in data.get("decisions") or []),
-        approvals=tuple(_approval(item) for item in data.get("approvals") or []),
+        decisions=tuple(_decision(item, k) for k, item in enumerate(data.get("decisions") or [])),
+        approvals=tuple(_approval(item, k) for k, item in enumerate(data.get("approvals") or [])),
     )
