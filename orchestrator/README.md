@@ -246,4 +246,11 @@ are left out and counted. A row already imported is skipped, so it can be run ag
 export. It is a dry run without `--apply`, and only ever inserts. v2's own runners and measures
 read `github` and `synthetic` rows only; the decision log shows imported rows with a "v1" chip.
 
+**Cutover check.** `python -m sdlc.cutover check` checks runbook steps 3 to 5 of
+`docs/cutover.md` (run it in the `agents` container): the token reaches the repository and its
+commit statuses (writing them can't be tested, so that line warns and step 5 confirms it),
+`ORCHESTRATOR_MODE` is enforce, the agents' newest audit row is under 5 minutes old, and v2's own
+audit trail has a posted `pr_risk` status for the newest open PR's head commit (or "no open PR
+to check"). It only reads, and exits 1 on a failure.
+
 Agent-built; see `CLAUDE.md` at the repository root for the rules that govern it.
