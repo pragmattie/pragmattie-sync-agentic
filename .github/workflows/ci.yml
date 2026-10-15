@@ -133,7 +133,9 @@ jobs:
           alembic check
       - name: Orchestrator tests that need MySQL
         working-directory: orchestrator
-        run: pytest tests/test_migrations.py tests/test_forecaster.py -k mysql
+        run: >-
+          pytest tests/test_migrations.py tests/test_forecaster.py tests/test_accuracy.py
+          tests/test_signals_github.py -k mysql
       - name: Orchestrator downgrade
         working-directory: orchestrator
         run: alembic downgrade base
