@@ -34,11 +34,12 @@ caps:
 # Objection window: a pull request at a listed tier, changing only files under the listed paths,
 # that the AI reviewer approved, counts as signed off once that approval is `minutes` old, unless
 # a person comments /hold. A person's approval still merges it at once. T2 and T3 can never be
-# listed.
+# listed. "*" in paths covers every file, so every T1 pull request gets the window (decided by
+# Geoff on 2026-10-11).
 objection_window:
   tiers: [T1]
-  minutes: 60
-  paths: [apps/crm-web/, apps/insights-web/]
+  minutes: 15
+  paths: ["*"]
 
 # Fallback tier: if the risk agent fails, a pull request gets its floor tier, or this one when no
 # floor applies. It fails closed, never open.
