@@ -8,9 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`CLAUDE.cutover.md`** (7.6): the post-cutover wording of `CLAUDE.md`'s "### Modes"
-  subsection (v2 governs in `enforce`, v1 archived). Geoff applies it at step 7 of
-  `docs/cutover.md`, after the switch, then deletes the copy.
+Nothing is pending.
 
 ## Applied
 
@@ -58,3 +56,5 @@ Nothing in this folder runs automatically.
 When a job in `.github/workflows/ci.yml` is renamed, update the `main` ruleset's required status
 checks in the same change: they are matched by job name, and a pull request would otherwise wait
 on a check that never reports.
+- **`CLAUDE.cutover.md`** (7.6): replaced `CLAUDE.md`'s "### Modes" subsection at cutover
+  step 7 (2026-10-15: v2 governs in `enforce`, v1 archived) and the copy deleted.
