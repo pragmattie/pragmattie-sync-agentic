@@ -8,12 +8,7 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-- **`tiers.yaml`** (7.9): the live policy with only `objection_window` changed, to
-  `minutes: 15` and `paths: ["*"]` (every file), so every T1 pull request the reviewer approved
-  counts as signed off 15 minutes later unless a person comments `/hold`. Apply over
-  `orchestrator/policies/tiers.yaml` and delete the copy.
-- **`CLAUDE.window.md`** (7.9): the two `CLAUDE.md` sentences that match that policy ("How you
-  work" and "Overrides and `/hold`"). Apply with `tiers.yaml` and delete the copy.
+Nothing is pending.
 
 ## Applied
 
@@ -63,3 +58,6 @@ checks in the same change: they are matched by job name, and a pull request woul
 on a check that never reports.
 - **`CLAUDE.cutover.md`** (7.6): replaced `CLAUDE.md`'s "### Modes" subsection at cutover
   step 7 (2026-10-15: v2 governs in `enforce`, v1 archived) and the copy deleted.
+- **`tiers.yaml`** and **`CLAUDE.window.md`** (7.9): applied over `orchestrator/policies/tiers.yaml`
+  and `CLAUDE.md` (2026-10-15): every T1 pull request the reviewer approved counts as signed off
+  15 minutes later unless a person comments `/hold`. Both copies deleted.
