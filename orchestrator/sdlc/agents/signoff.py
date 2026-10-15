@@ -13,7 +13,7 @@ from typing import Any
 from sdlc.agents.gate import DESCRIPTION_LIMIT, Gate
 from sdlc.audit import TRIAL
 from sdlc.tables import AgentDecision, PullRequest
-from sdlc.tiers import Policy
+from sdlc.tiers import ANY_PATH, Policy
 
 COMMENT_MARKER = "<!-- pragmattie-risk-gate -->"
 HEAD_MARKER = "<!-- head:{sha} -->"
@@ -92,9 +92,10 @@ def objection_window(
     window = policy.objection_window
     if window is None or ai_approved_at is None or tier not in window.tiers:
         return None
-    paths = list(changed_paths)
-    if not paths or not all(path.startswith(window.paths) for path in paths):
-        return None
+    if ANY_PATH not in window.paths:
+        paths = list(changed_paths)
+        if not paths or not all(path.startswith(window.paths) for path in paths):
+            return None
     for comment in comments:
         body = (comment.get("body") or "").lstrip().lower()
         if body.startswith("/hold") and _is_person(comment):
@@ -122,16 +123,31 @@ def window_signoff_fields(
             "approved_at": approval.created_at.isoformat(),
             "minutes": window.minutes if window else None,
             "paths": list(window.paths) if window else [],
+            "covers": describe_paths(window.paths) if window else None,
         },
         "action_taken": {"signoff": "objection window passed with no /hold"},
     }
 
 
-def describe_window(gate: Gate, merges_at: datetime) -> str:
-    """The gate's description, saying when a pending pull request merges unless held."""
+def describe_paths(paths: Iterable[str]) -> str:
+    """What the window's paths cover, in the words people see."""
+    paths = list(paths)
+    if ANY_PATH in paths:
+        return "every file"
+    return "files under " + ", ".join(paths)
+
+
+def describe_window(gate: Gate, merges_at: datetime, paths: Iterable[str] = ()) -> str:
+    """The gate's description, saying when a pending pull request merges unless held.
+
+    The merge time is always kept; what the window covers is left out when it doesn't fit.
+    """
     if gate.would_be != "pending":
         return gate.description
     if merges_at.tzinfo is not None:
         merges_at = merges_at.astimezone(UTC)
     suffix = f" or, unless someone comments /hold, merges after {merges_at:%H:%M} UTC"
-    return (gate.description + suffix)[:DESCRIPTION_LIMIT]
+    text = gate.description[: DESCRIPTION_LIMIT - len(suffix)] + suffix
+    paths = list(paths)
+    covers = f" (window covers {describe_paths(paths)})" if paths else ""
+    return text + covers if len(text + covers) <= DESCRIPTION_LIMIT else text

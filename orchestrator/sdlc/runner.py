@@ -316,7 +316,9 @@ class Runner:
                 self._record_window(db, pr, sha, tier, approval, now)
         gate = self._evaluate(tier, decision.status == "ok", approvals)
         if merges_at is not None and now < merges_at:
-            gate = dataclasses.replace(gate, description=describe_window(gate, merges_at))
+            window_paths = self.policy.objection_window.paths
+            description = describe_window(gate, merges_at, window_paths)
+            gate = dataclasses.replace(gate, description=description)
         self._post_status(pr.number, sha, gate)
         if self.mode == "observe":
             # v1's comment is never refreshed or rendered again by v2, whatever commit it names;

@@ -8,7 +8,12 @@ Nothing in this folder runs automatically.
 
 ## Pending
 
-Nothing is pending.
+- **`tiers.yaml`** (7.9): the live policy with only `objection_window` changed, to
+  `minutes: 15` and `paths: ["*"]` (every file), so every T1 pull request the reviewer approved
+  counts as signed off 15 minutes later unless a person comments `/hold`. Apply over
+  `orchestrator/policies/tiers.yaml` and delete the copy.
+- **`CLAUDE.window.md`** (7.9): the two `CLAUDE.md` sentences that match that policy ("How you
+  work" and "Overrides and `/hold`"). Apply with `tiers.yaml` and delete the copy.
 
 ## Applied
 

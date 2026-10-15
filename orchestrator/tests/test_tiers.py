@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from sdlc.tiers import (
+    ANY_PATH,
     POLICY,
     RELEASE_DEFAULTS,
     TIER_IDS,
@@ -121,6 +122,27 @@ def test_valid_fixture_loads(tmp_path):
     assert load_policy(_write(tmp_path, VALID)).fallback_tier == "T2"
 
 
+@pytest.mark.parametrize("paths", [["*"], ["*", "apps/crm-web/"]])
+def test_the_window_accepts_every_path(tmp_path, paths):
+    data = copy.deepcopy(VALID)
+    data["objection_window"]["paths"] = paths
+
+    assert load_policy(_write(tmp_path, data)).objection_window.paths == tuple(paths)
+
+
+def test_the_proposed_policy_differs_only_in_its_objection_window():
+    if not PROPOSED.exists():
+        pytest.skip("no policy proposal is pending")
+    live = yaml.safe_load(POLICY.read_text(encoding="utf-8"))
+    proposed = yaml.safe_load(PROPOSED.read_text(encoding="utf-8"))
+
+    assert load_policy(PROPOSED).objection_window == ObjectionWindow(
+        tiers=("T1",), minutes=15, paths=(ANY_PATH,)
+    )
+    del live["objection_window"], proposed["objection_window"]
+    assert proposed == live
+
+
 def test_absent_objection_window_is_none(tmp_path):
     data = copy.deepcopy(VALID)
     del data["objection_window"]
@@ -191,6 +213,9 @@ REFUSALS = {
     "window minutes below 1": ("objection_window", _set("objection_window", "minutes", value=0)),
     "window lists T2": ("objection_window", _set("objection_window", "tiers", value=["T1", "T2"])),
     "window lists T3": ("objection_window", _set("objection_window", "tiers", value=["T3"])),
+    "window paths empty": ("objection_window", _set("objection_window", "paths", value=[])),
+    "window path empty": ("objection_window", _set("objection_window", "paths", value=[""])),
+    "window path not text": ("objection_window", _set("objection_window", "paths", value=[3])),
     # Models.
     "build empty": ("models", _set("models", "build", value="")),
     "review empty": ("models", _set("models", "review", value=" ")),
