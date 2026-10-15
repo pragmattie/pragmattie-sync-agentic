@@ -16,6 +16,7 @@ AGENT_CHECKS = ("passes_alone", "passes_after_approvals", "reports_only")
 RELEASES = ("automatic", "checks", "signoff")  # lowest demand to highest
 WHEN_KEYS = ("modules", "touches_migration", "docs_only", "touches_governance")
 NEVER_IN_WINDOW = ("T2", "T3")
+ANY_PATH = "*"  # listed in the objection window's paths, it covers every file
 # v1's release gate settings, used for any value the policy's ``release_gate`` section leaves out.
 RELEASE_DEFAULTS = {
     "environment": "production",
@@ -193,6 +194,7 @@ def _tiers(raw) -> dict[str, Tier]:
 
 
 def _window(raw) -> ObjectionWindow | None:
+    """The objection window; its paths are prefixes, or ``ANY_PATH`` alone or beside them."""
     if raw is None:
         return None
     if not isinstance(raw, dict):

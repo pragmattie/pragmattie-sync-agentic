@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -17,7 +18,7 @@ from sdlc.github_client import GitHubError
 from sdlc.runner import Runner
 from sdlc.signals.github import SUITES
 from sdlc.tables import AgentDecision, Approval, GateStatus, PullRequest
-from sdlc.tiers import load_policy
+from sdlc.tiers import ObjectionWindow, load_policy
 from tests.fakes import BOT, PERSON, WORKFLOW_BOT, FakeGitHub, FakeLLM, iso
 
 NOON = datetime(2026, 10, 6, 12, 0)
@@ -30,7 +31,11 @@ MIGRATION = ("orchestrator/migrations/versions/0009_more.py",)  # floored at T3
 
 @pytest.fixture(scope="module")
 def policy():
-    return load_policy()
+    # The front-end window is pinned so these tests hold whatever window the committed policy sets.
+    window = ObjectionWindow(
+        tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
+    )
+    return replace(load_policy(), objection_window=window)
 
 
 @pytest.fixture
@@ -356,6 +361,43 @@ def test_a_hold_stops_the_objection_window(gh, engine, policy):
     assert gh.statuses[-1]["state"] == "pending"
     assert "merges after" not in gh.statuses[-1]["description"]
     assert _rows(engine, WINDOW_AGENT) == []
+
+
+MIXED_FILES = ("apps/api/app/main.py", "orchestrator/sdlc/clock.py", "docs/operating-guide.md")
+
+
+@pytest.fixture
+def every_path(policy):
+    window = replace(policy.objection_window, minutes=15, paths=("*",))
+    return replace(policy, objection_window=window)
+
+
+def test_with_every_path_the_window_passes_after_15_minutes_on_a_mixed_pr(gh, engine, every_path):
+    gh.add_pr(1, SHA, files=MIXED_FILES, additions=T1_SIZE)
+    runner = _runner(gh, engine, every_path)
+    runner.poll_once(NOON)
+    assert gh.issue_labels[1] == ["tier:T1"]
+    _review_comment(gh, 1, SHA, at=NOON + timedelta(minutes=1))
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.statuses[-1]["state"] == "pending"
+
+    runner.poll_once(NOON + timedelta(minutes=16))
+    assert gh.statuses[-1]["state"] == "success"
+    [window] = _rows(engine, WINDOW_AGENT)
+    assert window.output["paths"] == ["*"]
+    assert window.output["covers"] == "every file"
+
+
+def test_with_every_path_the_gate_says_the_window_covers_every_file(gh, engine, every_path):
+    gh.add_pr(1, SHA, files=MIXED_FILES, additions=T1_SIZE)
+    runner = _runner(gh, engine, every_path)
+    runner.poll_once(NOON)
+    _review_comment(gh, 1, SHA, at=NOON + timedelta(minutes=1))
+    runner.poll_once(NOON + timedelta(minutes=2))
+    assert gh.statuses[-1]["description"] == (
+        "T1: waiting for human sign-off or, unless someone comments /hold, merges after 12:16 UTC"
+        " (window covers every file)"
+    )
 
 
 def test_a_merged_pr_is_collected_once_more_and_stored_as_merged(gh, engine, policy):

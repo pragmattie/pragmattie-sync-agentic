@@ -9,15 +9,20 @@ from sdlc.agents.signoff import (
     ai_approval,
     approved_on_github,
     boxes,
+    describe_paths,
     describe_window,
     objection_window,
     ticked,
     window_signoff_fields,
 )
 from sdlc.tables import AgentDecision, PullRequest
-from sdlc.tiers import load_policy
+from sdlc.tiers import ObjectionWindow, load_policy
 
-POLICY = load_policy()
+# The front-end window is pinned so these tests hold whatever window the committed policy sets.
+FRONT_END = ObjectionWindow(
+    tiers=("T1",), minutes=60, paths=("apps/crm-web/", "apps/insights-web/")
+)
+POLICY = replace(load_policy(), objection_window=FRONT_END)
 SHA, OLD_SHA = "a" * 40, "b" * 40
 APPROVED_AT = datetime(2026, 10, 6, 9, 15)
 
@@ -195,6 +200,52 @@ def test_no_window_without_an_approval_changes_or_a_policy_window():
     assert objection_window(no_window, "T1", ["apps/crm-web/a.vue"], APPROVED_AT, []) is None
 
 
+# Every path: "*" in the window's paths
+EVERY_PATH = replace(
+    POLICY, objection_window=replace(POLICY.objection_window, minutes=15, paths=("*",))
+)
+MIXED = ["apps/api/app/main.py", "orchestrator/sdlc/runner.py", "docs/operating.md"]
+
+
+def test_with_every_path_a_t1_pr_touching_anything_qualifies_15_minutes_after_approval():
+    assert objection_window(EVERY_PATH, "T1", MIXED, APPROVED_AT, []) == APPROVED_AT + timedelta(
+        minutes=15
+    )
+
+
+def test_with_every_path_a_pr_with_no_changed_files_qualifies():
+    assert objection_window(EVERY_PATH, "T1", [], APPROVED_AT, []) == APPROVED_AT + timedelta(
+        minutes=15
+    )
+
+
+def test_with_every_path_a_persons_hold_still_stops_the_window():
+    comments = [_comment("/hold please")]
+
+    assert objection_window(EVERY_PATH, "T1", MIXED, APPROVED_AT, comments) is None
+
+
+@pytest.mark.parametrize("tier", ["T2", "T3"])
+def test_with_every_path_t2_and_t3_never_get_a_window(tier):
+    assert objection_window(EVERY_PATH, tier, MIXED, APPROVED_AT, []) is None
+
+
+def test_describe_paths_says_every_file_for_the_star():
+    assert describe_paths(["*"]) == "every file"
+    assert describe_paths(["apps/crm-web/", "*"]) == "every file"
+    assert describe_paths(["apps/crm-web/"]) == "files under apps/crm-web/"
+
+
+def test_the_audit_row_keeps_the_raw_paths_and_says_every_file():
+    pr = PullRequest(id=7, source="github", number=170, title="Tidy the API")
+
+    output = window_signoff_fields(pr, SHA, "T1", _reviewer_row("approve"), EVERY_PATH)["output"]
+
+    assert output["paths"] == ["*"]
+    assert output["covers"] == "every file"
+    assert output["minutes"] == 15
+
+
 def test_window_signoff_fields_shape():
     pr = PullRequest(id=7, source="github", number=170, title="Tidy the leads table")
     approval = _reviewer_row("approve", row_id=42)
@@ -216,6 +267,7 @@ def test_window_signoff_fields_shape():
             "approved_at": "2026-10-06T09:15:00",
             "minutes": 60,
             "paths": ["apps/crm-web/", "apps/insights-web/"],
+            "covers": "files under apps/crm-web/, apps/insights-web/",
         },
         "action_taken": {"signoff": "objection window passed with no /hold"},
     }
@@ -230,6 +282,28 @@ def test_describe_window_appends_the_merge_time_to_a_pending_description():
     assert text == (
         "T1: waiting for human sign-off or, unless someone comments /hold, merges after 10:15 UTC"
     )
+
+
+def test_describe_window_says_the_window_covers_every_file():
+    gate = evaluate(POLICY, "T1", ok=True, approvals=Approvals(), mode="enforce")
+
+    text = describe_window(gate, datetime(2026, 10, 6, 9, 30), ["*"])
+
+    assert text == (
+        "T1: waiting for human sign-off or, unless someone comments /hold, merges after 09:30 UTC"
+        " (window covers every file)"
+    )
+
+
+def test_describe_window_drops_the_coverage_rather_than_the_merge_time():
+    gate = evaluate(POLICY, "T1", ok=True, approvals=Approvals(), mode="enforce")
+
+    front_end = describe_window(gate, APPROVED_AT, ["apps/crm-web/", "apps/insights-web/"])
+    assert front_end == describe_window(gate, APPROVED_AT)
+    long = replace(gate, description="T1: " + "x" * 200)
+    text = describe_window(long, APPROVED_AT, ["*"])
+    assert len(text) == 140
+    assert text.endswith("merges after 09:15 UTC")
 
 
 def test_describe_window_shows_the_time_in_utc():
