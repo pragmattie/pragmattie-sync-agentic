@@ -131,6 +131,33 @@ def test_a_server_error_without_json_still_raises():
         _client(handler).get("/x")
 
 
+def test_own_login_asks_user_once_and_caches_it():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"login": "geoffsmattie", "type": "User"})
+
+    client = _client(handler)
+    assert client.own_login() == "geoffsmattie"
+    assert client.own_login() == "geoffsmattie"
+    assert seen == ["/user"]
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+def test_own_login_is_none_when_user_fails_and_is_not_asked_again(status):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(status, json={"message": "Resource not accessible by integration"})
+
+    client = _client(handler)
+    assert client.own_login() is None
+    assert client.own_login() is None
+    assert seen == ["/user"]
+
+
 def test_parse_time():
     assert parse_time("2026-09-01T10:15:00Z") == datetime(2026, 9, 1, 10, 15)
     assert parse_time("2026-09-01T12:15:00+02:00") == datetime(2026, 9, 1, 10, 15)

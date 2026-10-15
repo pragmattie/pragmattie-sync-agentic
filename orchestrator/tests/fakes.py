@@ -1,7 +1,7 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
+``paginate``, ``own_login``) over in-memory pull requests, issues, comments, reviews, statuses, labels,
 GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
 statuses, branches, environments and files on the default branch, and logs every request it is
 sent. ``FakeLLM`` answers with a fixed adjustment or raises a given error.
@@ -52,6 +52,10 @@ class FakeGitHub:
         self.sent = 0
         self.not_modified = 0
         self._next_id = 1000
+        self.login: str | None = None  # the token's login from /user; unset is an app token (404)
+        self.poster: dict = BOT  # who the comments the client posts come from
+        self._own_login = None
+        self._own_looked_up = False
 
     # Test helpers
 
@@ -192,9 +196,20 @@ class FakeGitHub:
     def close_issue(self, number: int, at: datetime) -> None:
         self.issues[number].update(state="closed", closed_at=iso(at))
 
+    def as_person(self, login: str = "geoffsmattie") -> dict:
+        """The token belongs to a person: /user answers and comments are posted as them."""
+        self.login = login
+        self.poster = {"login": login, "type": "User"}
+        return self.poster
+
     def risk_comment(self, number: int) -> dict | None:
         return next(
-            (c for c in self.comments if c["number"] == number and c["user"]["type"] == "Bot"),
+            (
+                c
+                for c in self.comments
+                if c["number"] == number
+                and (c["user"]["type"] == "Bot" or c["user"]["login"] == self.poster["login"])
+            ),
             None,
         )
 
@@ -209,6 +224,15 @@ class FakeGitHub:
     def rate_limited(self) -> bool:
         return self.limited_until is not None
 
+    def own_login(self) -> str | None:
+        if not self._own_looked_up:
+            self._own_looked_up = True
+            try:
+                self._own_login = self.get("/user").get("login")
+            except Exception:
+                self._own_login = None
+        return self._own_login
+
     def _log(self, method: str, path: str) -> str:
         path = path.replace("{repo}", REPO).removeprefix(f"/repos/{REPO}")
         self.requests.append((method, path))
@@ -221,6 +245,8 @@ class FakeGitHub:
         path = self._log("GET", path)
         if path == "":
             return {"full_name": REPO, "default_branch": self.default_branch}
+        if path == "/user" and self.login is not None:
+            return {"login": self.login, "type": "User"}
         if match := re.fullmatch(r"/pulls/(\d+)", path):
             return self._pr(int(match.group(1)))
         if path == "/pulls":  # one page, newest update first
@@ -314,7 +340,7 @@ class FakeGitHub:
     def post(self, path: str, body: dict):
         path = self._log("POST", path)
         if match := re.fullmatch(r"/issues/(\d+)/comments", path):
-            return self.comment(int(match.group(1)), body["body"], user=BOT)
+            return self.comment(int(match.group(1)), body["body"], user=self.poster)
         if match := re.fullmatch(r"/statuses/(\w+)", path):
             self.statuses.append({"sha": match.group(1), **body})
             return body

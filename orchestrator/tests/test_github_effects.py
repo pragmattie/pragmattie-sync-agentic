@@ -73,6 +73,47 @@ def test_find_comment_ignores_a_persons_copy_of_the_marker(gh):
     assert effects.find_comment(5, MARKER)["id"] == mine["id"]
 
 
+def test_find_comment_accepts_v2s_own_login_when_its_token_is_a_persons(gh):
+    me = gh.as_person("geoffsmattie")
+    effects = Effects(gh, "enforce")
+    gh.comment(5, f"{MARKER}\n- [x] forged", user=PERSON)
+    mine = gh.comment(5, f"{MARKER}\nreal", user=me)
+    assert effects.find_comment(5, MARKER)["id"] == mine["id"]
+
+
+def test_a_marker_comment_by_another_user_is_never_edited(gh):
+    gh.as_person("geoffsmattie")
+    theirs = gh.comment(5, f"{MARKER}\nforged", user=PERSON)
+    effects = Effects(gh, "enforce")
+    assert effects.find_comment(5, MARKER) is None
+    effects.upsert_comment(5, MARKER, f"{MARKER}\nmine")
+    assert theirs["body"] == f"{MARKER}\nforged"
+    assert [w[0] for w in gh.writes()] == ["POST"]
+
+
+def test_the_oldest_of_several_copies_is_the_one_edited(gh):
+    me = gh.as_person("geoffsmattie")
+    first, second, third = (gh.comment(5, f"{MARKER}\ncopy {n}", user=me) for n in (1, 2, 3))
+    effects = Effects(gh, "enforce")
+    effects.upsert_comment(5, MARKER, f"{MARKER}\nnew")
+    assert [first["body"], second["body"], third["body"]] == [
+        f"{MARKER}\nnew",
+        f"{MARKER}\ncopy 2",
+        f"{MARKER}\ncopy 3",
+    ]
+    assert gh.writes() == [("PATCH", f"/issues/comments/{first['id']}")]
+
+
+def test_with_user_failing_bots_are_found_people_are_not_and_user_is_asked_once(gh):
+    gh.comment(5, f"{MARKER}\nperson", user=PERSON)
+    effects = Effects(gh, "enforce")
+    assert effects.find_comment(5, MARKER) is None
+    assert effects.find_comment(5, MARKER) is None
+    bot = gh.comment(5, f"{MARKER}\nbot", user=BOT)
+    assert effects.find_comment(5, MARKER)["id"] == bot["id"]
+    assert gh.requests.count(("GET", "/user")) == 1
+
+
 def test_set_status_cuts_the_description_to_140(gh):
     effects = Effects(gh, "enforce")
     assert effects.set_status(SHA, "pending", "x" * 200) == {"done": "risk-gate pending"}
