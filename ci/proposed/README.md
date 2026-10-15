@@ -10,6 +10,11 @@ Nothing in this folder runs automatically.
 
 - **`CLAUDE.modes.md`** (7.1): the new "### Modes" subsection of `CLAUDE.md`'s "## Governance"
   section, adding `observe`. A person replaces the subsection with it and deletes the copy.
+- **`ci.yml`** (7.5): the job **"Migrations on MySQL"** (name unchanged) also runs
+  `tests/test_accuracy.py` and `tests/test_signals_github.py` in its `-k mysql` step: the
+  accuracy report's real counts are ints on MySQL, and two sessions storing the same issue at
+  once leave one row. One line changed; a person applies it over `.github/workflows/ci.yml` and
+  deletes the copy. No required check changes.
 
 ## Applied
 
