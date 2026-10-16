@@ -57,12 +57,49 @@ describe("HomeView", () => {
       href: tile.attributes("href"),
     }));
     expect(shown).toEqual([
-      { text: "Open leads1,234", href: "/leads" },
-      { text: "Open deals56", href: "/pipeline" },
-      { text: "Open pipeline$12.5M", href: "/pipeline" },
-      { text: "Won in 2026-Q4$1.2M", href: "/forecast" },
+      { text: "Open leads1,234View leads", href: "/leads" },
+      { text: "Open deals56View pipeline", href: "/pipeline" },
+      { text: "Open pipeline$12.5MView pipeline", href: "/pipeline" },
+      { text: "Won in 2026-Q4$1.2MView forecast", href: "/forecast" },
     ]);
     expect(wrapper.find("[data-test='load-error']").exists()).toBe(false);
+  });
+
+  it("shows each tile can be opened, with a chevron and a hover lift", async () => {
+    getJson.mockResolvedValue(summary);
+    const wrapper = await mountHome();
+
+    const tiles = wrapper.findAll("[data-test^='tile-']");
+    const views = tiles.map((tile) => tile.find("[data-test='view-line']"));
+    expect(views.map((view) => view.text())).toEqual([
+      "View leads",
+      "View pipeline",
+      "View pipeline",
+      "View forecast",
+    ]);
+    for (const view of views) {
+      expect(view.classes()).toEqual(expect.arrayContaining(["text-secondary", "text-body-2"]));
+      expect(view.find(".mdi-chevron-right").exists()).toBe(true);
+    }
+    for (const tile of tiles) {
+      expect(tile.element.tagName).toBe("A");
+      expect(tile.classes()).toContain("v-card--hover");
+    }
+  });
+
+  it("gives each tile an accessible name with its label, value and destination", async () => {
+    getJson.mockResolvedValue(summary);
+    const wrapper = await mountHome();
+
+    const names = wrapper
+      .findAll("[data-test^='tile-']")
+      .map((tile) => tile.attributes("aria-label"));
+    expect(names).toEqual([
+      "Open leads: 1,234. View leads",
+      "Open deals: 56. View pipeline",
+      "Open pipeline: $12.5M. View pipeline",
+      "Won in 2026-Q4: $1.2M. View forecast",
+    ]);
   });
 
   it("lays the tiles out four across on desktop, two on tablets and one on phones", async () => {

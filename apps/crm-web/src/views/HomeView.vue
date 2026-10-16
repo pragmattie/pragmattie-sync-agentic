@@ -22,6 +22,7 @@ const tiles = computed(() => {
       value: count.format(s.open_leads),
       icon: "mdi-account-search-outline",
       to: "/leads",
+      view: "View leads",
     },
     {
       key: "open-deals",
@@ -29,6 +30,7 @@ const tiles = computed(() => {
       value: count.format(s.open_deals),
       icon: "mdi-handshake-outline",
       to: "/pipeline",
+      view: "View pipeline",
     },
     {
       key: "open-pipeline",
@@ -36,6 +38,7 @@ const tiles = computed(() => {
       value: money(s.open_pipeline),
       icon: "mdi-chart-timeline-variant",
       to: "/pipeline",
+      view: "View pipeline",
     },
     {
       key: "won",
@@ -43,6 +46,7 @@ const tiles = computed(() => {
       value: money(s.won_this_quarter),
       icon: "mdi-trophy-outline",
       to: "/forecast",
+      view: "View forecast",
     },
   ];
 });
@@ -72,16 +76,41 @@ onMounted(async () => {
 
     <v-row v-if="summary">
       <v-col v-for="tile in tiles" :key="tile.key" cols="12" sm="6" md="3">
-        <v-card :to="tile.to" :data-test="`tile-${tile.key}`" class="h-100">
-          <v-card-text class="d-flex align-center ga-4">
+        <v-card
+          :to="tile.to"
+          :data-test="`tile-${tile.key}`"
+          :aria-label="`${tile.label}: ${tile.value}. ${tile.view}`"
+          hover
+          class="home-tile h-100 d-flex flex-column"
+        >
+          <v-card-text class="d-flex align-center ga-4 flex-grow-1">
             <v-icon :icon="tile.icon" size="40" color="secondary" />
             <div>
               <div class="text-subtitle-1 text-medium-emphasis">{{ tile.label }}</div>
               <div class="text-h4 font-weight-bold">{{ tile.value }}</div>
             </div>
           </v-card-text>
+          <div
+            class="home-tile-view d-flex align-center text-body-2 text-secondary"
+            data-test="view-line"
+          >
+            {{ tile.view }}
+            <v-icon icon="mdi-chevron-right" size="small" />
+          </div>
         </v-card>
       </v-col>
     </v-row>
   </v-container>
 </template>
+
+<style scoped>
+/* Line the "View …" text up with the label: card padding + icon + gap. */
+.home-tile-view {
+  padding: 0 16px 16px 72px;
+}
+
+.home-tile:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-secondary));
+  outline-offset: 2px;
+}
+</style>
