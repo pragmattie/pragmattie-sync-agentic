@@ -11,19 +11,30 @@
     check            The pre-demo check: containers and web apps from the host, then the
                      checklist inside the orchestrator. Exit code 1 if anything failed.
     check -Smoke     The same, plus one real, paid call per agent (about 5 cents).
+    issue            List the live demo's changes, each fresh or used.
+    issue NAME       Open the demo issue for change NAME, fully set up: milestone and labels
+                     so the builder starts at once, at T1, with no plan to approve.
+    issue NAME -DryRun
+                     Print that issue (title, milestone, labels, body); nothing is created.
 
 .EXAMPLE
     ./scripts/demo.ps1 reset
     ./scripts/demo.ps1 reset -Apply
     ./scripts/demo.ps1 check
+    ./scripts/demo.ps1 issue
+    ./scripts/demo.ps1 issue account-contact-count -DryRun
+    ./scripts/demo.ps1 issue account-contact-count
 #>
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet("reset", "baseline", "check")]
+    [ValidateSet("reset", "baseline", "check", "issue")]
     [string]$Command,
+    [Parameter(Position = 1)]
+    [string]$Name,
     [switch]$Apply,
     [switch]$Force,
-    [switch]$Smoke
+    [switch]$Smoke,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -170,11 +181,30 @@ function Invoke-Baseline {
     Invoke-Checked "Recording the baseline" $arguments
 }
 
+function Invoke-Issue {
+    Assert-Running @("orchestrator")
+    $arguments = @("compose", "exec", "-T", "orchestrator", "python", "-m", "sdlc.demo_issue")
+    if ($Name) {
+        $arguments += @("open", $Name)
+        if ($DryRun) {
+            $arguments += "--dry-run"
+        }
+    }
+    else {
+        $arguments += "list"
+    }
+    & docker @arguments
+    if ($LASTEXITCODE -ne 0) {
+        exit 1
+    }
+}
+
 try {
     switch ($Command) {
         "reset" { Invoke-Reset }
         "baseline" { Invoke-Baseline }
         "check" { Invoke-Check }
+        "issue" { Invoke-Issue }
     }
 }
 catch {
