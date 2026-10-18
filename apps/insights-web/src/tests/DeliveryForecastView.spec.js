@@ -190,6 +190,40 @@ describe("DeliveryForecastView", () => {
     );
   });
 
+  it("shows a finished milestone as done on the day it finished, not a forecast", async () => {
+    const done = { remaining_items: 0, p50: "2026-10-16", p85: "2026-10-16" };
+    const epics = [
+      epic(),
+      epic({ id: 11, subject: "M8", label: "Polish (M8)", ...done }),
+      epic({ id: 12, subject: "M9", label: "Empty (M9)", remaining_items: 0, p50: null, p85: null }),
+      epic({ id: 13, subject: "M10", label: "Waiting (M10)", remaining_items: 0, ahead_items: 3 }),
+    ];
+    vi.spyOn(api, "getJson").mockResolvedValue(feed({ epics }));
+
+    const wrapper = await mountView();
+
+    const [open, finished, empty, waiting] = wrapper.findAll("[data-test='real-card']");
+    expect(open.find("[data-test='items-left']").text()).toBe("6 items left");
+    expect(open.find("[data-test='p50']").text()).toBe("Oct 20");
+    expect(open.find("[data-test='finished']").exists()).toBe(false);
+
+    expect(finished.find("[data-test='items-left']").text()).toBe("Done");
+    expect(finished.text()).toContain("Finished");
+    expect(finished.find("[data-test='finished']").text()).toBe("Oct 16");
+    expect(finished.find("[data-test='p50']").exists()).toBe(false);
+    expect(finished.find("[data-test='p85']").exists()).toBe(false);
+    for (const kept of ["target", "moved", "pace"]) {
+      expect(finished.find(`[data-test='${kept}']`).exists()).toBe(true);
+    }
+
+    expect(empty.find("[data-test='items-left']").text()).toBe("Done");
+    expect(empty.find("[data-test='finished']").text()).toBe("No items yet");
+
+    expect(waiting.find("[data-test='items-left']").text()).toBe("0 items left");
+    expect(waiting.find("[data-test='p50']").text()).toBe("Oct 20");
+    expect(waiting.find("[data-test='finished']").exists()).toBe(false);
+  });
+
   it("shows a card's target chance, or No target set", async () => {
     vi.spyOn(api, "getJson").mockResolvedValue(feed());
 
