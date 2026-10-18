@@ -3,9 +3,9 @@
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
 ``paginate``, ``own_login``) over in-memory pull requests, issues, comments, reviews, statuses,
 labels, GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
-statuses, branches, environments and files on the default branch, and logs every request it is
-sent. Its comments come from a bot unless ``as_person`` gives the token to a person. ``FakeLLM``
-answers with a fixed adjustment or raises a given error.
+statuses, branches, milestones, environments and files on the default branch, and logs every
+request it is sent. Its comments come from a bot unless ``as_person`` gives the token to a person.
+``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
 import re
@@ -47,6 +47,7 @@ class FakeGitHub:
         self.contents: set[str] = set()  # file paths on the default branch
         self.default_branch = "main"
         self.branches: list[str] = ["main"]
+        self.milestones: list[dict] = []  # each with its number, title and state
         self.requests: list[tuple[str, str]] = []
         self.fail_writes: set[str] = set()  # methods that raise, e.g. {"POST"}
         self.limited_until = None
@@ -320,6 +321,9 @@ class FakeGitHub:
             ]
         if path == "/branches":
             return [{"name": name} for name in self.branches]
+        if path == "/milestones":
+            state = params.get("state", "open")
+            return [dict(m) for m in self.milestones if state in ("all", m["state"])]
         if path == "/labels":
             return [{"name": name, "color": colour} for name, colour in self.repo_labels.items()]
         if path == "/issues/comments":
@@ -347,6 +351,12 @@ class FakeGitHub:
 
     def post(self, path: str, body: dict):
         path = self._log("POST", path)
+        if path == "/issues":
+            number = max([*self.issues, *self.prs, 0]) + 1
+            self.add_issue(number, body["title"], body.get("body"), labels=body.get("labels", ()))
+            self.issues[number]["milestone"] = body.get("milestone")
+            url = f"https://github.com/{REPO}/issues/{number}"
+            return {**self._issue(number), "html_url": url}
         if match := re.fullmatch(r"/issues/(\d+)/comments", path):
             return self.comment(int(match.group(1)), body["body"], user=self.poster)
         if match := re.fullmatch(r"/statuses/(\w+)", path):
