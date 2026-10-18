@@ -478,5 +478,61 @@ def test_smoke_with_nothing_real_to_try(engine, baseline):
     checks = _run(engine, gh, empty, smoke=True, run=lambda args: "Status: ok")
 
     found = _by_name(checks)
-    for name in ("Smoke: PR risk", "Smoke: triage"):
-        assert found[name] == Check(name, FAIL, "nothing real to try it on: run the reset first.")
+    pr_risk = Check("Smoke: PR risk", FAIL, "no merged non-demo PR to try it on.")
+    triage = Check("Smoke: triage", FAIL, "no non-demo issue to try it on, open or closed.")
+    assert found["Smoke: PR risk"] == pr_risk
+    assert found["Smoke: triage"] == triage
+
+
+def _triage_trial(engine, gh, baseline) -> tuple[list[list[str]], Check]:
+    calls = []
+
+    def run(args):
+        calls.append(args)
+        return "Status: ok"
+
+    found = _by_name(_run(engine, gh, baseline, smoke=True, run=run))
+    return [call for call in calls if call[0] == "sdlc.issue_runner"], found["Smoke: triage"]
+
+
+def test_smoke_triage_falls_back_to_the_most_recently_closed_real_issue(engine, gh, baseline):
+    gh.add_issue(3, "Export the forecast")
+    gh.close_issue(1, datetime(2026, 10, 9, 12, 0))
+    gh.close_issue(2, datetime(2026, 10, 11, 12, 0))
+    gh.close_issue(3, datetime(2026, 10, 10, 12, 0))
+
+    calls, triage = _triage_trial(engine, gh, baseline)
+
+    assert calls == [["sdlc.issue_runner", "try", "2", "--yes"]]
+    assert triage == Check("Smoke: triage", PASS, "#2 (closed) scored end to end")
+    assert gh.writes() == []
+
+
+def test_smoke_triage_prefers_the_lowest_open_real_issue_to_any_closed_one(engine, gh, baseline):
+    gh.add_issue(3, "Export the forecast")
+    gh.close_issue(1, datetime(2026, 10, 11, 12, 0))
+
+    calls, triage = _triage_trial(engine, gh, baseline)
+
+    assert calls == [["sdlc.issue_runner", "try", "2", "--yes"]]
+    assert triage == Check("Smoke: triage", PASS, "#2 scored end to end")
+    assert gh.writes() == []
+
+
+@pytest.mark.parametrize("state", ["open", "closed"])
+def test_smoke_triage_never_picks_demo_or_incident_issues_or_prs(engine, gh, baseline, state):
+    gh.close_issue(1, datetime(2026, 10, 1, 12, 0))
+    gh.close_issue(2, datetime(2026, 10, 2, 12, 0))
+    gh.add_issue(3, "Demo issue", labels=["demo"])
+    gh.add_issue(4, "Payments are down", labels=["incident"])
+    gh.add_pr(5, "sha5")
+    if state == "closed":
+        for number in (3, 4):
+            gh.close_issue(number, datetime(2026, 10, 11, 12, 0))
+        gh.merge(5, datetime(2026, 10, 11, 12, 0), sha="merge5")
+
+    calls, triage = _triage_trial(engine, gh, baseline)
+
+    assert calls == [["sdlc.issue_runner", "try", "2", "--yes"]]
+    assert triage == Check("Smoke: triage", PASS, "#2 (closed) scored end to end")
+    assert gh.writes() == []

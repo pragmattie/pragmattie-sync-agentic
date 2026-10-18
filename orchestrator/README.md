@@ -229,7 +229,8 @@ count) and `ORCHESTRATOR_MODE` (since cutover only enforce passes; off, observe 
 demo." or "Not ready: {n} check(s) failed." and exits 1 on a failure; a warning alone is ready. The
 container can't see the CRM's migrations, so `--crm-head` takes its head; run outside the
 container, the check reads `apps/api/migrations` itself. `--smoke --yes` also runs the runners'
-`try` on the newest merged real PR and the lowest open real issue: one real, paid call each (about
+`try` on the newest merged real PR and the lowest open real issue (or, with none open, the most
+recently closed one; never an `incident`): one real, paid call each (about
 5 cents), a trial row each, nothing written to GitHub. `scripts/demo.ps1 check [-Smoke]` first
 checks from the host that the `db`, `api`, `orchestrator`, `crm-web` and `insights-web` containers
 are running and that both web apps answer on `CRM_WEB_PORT` and `INSIGHTS_WEB_PORT` (5173 and 5174
