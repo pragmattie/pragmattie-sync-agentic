@@ -538,7 +538,8 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
     ahead of it (``items_ahead``), with the seed every real milestone shares that day, so a later
     milestone is never forecast earlier than one before it. Its finishes then move later by its
     ``gate_days``, ``gate_boundaries × gate_gap`` working days; a milestone with nothing left
-    to build, here or ahead, is done and waits for no gate.
+    to build, here or ahead, is done: it is not simulated, and its P50 and P85 are the day its
+    last real story closed (``None`` with no dated closed story), whatever ``today`` is.
     """
     milestone = real_epic(db, epic)
     story_source = "github" if milestone else "synthetic"
@@ -569,10 +570,22 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         seed = epic_seed(epic, today)
         gate_days = 0
     total = ahead + len(items)
-    results = shift(simulate(total, samples, start=today, runs=runs, seed=seed), gate_days)
-    on_time = None
-    if end_date is not None and runs and (any(samples) or not total):
-        on_time = on_time_share(results, end_date, total)
+    if milestone and not total:
+        last_closed = db.scalar(
+            select(func.max(Issue.closed_at)).where(*is_story, Issue.state == "closed")
+        )
+        finished = last_closed.date() if last_closed is not None else None
+        p50 = p85 = finished
+        on_time = None
+        if end_date is not None and finished is not None:
+            on_time = 1.0 if finished <= end_date else 0.0
+    else:
+        results = shift(simulate(total, samples, start=today, runs=runs, seed=seed), gate_days)
+        p50 = percentile_date(results, 0.5)
+        p85 = percentile_date(results, 0.85)
+        on_time = None
+        if end_date is not None and runs and (any(samples) or not total):
+            on_time = on_time_share(results, end_date, total)
     return EpicForecast(
         epic=epic,
         source=source,
@@ -582,8 +595,8 @@ def epic_forecast(db: Session, today: date, epic: str, *, runs: int = RUNS) -> E
         remaining_points=sum(item.estimate_points or 0 for item in items),
         closed_items=closed,
         end_date=end_date,
-        p50=percentile_date(results, 0.5),
-        p85=percentile_date(results, 0.85),
+        p50=p50,
+        p85=p85,
         on_time_probability=on_time,
         throughput_mean=round(sum(samples) / len(samples), 2) if samples else 0.0,
         history_days=history_days,
@@ -600,6 +613,11 @@ def _short(day: date | None) -> str:
 
 def describe_epic(forecast: EpicForecast) -> str:
     """One sentence summarising ``forecast``."""
+    done = forecast.remaining_items == 0 and forecast.ahead_items == 0
+    if forecast.source != "synthetic" and done:
+        if forecast.p50 is None:
+            return f"{epic_label(forecast.epic)}: no items yet."
+        return f"{epic_label(forecast.epic)}: done, finished {_short(forecast.p50)}."
     target = ""
     if forecast.end_date is not None and forecast.on_time_probability is None:
         target = f"; its target is {_short(forecast.end_date)}"
