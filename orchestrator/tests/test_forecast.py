@@ -578,7 +578,7 @@ def test_a_finished_milestone_due_on_a_weekend_is_certain(session, epics):
     result = epic_forecast(session, date(2026, 10, 10), MILESTONE, runs=100)
     assert result.remaining_items == 0
     assert result.on_time_probability == 1.0
-    assert result.p50 == result.p85 == date(2026, 10, 12)
+    assert result.p50 == result.p85 == date(2026, 10, 9)  # the day it finished
 
 
 def test_a_real_epic_with_no_real_closure_has_no_dates(session, epics):
@@ -889,12 +889,59 @@ def test_a_measured_gap_multiplies_by_the_boundaries(session, epics):
     assert "plus 2 working day(s) for gates and specs" in describe_epic(result)
 
 
-def test_a_milestone_with_nothing_left_waits_for_no_gate(session, epics):
-    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+def _finish(session, *closed_at):
+    """Close the milestone's stories at ``closed_at`` in turn (``None`` leaves it undated)."""
+    stories = session.scalars(select(Issue).where(Issue.epic == MILESTONE).order_by(Issue.id))
+    for issue, when in zip(stories, closed_at, strict=True):
         issue.state = "closed"
+        issue.closed_at = when
+    session.flush()
+
+
+def test_a_milestone_with_nothing_left_waits_for_no_gate(session, epics):
+    _finish(session, datetime(2026, 10, 2, 9), datetime(2026, 10, 6, 14), None)
+    result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=50)
+    assert result.gate_days == 0 and result.p50 == date(2026, 10, 6)
+
+
+FRIDAY = date(2026, 10, 9)
+
+
+@pytest.mark.parametrize("today", [date(2026, 10, 10), date(2026, 10, 13)], ids=["sat", "tue"])
+def test_a_finished_milestone_shows_the_day_it_finished(session, epics, today):
+    _finish(
+        session, datetime(2026, 10, 8, 10), datetime(2026, 10, 9, 11), datetime(2026, 10, 9, 16)
+    )
+    result = epic_forecast(session, today, MILESTONE, runs=50)
+    assert result.p50 == result.p85 == FRIDAY
+    assert result.gate_days == 0 and result.as_of == today
+    assert describe_epic(result) == "Delivery forecasting (M5): done, finished Oct 9."
+
+
+def test_a_finished_milestone_is_on_time_only_by_its_due_date(session, epics):
+    _finish(session, *[datetime(2026, 10, 9, 11)] * 3)
+    epics.due_on = date(2026, 10, 12)
+    session.flush()
+    assert epic_forecast(session, date(2026, 10, 13), MILESTONE).on_time_probability == 1.0
+    epics.due_on = FRIDAY
+    session.flush()
+    assert epic_forecast(session, date(2026, 10, 13), MILESTONE).on_time_probability == 1.0
+    epics.due_on = date(2026, 10, 8)
+    session.flush()
+    assert epic_forecast(session, date(2026, 10, 13), MILESTONE).on_time_probability == 0.0
+    epics.due_on = None
+    session.flush()
+    assert epic_forecast(session, date(2026, 10, 13), MILESTONE).on_time_probability is None
+
+
+def test_an_empty_milestone_has_no_dates(session, epics):
+    for issue in session.scalars(select(Issue).where(Issue.epic == MILESTONE)):
+        session.delete(issue)
     session.flush()
     result = epic_forecast(session, WEDNESDAY, MILESTONE, runs=50)
-    assert result.gate_days == 0 and result.p50 == WEDNESDAY
+    assert (result.remaining_items, result.closed_items, result.gate_days) == (0, 0, 0)
+    assert result.p50 is None and result.p85 is None and result.on_time_probability is None
+    assert describe_epic(result) == "Delivery forecasting (M5): no items yet."
 
 
 def _epic(**values):
@@ -944,6 +991,17 @@ def test_describe_epic_names_the_working_days_for_gates_and_specs():
         "day(s) for gates and specs; P50 Oct 14, "
     )
     assert "gates" not in describe_epic(_epic(gate_days=0))
+
+
+def test_describe_epic_for_a_finished_real_milestone():
+    done = _epic(remaining_items=0, remaining_real=0, p50=date(2026, 10, 9), p85=date(2026, 10, 9))
+    assert describe_epic(done) == "Delivery forecasting (M5): done, finished Oct 9."
+    assert describe_epic(_epic(remaining_items=0, remaining_real=0, p50=None, p85=None)) == (
+        "Delivery forecasting (M5): no items yet."
+    )
+    # Items still ahead: not done, forecast as before.
+    waiting = _epic(remaining_items=0, remaining_real=0, ahead_items=3)
+    assert describe_epic(waiting).startswith("Delivery forecasting (M5): 0 items left, after 3 ")
 
 
 def test_describe_epic_for_a_simulated_epic():

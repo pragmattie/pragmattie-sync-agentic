@@ -49,6 +49,11 @@ let pollTimer = null;
 // One pending flash per card: its end timer, and the frame that restarts it.
 const flashTimers = new Map();
 
+// A real milestone with nothing left, here or ahead, shows the day it finished.
+function isDone(epic) {
+  return epic.remaining_items === 0 && epic.ahead_items === 0;
+}
+
 function setFlashing(subject, on) {
   const next = new Set(flashing.value);
   if (on) next.add(subject);
@@ -171,7 +176,9 @@ const trailOptions = {
             data-test="real-card"
           >
             <v-card-title data-test="card-label">{{ epic.label }}</v-card-title>
-            <v-card-subtitle>{{ epic.remaining_items }} items left</v-card-subtitle>
+            <v-card-subtitle data-test="items-left">
+              {{ isDone(epic) ? "Done" : `${epic.remaining_items} items left` }}
+            </v-card-subtitle>
             <v-card-subtitle v-if="epic.ahead_items > 0" data-test="ahead">
               After {{ epic.ahead_items }} items in earlier milestones
             </v-card-subtitle>
@@ -182,7 +189,13 @@ const trailOptions = {
             <v-card-text>
               <v-row>
                 <v-col cols="12" md="6">
-                  <div class="d-flex ga-6 mb-2">
+                  <div v-if="isDone(epic)" class="mb-2">
+                    <div class="text-body-2 text-medium-emphasis">Finished</div>
+                    <div class="text-h6" data-test="finished">
+                      {{ epic.p50 ? formatDay(epic.p50) : "No items yet" }}
+                    </div>
+                  </div>
+                  <div v-else class="d-flex ga-6 mb-2">
                     <div>
                       <div class="text-body-2 text-medium-emphasis">P50</div>
                       <div class="text-h6" data-test="p50">{{ formatDay(epic.p50) }}</div>
