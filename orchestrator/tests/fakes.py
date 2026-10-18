@@ -84,6 +84,7 @@ class FakeGitHub:
             "state": "open",
             "draft": draft,
             "head": {"sha": sha, "ref": branch, "repo": {"full_name": head_repo}},
+            "base": {"ref": "main", "repo": {"full_name": REPO}},
             "labels": [],
             "user": {"login": "ada-dev", "type": "User"},
             "created_at": iso(created_at),

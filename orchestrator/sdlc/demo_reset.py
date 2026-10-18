@@ -1,7 +1,8 @@
 """Put the demo back to a clean start: undo what a demo opened on GitHub and reset the history.
 
 Only items marked as demo are touched: issues labelled ``demo`` (or ``demo:<x>``), and pull
-requests labelled so or opened from a branch starting ``demo-``. Real work is never closed or
+requests labelled so, opened from a branch starting ``demo-``, or opened by the builder from an
+``agent/<n>-`` branch for a demo issue ``n``. Real work is never closed or
 deleted. What GitHub looked like before the demos is the baseline, recorded once with
 ``python -m sdlc.demo_reset baseline`` into ``orchestrator/.demo/baseline.json`` (git-ignored).
 
@@ -13,6 +14,7 @@ today, real work is collected from GitHub again and fresh forecasts are saved.
 
 import argparse
 import json
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -43,6 +45,7 @@ from sdlc.tables import (
 
 DEMO_LABEL = "demo"
 DEMO_BRANCH_PREFIX = "demo-"
+AGENT_BRANCH = re.compile(r"^agent/(\d+)-")
 INCIDENT_LABEL = "incident"
 TIER_LABEL_PREFIX = "tier:"
 AGENT_MARKERS = (signoff.COMMENT_MARKER, triage_comment.MARKER, issue_runner.GAVE_UP_MARKER)
@@ -98,6 +101,24 @@ def is_demo(item: dict) -> bool:
         return True
     head = item.get("head") or {}
     return (head.get("ref") or "").startswith(DEMO_BRANCH_PREFIX)
+
+
+def demo_issue_numbers(items: list[dict]) -> set[int]:
+    """The numbers of the demo issues (not pull requests) among ``items``."""
+    return {item["number"] for item in items if "pull_request" not in item and is_demo(item)}
+
+
+def is_demo_pr(pr: dict, demo_issues: set[int]) -> bool:
+    """``is_demo``, or the builder's ``agent/<n>-`` branch in this repository for a demo issue."""
+    if is_demo(pr):
+        return True
+    head = pr.get("head") or {}
+    base_repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name")
+    head_repo = (head.get("repo") or {}).get("full_name")
+    if head_repo is None or head_repo != base_repo:
+        return False
+    match = AGENT_BRANCH.match(head.get("ref") or "")
+    return match is not None and int(match.group(1)) in demo_issues
 
 
 def snapshot(gh: Any) -> dict[str, Any]:
@@ -184,6 +205,7 @@ def _pr_actions(
     prs: list[dict],
     branches: set[str],
     default: str,
+    demo_issues: set[int],
 ) -> dict[str, int]:
     """Plan the demo PRs' clean-up; returns the merged demo PRs' merge commits, sha to number."""
     kept = set(baseline["branches"]) | {default}
@@ -192,7 +214,7 @@ def _pr_actions(
         number = pr["number"]
         if number in baseline["prs"]:
             continue
-        if not is_demo(pr):
+        if not is_demo_pr(pr, demo_issues):
             plan.real_prs.append(number)
             continue
         plan.demo_prs.append(number)
@@ -250,7 +272,7 @@ def plan(gh: Any, baseline: dict[str, Any]) -> Plan:
     default = gh.get("/repos/{repo}").get("default_branch", "main")
     branches = {branch["name"] for branch in gh.paginate("/repos/{repo}/branches")}
     prs = gh.paginate("/repos/{repo}/pulls", state="all")
-    merged = _pr_actions(gh, result, baseline, prs, branches, default)
+    merged = _pr_actions(gh, result, baseline, prs, branches, default, demo_issue_numbers(items))
 
     for deployment in gh.paginate("/repos/{repo}/deployments"):
         number = merged.get(deployment.get("sha"))

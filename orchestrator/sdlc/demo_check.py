@@ -236,10 +236,11 @@ def mode_check(mode: str) -> Check:
 
 
 def newest_merged_real_pr(gh: Any) -> int | None:
+    demo_issues = demo_reset.demo_issue_numbers(gh.paginate("/repos/{repo}/issues", state="all"))
     merged = [
         pr
         for pr in gh.paginate("/repos/{repo}/pulls", state="closed")
-        if pr.get("merged_at") and not demo_reset.is_demo(pr)
+        if pr.get("merged_at") and not demo_reset.is_demo_pr(pr, demo_issues)
     ]
     return max(merged, key=lambda pr: pr["merged_at"])["number"] if merged else None
 
