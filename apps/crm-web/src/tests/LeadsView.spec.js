@@ -376,6 +376,72 @@ describe("LeadsView", () => {
     expect(wrapper.text()).toContain("No leads match these filters");
   });
 
+  it("offers Clear filters with the message when a search matches nothing", async () => {
+    await mountView();
+    expect(wrapper.find('[data-test="clear-filters"]').exists()).toBe(false);
+
+    leads = [];
+    vi.useFakeTimers();
+    await wrapper.find('[data-test="search"] input').setValue("zzz");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+
+    expect(lastParams().q).toBe("zzz");
+    expect(wrapper.text()).toContain("No leads match these filters");
+    const button = wrapper.find('[data-test="clear-filters"]');
+    expect(button.exists()).toBe(true);
+    expect(button.text()).toBe("Clear filters");
+  });
+
+  it("clears the search and filters, keeping the sort and page size, with one reload", async () => {
+    total = 500;
+    leads = [];
+    await mountView();
+    const table = wrapper.findComponent(VDataTableServer);
+    const [sourceSelect, ownerSelect] = wrapper.findAllComponents({ name: "VSelect" });
+
+    vi.useFakeTimers();
+    await wrapper.find('[data-test="search"] input').setValue("zzz");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    await wrapper.find('[data-test="status-new"]').trigger("click");
+    sourceSelect.vm.$emit("update:modelValue", "referral");
+    ownerSelect.vm.$emit("update:modelValue", 2);
+    table.vm.$emit("update:sortBy", [{ key: "score", order: "asc" }]);
+    table.vm.$emit("update:itemsPerPage", 50);
+    await flushPromises();
+    table.vm.$emit("update:page", 3);
+    await flushPromises();
+    expect(lastParams()).toEqual({
+      q: "zzz",
+      status: ["working", "qualified"],
+      source: "referral",
+      owner_id: 2,
+      sort: "score",
+      limit: 50,
+      offset: 100,
+    });
+
+    getJson.mockClear();
+    await wrapper.find('[data-test="clear-filters"]').trigger("click");
+    await flushPromises();
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="search"] input').element.value).toBe("");
+    expect(leadCalls()).toHaveLength(1);
+    expect(getJson).toHaveBeenCalledTimes(1);
+    expect(lastParams()).toEqual({
+      q: "",
+      status: ["new", "working", "qualified"],
+      source: null,
+      owner_id: null,
+      sort: "score",
+      limit: 50,
+      offset: 0,
+    });
+  });
+
   it("shows an API error alert in place of the table, keeping the header and filters", async () => {
     getJson.mockImplementation((path) => {
       if (path === "/api/v1/reps") return Promise.resolve(reps);

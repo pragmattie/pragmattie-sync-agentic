@@ -60,6 +60,15 @@ watch([search, statuses, source, ownerId], () => {
   page.value = 1;
 });
 
+// Puts the search and filters back to their defaults; sort and page size stay.
+function clearFilters() {
+  searchInput.value = "";
+  search.value = "";
+  statuses.value = [...DEFAULT_STATUSES];
+  source.value = null;
+  ownerId.value = null;
+}
+
 const sortParam = computed(() => {
   const [first] = sortBy.value;
   if (!first) return "-created_at";
@@ -210,10 +219,23 @@ function onCreated(lead) {
         :items-per-page-options="[10, 25, 50, 100]"
         :loading="loading"
         loading-text="Loading leads…"
-        no-data-text="No leads match these filters"
         item-value="id"
         must-sort
       >
+        <template #no-data>
+          <div class="py-4">
+            <div>No leads match these filters</div>
+            <v-btn
+              variant="text"
+              color="secondary"
+              class="mt-2"
+              data-test="clear-filters"
+              @click="clearFilters"
+            >
+              Clear filters
+            </v-btn>
+          </div>
+        </template>
         <template #[`item.last_name`]="{ item }">
           <div>{{ item.first_name }} {{ item.last_name }}</div>
           <div v-if="item.title" class="text-caption text-grey">{{ item.title }}</div>
