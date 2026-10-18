@@ -536,3 +536,19 @@ def test_smoke_triage_never_picks_demo_or_incident_issues_or_prs(engine, gh, bas
     assert calls == [["sdlc.issue_runner", "try", "2", "--yes"]]
     assert triage == Check("Smoke: triage", PASS, "#2 (closed) scored end to end")
     assert gh.writes() == []
+
+
+def test_newest_merged_real_pr_skips_an_agent_pr_for_a_demo_issue():
+    gh = FakeGitHub()
+    gh.add_issue(239, "Milestone done on the day it finished")
+    gh.add_issue(240, "Leads: a Clear filters button", labels=["demo"])
+    gh.add_pr(242, "sha242", branch="agent/239-8-3-milestone")
+    gh.merge(242, datetime(2026, 10, 10, 12, 0), sha="merge242")
+    gh.add_pr(241, "sha241", branch="agent/240-8-4-leads-clear-filters")
+    gh.merge(241, datetime(2026, 10, 11, 12, 0), sha="merge241")
+
+    assert demo_check.newest_merged_real_pr(gh) == 242
+
+    gh.issue_labels[240] = []
+    assert demo_check.newest_merged_real_pr(gh) == 241
+    assert gh.writes() == []
