@@ -511,3 +511,164 @@ def test_apply_with_a_read_only_token_lists_every_action_as_failed(
     out = capsys.readouterr().out.splitlines()
     assert "GitHub: 0 done, 15 failed." in out
     assert sum(line.startswith("  Failed: ") for line in out) == 15
+
+
+def test_demo_issue_numbers_are_the_demo_issues_not_pull_requests():
+    items = [
+        {"number": 20, "labels": [{"name": "demo"}]},
+        {"number": 21, "labels": [{"name": "demo:sales"}]},
+        {"number": 22, "labels": [{"name": "module:leads"}]},
+        {"number": 30, "labels": [{"name": "demo"}], "pull_request": {}},
+    ]
+
+    assert demo_reset.demo_issue_numbers(items) == {20, 21}
+
+
+def _agent_pr(ref: str, *, labels=(), head_repo: str = REPO) -> dict:
+    return {
+        "labels": [{"name": name} for name in labels],
+        "head": {"ref": ref, "repo": {"full_name": head_repo}},
+        "base": {"ref": "main", "repo": {"full_name": REPO}},
+    }
+
+
+def test_is_demo_pr_by_the_builders_branch_for_a_demo_issue():
+    demo_issues = {240}
+
+    assert demo_reset.is_demo_pr(_agent_pr("agent/240-8-4-leads-clear-filters"), demo_issues)
+    assert not demo_reset.is_demo_pr(_agent_pr("agent/239-8-3-milestone"), demo_issues)
+    assert not demo_reset.is_demo_pr(_agent_pr("agent/240"), demo_issues)
+    assert not demo_reset.is_demo_pr(_agent_pr("feature/agent/240-x"), demo_issues)
+    # a fork's branch of the same shape is judged by is_demo alone
+    fork = _agent_pr("agent/240-8-4-leads", head_repo="someone/widgets")
+    assert not demo_reset.is_demo_pr(fork, demo_issues)
+    assert demo_reset.is_demo_pr({**fork, "labels": [{"name": "demo"}]}, demo_issues)
+    # a label or a demo- branch still makes it demo work, whatever its issue
+    assert demo_reset.is_demo_pr(_agent_pr("agent/1-x", labels=["demo"]), set())
+    assert demo_reset.is_demo_pr(_agent_pr("demo-lead-score"), set())
+    assert not demo_reset.is_demo_pr(_agent_pr("quick-fix"), demo_issues)
+
+
+def _agent_pr_for_issue_240(gh: FakeGitHub, *, demo: bool, merged: bool = True) -> dict:
+    """The live demo's shape: the builder's PR for issue #240, with no labels of its own."""
+    gh.add_issue(240, "Leads: a Clear filters button", labels=["demo"] if demo else [])
+    gh.add_pr(241, "sha241", branch="agent/240-8-4-leads-clear-filters")
+    gh.issue_labels[241] = ["tier:T1"]
+    comment = gh.comment(241, f"{COMMENT_MARKER}\nRisk 30, T1.", user=BOT)
+    deploy = None
+    if merged:
+        gh.merge(241, DEMO_DAY, sha="merge241")
+        deploy = gh.add_deployment("merge241")
+        gh.deployment_status(deploy["id"], "success", DEMO_DAY)
+    gh.requests.clear()
+    return {"comment": comment, "deploy": deploy}
+
+
+def test_a_merged_agent_pr_for_a_demo_issue_is_planned_like_a_demo_pr():
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    made = _agent_pr_for_issue_240(gh, demo=True)
+
+    plan = demo_reset.plan(gh, baseline)
+
+    deploy = made["deploy"]["id"]
+    assert plan.demo_issues == [240]
+    assert plan.demo_prs == [241]
+    assert plan.real_prs == []
+    assert plan.demo_deployments == [deploy]
+    assert [action.what for action in plan.actions] == [
+        "Close issue #240 (opened during a demo): Leads: a Clear filters button",
+        "Delete the agents' comment on PR #241",
+        "Remove the tier:T1 label from PR #241",
+        "Delete branch agent/240-8-4-leads-clear-filters (PR #241)",
+        f"Mark deployment {deploy} (PR #241) inactive",
+        f"Delete deployment {deploy}",
+    ]
+    assert "PR #241 was merged: its commits stay on main." in plan.left_behind
+    # no extra API calls: the demo issues come from the issues the plan already fetches
+    assert gh.requests == [
+        ("GET", "/issues"),
+        ("GET", ""),
+        ("GET", "/branches"),
+        ("GET", "/pulls"),
+        ("GET", "/issues/241/comments"),
+        ("GET", "/deployments"),
+    ]
+
+    demo_reset.apply_plan(gh, plan)
+    assert made["comment"]["id"] not in {comment["id"] for comment in gh.comments}
+    assert gh.issue_labels[241] == []
+    assert "agent/240-8-4-leads-clear-filters" not in gh.branches
+    assert deploy not in [d["id"] for d in gh.deployments]
+    assert demo_reset.plan(gh, baseline).actions == []
+
+
+def test_the_same_pr_for_a_real_issue_is_kept_as_real_work():
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    _agent_pr_for_issue_240(gh, demo=False)
+
+    plan = demo_reset.plan(gh, baseline)
+
+    assert (plan.demo_prs, plan.real_prs) == ([], [241])
+    assert (plan.real_issues, plan.demo_deployments) == ([240], [])
+    assert plan.actions == []
+
+
+def test_an_open_agent_pr_for_a_demo_issue_is_closed():
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    _agent_pr_for_issue_240(gh, demo=True, merged=False)
+
+    plan = demo_reset.plan(gh, baseline)
+
+    assert plan.demo_prs == [241]
+    assert (
+        demo_reset.Action(
+            "Close demo PR #241: Change 241",
+            "PATCH",
+            "/repos/{repo}/pulls/241",
+            {"state": "closed"},
+        )
+        in plan.actions
+    )
+    demo_reset.apply_plan(gh, plan)
+    assert gh.prs[241]["state"] == "closed"
+
+
+def test_a_forks_agent_branch_for_a_demo_issue_is_real_work():
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    gh.add_issue(240, "Leads: a Clear filters button", labels=["demo"])
+    gh.add_pr(241, "sha241", branch="agent/240-from-a-fork", head_repo="someone/widgets")
+
+    plan = demo_reset.plan(gh, baseline)
+
+    assert (plan.demo_prs, plan.real_prs) == ([], [241])
+
+
+def test_apply_forgets_the_rows_about_an_agent_pr_for_a_demo_issue(
+    sqlite_engine, monkeypatch, capsys
+):
+    gh = _repository()
+    baseline = demo_reset.snapshot(gh)
+    _agent_pr_for_issue_240(gh, demo=True)
+    Base.metadata.create_all(sqlite_engine)
+    with Session(sqlite_engine) as db:
+        _pr(db, 241)
+        _decision(db, "pr_risk", "pr", 241)
+        _decision(db, "release_gate", "release", 241)
+        db.commit()
+    monkeypatch.setattr(demo_reset, "collect", lambda engine, client: {"issues": 6})
+    monkeypatch.setattr(demo_reset, "save_forecasts", lambda engine: {"assessed": 4})
+
+    assert demo_reset.run(gh, baseline, apply=True, engine=sqlite_engine) == 0
+
+    assert "Audit rows about demo items forgotten: 2." in capsys.readouterr().out.splitlines()
+    with Session(sqlite_engine) as db:
+        github = select(func.count(AgentDecision.id)).where(
+            AgentDecision.subject_source == "github"
+        )
+        assert db.scalar(github) == 0
+        assert db.scalar(select(func.count(Approval.id))) == 0
+        assert db.scalar(select(func.count(GateStatus.id))) == 0
