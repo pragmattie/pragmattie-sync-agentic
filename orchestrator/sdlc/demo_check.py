@@ -28,7 +28,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sdlc import demo_reset
+from sdlc import demo_reset, issue_runner
 from sdlc.clock import utcnow
 from sdlc.config import get_settings
 from sdlc.db import get_engine
@@ -48,7 +48,8 @@ CRM_VERSION_TABLE = "alembic_version"
 SYNTHETIC = "synthetic"
 TIMEOUT_SECONDS = 5.0
 SMOKE_COST = "The smoke test calls Claude (about 5 cents). Add --yes to run it."
-NOTHING_TO_TRY = "nothing real to try it on: run the reset first."
+NO_PR = "no merged non-demo PR to try it on."
+NO_ISSUE = "no non-demo issue to try it on, open or closed."
 LABELS = {
     demo_reset.DEMO_LABEL: "exists (marks what the reset cleans up)",
     demo_reset.INCIDENT_LABEL: "exists (raises a real incident)",
@@ -243,13 +244,23 @@ def newest_merged_real_pr(gh: Any) -> int | None:
     return max(merged, key=lambda pr: pr["merged_at"])["number"] if merged else None
 
 
-def lowest_open_real_issue(gh: Any) -> int | None:
-    numbers = [
-        item["number"]
-        for item in gh.paginate("/repos/{repo}/issues", state="open")
-        if "pull_request" not in item and not demo_reset.is_demo(item)
+def issue_to_try(gh: Any) -> dict | None:
+    """The lowest-numbered open real issue, else the most recently closed one.
+
+    Pull requests, demo items and ``incident`` issues (which triage skips) never count.
+    """
+    issues = [
+        item
+        for item in gh.paginate("/repos/{repo}/issues", state="all")
+        if "pull_request" not in item
+        and not demo_reset.is_demo(item)
+        and issue_runner.INCIDENT not in {label["name"] for label in item.get("labels") or []}
     ]
-    return min(numbers) if numbers else None
+    open_ = [item for item in issues if item["state"] == "open"]
+    if open_:
+        return min(open_, key=lambda item: item["number"])
+    closed = [item for item in issues if item.get("closed_at")]
+    return max(closed, key=lambda item: item["closed_at"]) if closed else None
 
 
 def run_module(args: list[str]) -> str:
@@ -266,18 +277,26 @@ def _is_ok(output: str) -> bool:
 
 
 def smoke_checks(gh: Any, run: Callable[[list[str]], str]) -> list[Check]:
+    issue = issue_to_try(gh)
+    closed = issue is not None and issue["state"] != "open"
     trials = [
-        ("Smoke: PR risk", "sdlc.runner", newest_merged_real_pr(gh)),
-        ("Smoke: triage", "sdlc.issue_runner", lowest_open_real_issue(gh)),
+        ("Smoke: PR risk", "sdlc.runner", newest_merged_real_pr(gh), "", NO_PR),
+        (
+            "Smoke: triage",
+            "sdlc.issue_runner",
+            issue["number"] if issue else None,
+            " (closed)" if closed else "",
+            NO_ISSUE,
+        ),
     ]
     checks = []
-    for name, module, number in trials:
+    for name, module, number, note, nothing in trials:
         if number is None:
-            checks.append(Check(name, FAIL, NOTHING_TO_TRY))
+            checks.append(Check(name, FAIL, nothing))
             continue
         output = run([module, "try", str(number), "--yes"])
         if _is_ok(output):
-            checks.append(Check(name, PASS, f"#{number} scored end to end"))
+            checks.append(Check(name, PASS, f"#{number}{note} scored end to end"))
         else:
             checks.append(Check(name, FAIL, output.strip()[-300:]))
     return checks
