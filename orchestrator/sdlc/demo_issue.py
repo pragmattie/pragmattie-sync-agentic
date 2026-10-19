@@ -2,15 +2,18 @@
 
 The demo changes are Markdown files in ``orchestrator/demo_issues/``, one per change: the first
 line is ``# <title>``, the rest is the issue body. Each change can be used once; it is used when
-an issue (open or closed) is titled exactly ``Demo: <title>``.
+an issue (open or closed) is titled exactly ``Demo: <title>``. A change whose title contains
+``{n}`` is repeatable instead: it is never used, and each issue it opens is numbered one above the
+highest-numbered issue so far, so the presenter can rehearse as often as needed.
 
-``python -m sdlc.demo_issue list`` shows each change, fresh or used. ``python -m sdlc.demo_issue
-open NAME`` creates the issue with the M8 milestone and the labels that start the builder at T1
-at once; ``--dry-run`` prints it and creates nothing. The title carries no plan item number, so a
-demo issue never takes a place in the rebuild plan.
+``python -m sdlc.demo_issue list`` shows each change, fresh, used or repeatable. ``python -m
+sdlc.demo_issue open NAME`` creates the issue with the M8 milestone and the labels that start the
+builder at T1 at once; ``--dry-run`` prints it and creates nothing. The title carries no plan
+item number, so a demo issue never takes a place in the rebuild plan.
 """
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +23,7 @@ from sdlc.github_client import GitHubClient, GitHubError
 
 DEMO_ISSUES_PATH = Path(__file__).resolve().parents[1] / "demo_issues"
 TITLE_PREFIX = "Demo: "
+NUMBER = "{n}"
 MILESTONE_PREFIX = "M8 "
 LABELS = ["demo", "forecast:T1", "agent-ready"]
 NEXT_STEPS = (
@@ -42,6 +46,17 @@ class Change:
     def issue_title(self) -> str:
         return f"{TITLE_PREFIX}{self.title}"
 
+    @property
+    def repeatable(self) -> bool:
+        return NUMBER in self.title
+
+    def numbered(self, number: int) -> "Change":
+        return Change(
+            name=self.name,
+            title=self.title.replace(NUMBER, str(number)),
+            body=self.body.replace(NUMBER, str(number)),
+        )
+
 
 def names(folder: Path = DEMO_ISSUES_PATH) -> list[str]:
     return sorted(path.stem for path in folder.glob("*.md"))
@@ -62,13 +77,31 @@ def load(name: str, folder: Path = DEMO_ISSUES_PATH) -> Change:
 def used_issue(gh: Any, change: Change, items: list[dict] | None = None) -> dict | None:
     """The newest issue (not pull request) titled ``Demo: <title>``, open or closed."""
     if items is None:
-        items = gh.paginate("/repos/{repo}/issues", state="all")
+        items = _issues(gh)
     matches = [
         item
         for item in items
         if "pull_request" not in item and item.get("title") == change.issue_title
     ]
     return max(matches, key=lambda item: item["number"], default=None)
+
+
+def _issues(gh: Any) -> list[dict]:
+    return gh.paginate("/repos/{repo}/issues", state="all")
+
+
+def next_number(gh: Any, change: Change, items: list[dict] | None = None) -> int:
+    """1 + the highest number among issues (not pull requests) titled like the change."""
+    if items is None:
+        items = _issues(gh)
+    before, _, after = change.issue_title.partition(NUMBER)
+    pattern = re.compile(re.escape(before) + r"(\d+)" + re.escape(after))
+    numbers = [
+        int(match.group(1))
+        for item in items
+        if "pull_request" not in item and (match := pattern.fullmatch(item.get("title") or ""))
+    ]
+    return max(numbers, default=0) + 1
 
 
 def m8_milestone(gh: Any) -> dict:
@@ -80,21 +113,26 @@ def m8_milestone(gh: Any) -> dict:
 
 def list_changes(gh: Any, folder: Path = DEMO_ISSUES_PATH) -> None:
     changes = [load(name, folder) for name in names(folder)]
-    items = gh.paginate("/repos/{repo}/issues", state="all")
+    items = _issues(gh)
     width = max((len(change.name) for change in changes), default=0)
     for change in changes:
-        issue = used_issue(gh, change, items)
-        status = f"used: #{issue['number']} ({issue['state']})" if issue else "fresh"
+        if change.repeatable:
+            status = f"repeatable (next: {next_number(gh, change, items)})"
+        elif issue := used_issue(gh, change, items):
+            status = f"used: #{issue['number']} ({issue['state']})"
+        else:
+            status = "fresh"
         print(f"{change.name:<{width}}  {status:<20}  {change.title}")
 
 
 def open_change(gh: Any, name: str, *, dry_run: bool, folder: Path = DEMO_ISSUES_PATH) -> None:
     change = load(name, folder)
-    issue = used_issue(gh, change)
-    if issue:
+    if change.repeatable:
+        change = change.numbered(next_number(gh, change))
+    elif issue := used_issue(gh, change):
         raise Refusal(
             f"{name} is already used: #{issue['number']} ({issue['state']}). "
-            "Run `list` to see the fresh ones."
+            "Run ./scripts/demo.ps1 issue to see the fresh ones."
         )
     milestone = m8_milestone(gh)
     print(f"Title:     {change.issue_title}")
@@ -124,7 +162,7 @@ def main(argv: list[str] | None = None, gh: Any = None, folder: Path = DEMO_ISSU
         prog="python -m sdlc.demo_issue", description=__doc__.split("\n")[0]
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="each demo change, fresh or used")
+    commands.add_parser("list", help="each demo change, fresh, used or repeatable")
     opener = commands.add_parser("open", help="create the demo issue for one change")
     opener.add_argument("name", help="the change's file name without .md")
     opener.add_argument("--dry-run", action="store_true", help="print it; create nothing")
