@@ -186,8 +186,26 @@ describe("AccountDetailView", () => {
     getJson.mockResolvedValue(accountDetail({ contacts: [], contact_count: 0 }));
     await mountView();
 
+    expect(wrapper.find('[data-test="contacts"] .v-card-title').text()).toBe("Contacts");
+    expect(wrapper.find('[data-test="contact-count"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="contacts"]').text()).toContain("No contacts yet");
     expect(wrapper.find('[data-test="contact"]').exists()).toBe(false);
+  });
+
+  it("shows the number of contacts in the card title", async () => {
+    const contacts = [contact({ id: 1 }), contact({ id: 2 }), contact({ id: 3 })];
+    getJson.mockResolvedValue(accountDetail({ contacts, contact_count: 3 }));
+    await mountView();
+
+    expect(wrapper.find('[data-test="contacts"] .v-card-title').text()).toBe("Contacts · 3");
+    expect(wrapper.find('[data-test="contact-count"]').text()).toBe("· 3");
+  });
+
+  it("shows a count of 1 for a single contact", async () => {
+    await mountView();
+
+    expect(wrapper.find('[data-test="contacts"] .v-card-title').text()).toBe("Contacts · 1");
+    expect(wrapper.find('[data-test="contact-count"]').text()).toBe("· 1");
   });
 
   it("shows the owner, annual revenue and customer-since date", async () => {

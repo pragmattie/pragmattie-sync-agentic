@@ -170,7 +170,10 @@ function stageColor(stage) {
 
         <v-col cols="12" lg="4">
           <v-card class="mb-4" data-test="contacts">
-            <v-card-title>Contacts</v-card-title>
+            <v-card-title>
+              Contacts<span v-if="account.contacts.length" data-test="contact-count">
+                · {{ account.contacts.length }}</span>
+            </v-card-title>
             <v-card-text v-if="!account.contacts.length" class="text-medium-emphasis">
               No contacts yet
             </v-card-text>
