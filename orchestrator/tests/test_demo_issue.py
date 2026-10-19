@@ -16,22 +16,29 @@ def _repository(*, milestone: bool = True) -> FakeGitHub:
     return gh
 
 
-def test_the_two_demo_changes_are_there_and_well_formed():
-    assert demo_issue.names() == ["account-contact-count", "accounts-clear-filters"]
+def test_the_four_demo_changes_are_there_and_well_formed():
+    assert demo_issue.names() == [
+        "account-contact-count",
+        "account-opportunity-count",
+        "accounts-clear-filters",
+        "contact-phone-link",
+    ]
     change = demo_issue.load("account-contact-count")
     assert change.issue_title == CONTACT_TITLE
     assert change.body.startswith("## Goal\n")
     assert "## Part\n\nPragMattie Sync CRM\n" in change.body
 
 
-def test_list_shows_both_changes_fresh(capsys):
+def test_list_shows_all_four_changes_fresh(capsys):
     gh = _repository()
     assert demo_issue.main(["list"], gh=gh) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 4
     assert lines[0].startswith("account-contact-count")
     assert "fresh" in lines[0] and CONTACT_TITLE.removeprefix("Demo: ") in lines[0]
-    assert lines[1].startswith("accounts-clear-filters") and "fresh" in lines[1]
+    assert lines[1].startswith("account-opportunity-count") and "fresh" in lines[1]
+    assert lines[2].startswith("accounts-clear-filters") and "fresh" in lines[2]
+    assert lines[3].startswith("contact-phone-link") and "fresh" in lines[3]
     assert gh.writes() == []
 
 
@@ -44,7 +51,7 @@ def test_list_shows_a_closed_demo_issue_as_used(capsys):
     assert demo_issue.main(["list"], gh=gh) == 0
     lines = capsys.readouterr().out.splitlines()
     assert "used: #240 (closed)" in lines[0]
-    assert "fresh" in lines[1]
+    assert all("fresh" in line for line in lines[1:])
 
 
 def test_open_creates_the_issue_in_one_request(capsys):
@@ -82,7 +89,8 @@ def test_an_unknown_name_is_refused(capsys):
     err = capsys.readouterr().err.strip()
     assert err == (
         "No demo change named 'dark-mode'. "
-        "There are: account-contact-count, accounts-clear-filters."
+        "There are: account-contact-count, account-opportunity-count, "
+        "accounts-clear-filters, contact-phone-link."
     )
 
 
