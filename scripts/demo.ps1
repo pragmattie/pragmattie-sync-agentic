@@ -13,7 +13,10 @@
     check -Smoke     The same, plus one real, paid call per agent (about 5 cents).
     issue            List the live demo's changes, each fresh or used.
     issue NAME       Open the demo issue for change NAME, fully set up: milestone and labels
-                     so the builder starts at once, at T1, with no plan to approve.
+                     so the builder starts at once, at T1, with no plan to approve. Then open
+                     the new issue's page in your default browser.
+    issue NAME -NoBrowser
+                     The same, without opening the browser.
     issue NAME -DryRun
                      Print that issue (title, milestone, labels, body); nothing is created.
 
@@ -24,6 +27,7 @@
     ./scripts/demo.ps1 issue
     ./scripts/demo.ps1 issue account-contact-count -DryRun
     ./scripts/demo.ps1 issue account-contact-count
+    ./scripts/demo.ps1 issue account-contact-count -NoBrowser
 #>
 param(
     [Parameter(Position = 0, Mandatory = $true)]
@@ -34,7 +38,8 @@ param(
     [switch]$Apply,
     [switch]$Force,
     [switch]$Smoke,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
@@ -193,9 +198,20 @@ function Invoke-Issue {
     else {
         $arguments += "list"
     }
-    & docker @arguments
+    # Show the module's output as it comes, and keep it to find the new issue's link.
+    $output = & docker @arguments | ForEach-Object {
+        Write-Host $_
+        $_
+    }
     if ($LASTEXITCODE -ne 0) {
         exit 1
+    }
+    if ($Name -and -not $DryRun -and -not $NoBrowser) {
+        $created = $output | Select-String -Pattern "^Created #(\d+): (\S+)" | Select-Object -First 1
+        if ($created) {
+            Start-Process $created.Matches[0].Groups[2].Value
+            Write-Host "Opened #$($created.Matches[0].Groups[1].Value) in your browser."
+        }
     }
 }
 
