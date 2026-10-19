@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from sdlc import demo_issue
@@ -5,7 +6,7 @@ from tests.fakes import REPO, FakeGitHub
 
 CONTACT_TITLE = "Demo: Account page: the Contacts card shows how many contacts there are"
 FILTERS_TITLE = 'Demo: Accounts: a "Clear filters" button when no accounts match'
-REHEARSAL_TITLE = "Demo: About page: show demo rehearsal"
+REHEARSAL_TITLE = "Demo: About page: show build"
 
 
 def _repository(*, milestone: bool = True) -> FakeGitHub:
@@ -142,8 +143,8 @@ def test_the_first_rehearsal_is_numbered_1(capsys):
     assert gh.writes() == [("POST", "/issues")]
     issue = gh.issues[2]
     assert issue["title"] == f"{REHEARSAL_TITLE} 1"
-    assert "This is rehearsal 1." in issue["body"]
-    assert '"Demo rehearsal 1"' in issue["body"]
+    assert "This is build 1." in issue["body"]
+    assert '"Build 1"' in issue["body"]
     assert "{n}" not in issue["title"] + issue["body"]
     assert gh.issue_labels[2] == ["demo", "forecast:T1", "agent-ready"]
     assert f"Title:     {REHEARSAL_TITLE} 1" in capsys.readouterr().out
@@ -165,7 +166,7 @@ def test_list_shows_a_rehearsal_as_repeatable_with_its_next_number(capsys):
     assert all("fresh" in line for line in lines[1:4])
     assert lines[4].startswith("rehearsal-about-note")
     assert "repeatable (next: 3)" in lines[4]
-    assert "About page: show demo rehearsal {n}" in lines[4]
+    assert "About page: show build {n}" in lines[4]
     assert gh.writes() == []
 
 
@@ -185,6 +186,12 @@ def test_the_rehearsal_dry_run_prints_the_numbered_issue_and_creates_nothing(cap
     assert gh.writes() == []
     out = capsys.readouterr().out
     assert f"Title:     {REHEARSAL_TITLE} 3" in out
-    assert "This is rehearsal 3." in out
+    assert "This is build 3." in out
     assert "{n}" not in out
     assert "Dry run: nothing was created." in out
+
+
+def test_the_rehearsal_body_has_no_word_the_crm_build_check_forbids():
+    body = demo_issue.load("rehearsal-about-note").numbered(1).body
+    for word in ("demo", "simulated", "fictional"):
+        assert not re.search(rf"\b{word}\b", body, re.IGNORECASE), word
