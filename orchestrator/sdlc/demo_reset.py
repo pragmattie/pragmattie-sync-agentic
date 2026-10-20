@@ -27,7 +27,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sdlc import issue_runner, synth
+from sdlc import board, issue_runner, synth
 from sdlc.agents import signoff, triage_comment
 from sdlc.clock import utcnow
 from sdlc.db import get_engine
@@ -60,6 +60,12 @@ DRY_RUN_DATABASE = (
     "approvals and gate states about the demo items; collect from GitHub; save forecasts."
 )
 DRY_RUN_DONE = "Dry run: nothing was changed. Add --apply to do it."
+GRAPHQL = "GRAPHQL"
+ARCHIVE_ITEM = """
+mutation($project: ID!, $item: ID!) {
+  archiveProjectV2Item(input: {projectId: $project, itemId: $item}) { item { id } }
+}
+"""
 
 
 class BaselineError(Exception):
@@ -68,7 +74,10 @@ class BaselineError(Exception):
 
 @dataclass
 class Action:
-    """One GitHub request the reset would send: ``method`` and ``path`` as the client takes them."""
+    """One GitHub request the reset would send: ``method`` and ``path`` as the client takes them.
+
+    A ``GRAPHQL`` action names its mutation in ``path`` and carries its variables in ``body``.
+    """
 
     what: str
     method: str
@@ -258,6 +267,28 @@ def _pr_actions(
     return merged
 
 
+def _archive_actions(gh: Any, plan: Plan, node_ids: dict[int, str]) -> None:
+    """Archive the board card of each demo issue; a board that can't be read is left behind."""
+    try:
+        project = board.load_board(gh)
+        items = board.load_items(gh, project)
+    except Exception as error:  # noqa: BLE001 - reported; the rest of the reset carries on
+        reason = str(error).rstrip(".")
+        plan.left_behind.append(f"Board cards of demo issues were not archived: {reason}.")
+        return
+    for number in plan.demo_issues:
+        item = items.get(node_ids.get(number, ""))
+        if item is not None:
+            plan.actions.append(
+                Action(
+                    f"Archive the board card of #{number}",
+                    GRAPHQL,
+                    "archiveProjectV2Item",
+                    {"project": project.project_id, "item": item.id},
+                )
+            )
+
+
 def plan(gh: Any, baseline: dict[str, Any]) -> Plan:
     """Everything the reset would do on GitHub, in order, and what it leaves behind."""
     if baseline["repo"] != gh.repo:
@@ -312,6 +343,9 @@ def plan(gh: Any, baseline: dict[str, Any]) -> Plan:
             f"{len(result.demo_issues)} issue(s) opened during demos stay on GitHub as closed "
             "(GitHub can't delete issues)."
         )
+    if result.demo_issues:
+        node_ids = {item["number"]: item.get("node_id") for item in items}
+        _archive_actions(gh, result, node_ids)
     return result
 
 
@@ -321,6 +355,7 @@ def apply_plan(gh: Any, plan: Plan) -> tuple[list[Action], list[tuple[Action, st
         "POST": lambda action: gh.post(action.path, action.body or {}),
         "PATCH": lambda action: gh.patch(action.path, action.body or {}),
         "DELETE": lambda action: gh.delete(action.path),
+        GRAPHQL: lambda action: gh.graphql(ARCHIVE_ITEM, **(action.body or {})),
     }
     done: list[Action] = []
     failed: list[tuple[Action, str]] = []
