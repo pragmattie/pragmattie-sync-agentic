@@ -1,10 +1,10 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``, ``own_login``) over in-memory pull requests, issues, comments, reviews, statuses,
+``paginate``, ``own_login``, and ``graphql`` for the delivery board) over in-memory pull requests, issues, comments, reviews, statuses,
 labels, GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
-statuses, branches, milestones, environments and files on the default branch, and logs every
-request it is sent. Its comments come from a bot unless ``as_person`` gives the token to a person.
+statuses, branches, milestones, environments, files on the default branch and the board's cards,
+and logs every request it is sent (a GraphQL mutation as ``POST /graphql``). Its comments come from a bot unless ``as_person`` gives the token to a person.
 ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 
@@ -48,6 +48,10 @@ class FakeGitHub:
         self.default_branch = "main"
         self.branches: list[str] = ["main"]
         self.milestones: list[dict] = []  # each with its number, title and state
+        self.board: list[dict] | None = []  # the board's cards, each {"id", "content"}; None: none
+        self.board_error: str | None = None  # raised by every board query, e.g. a 403
+        self.board_write_error: str | None = None  # raised by every board mutation
+        self.graphql_calls: list[tuple[str, dict]] = []
         self.requests: list[tuple[str, str]] = []
         self.fail_writes: set[str] = set()  # methods that raise, e.g. {"POST"}
         self.limited_until = None
@@ -113,6 +117,7 @@ class FakeGitHub:
     ) -> dict:
         self.issues[number] = {
             "number": number,
+            "node_id": f"I_{number}",
             "title": title,
             "body": body,
             "state": "open",
@@ -196,6 +201,14 @@ class FakeGitHub:
 
     def delete_deployment(self, deployment_id: int) -> None:
         self.deployments = [d for d in self.deployments if d["id"] != deployment_id]
+
+    def add_card(self, number: int, *, pull_request: bool = False) -> str:
+        """A card on the board for issue (or pull request) ``number``; returns its item id."""
+        kind, prefix = ("PullRequest", "PR") if pull_request else ("Issue", "I")
+        item_id = f"PVTI_{number}"
+        content = {"__typename": kind, "id": f"{prefix}_{number}", "number": number}
+        self.board.append({"id": item_id, "content": content, "fieldValues": {"nodes": []}})
+        return item_id
 
     def close_issue(self, number: int, at: datetime) -> None:
         self.issues[number].update(state="closed", closed_at=iso(at))
@@ -408,6 +421,27 @@ class FakeGitHub:
         else:
             match = re.fullmatch(r"/issues/(\d+)/labels/(.+)", path)
             self.issue_labels[int(match.group(1))].remove(unquote(match.group(2)))
+
+    def graphql(self, query: str, **variables):
+        """The board, its items (one page) and archiving a card, like ``tests/test_board.py``."""
+        self.graphql_calls.append((query, variables))
+        if "mutation" in query:
+            self._log("POST", "/graphql")
+            assert "archiveProjectV2Item" in query and variables["project"] == "PVT_1"
+            if self.board_write_error:
+                raise GitHubError(self.board_write_error)
+            self.board = [item for item in self.board if item["id"] != variables["item"]]
+            return {"archiveProjectV2Item": {"item": {"id": variables["item"]}}}
+        assert (variables["owner"], variables["number"]) == ("pragmattie", 1)
+        if self.board_error:
+            raise GitHubError(self.board_error)
+        if self.board is None:
+            return {"organization": {"projectV2": None}}
+        if "items(" in query:
+            page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": self.board}
+            return {"organization": {"projectV2": {"items": page}}}
+        project = {"id": "PVT_1", "title": "PragMattie Sync delivery", "fields": {"nodes": []}}
+        return {"organization": {"projectV2": project}}
 
     def _issue(self, number: int) -> dict:
         labels = [{"name": name} for name in self.issue_labels.get(number, [])]
