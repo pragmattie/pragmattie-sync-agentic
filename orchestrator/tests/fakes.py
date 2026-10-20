@@ -1,10 +1,11 @@
 """In-memory stand-ins for GitHub and Claude, so the poll loop runs without either.
 
 ``FakeGitHub`` has the client's interface (``get``, ``get_text``, ``post``, ``patch``, ``delete``,
-``paginate``, ``own_login``, and ``graphql`` for the delivery board) over in-memory pull requests, issues, comments, reviews, statuses,
-labels, GitHub Actions runs with their jobs, workflow runs by workflow file, deployments with their
-statuses, branches, milestones, environments, files on the default branch and the board's cards,
-and logs every request it is sent (a GraphQL mutation as ``POST /graphql``). Its comments come from a bot unless ``as_person`` gives the token to a person.
+``paginate``, ``own_login``, and ``graphql`` for the delivery board) over in-memory pull requests,
+issues, comments, reviews, statuses, labels, GitHub Actions runs with their jobs, workflow runs by
+workflow file, deployments with their statuses, branches, milestones, environments, files on the
+default branch and the board's cards, and logs every request it is sent (a GraphQL mutation as
+``POST /graphql``). Its comments come from a bot unless ``as_person`` gives the token to a person.
 ``FakeLLM`` answers with a fixed adjustment or raises a given error.
 """
 

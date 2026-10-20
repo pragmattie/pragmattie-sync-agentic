@@ -672,3 +672,143 @@ def test_apply_forgets_the_rows_about_an_agent_pr_for_a_demo_issue(
         assert db.scalar(github) == 0
         assert db.scalar(select(func.count(Approval.id))) == 0
         assert db.scalar(select(func.count(GateStatus.id))) == 0
+
+
+def _board_after_three_demos() -> tuple[FakeGitHub, dict]:
+    """Demo issues #240 and #247 (closed, merged PRs) and #253 (not planned) on the board, next to
+    a real issue's card, a baseline demo issue's card and a pull request's card."""
+    gh = _repository()
+    gh.add_issue(5, "An old demo issue", labels=["demo"])
+    baseline = demo_reset.snapshot(gh)
+    for number in (240, 247):
+        gh.add_issue(number, f"Demo change {number}", labels=["demo"])
+        gh.add_pr(number + 1, f"sha{number + 1}", branch=f"agent/{number}-demo-change")
+        gh.merge(number + 1, DEMO_DAY, sha=f"merge{number + 1}")
+        gh.close_issue(number, DEMO_DAY)
+    gh.add_issue(253, "Demo change 253", labels=["demo"])
+    gh.close_issue(253, DEMO_DAY)
+    gh.issues[253]["state_reason"] = "not_planned"
+    gh.add_issue(239, "Show the milestone on the board", labels=["module:platform"])
+    gh.branches = [name for name in gh.branches if not name.startswith("agent/")]
+    for number in (239, 240, 247, 253, 5):
+        gh.add_card(number)
+    gh.add_card(241, pull_request=True)
+    gh.comment(241, f"{COMMENT_MARKER}\nRisk 30, T1.", user=BOT)
+    gh.requests.clear()
+    return gh, baseline
+
+
+ARCHIVES = [
+    "Archive the board card of #240",
+    "Archive the board card of #247",
+    "Archive the board card of #253",
+]
+
+
+def _archives(plan: demo_reset.Plan) -> list[str]:
+    return [action.what for action in plan.actions if action.method == demo_reset.GRAPHQL]
+
+
+def test_the_demo_issues_cards_are_archived_after_every_other_action():
+    gh, baseline = _board_after_three_demos()
+
+    plan = demo_reset.plan(gh, baseline)
+
+    assert plan.demo_issues == [240, 247, 253]
+    assert [action.what for action in plan.actions] == [
+        "Delete the agents' comment on PR #241",
+        *ARCHIVES,
+    ]
+    assert plan.actions[-1] == demo_reset.Action(
+        "Archive the board card of #253",
+        "GRAPHQL",
+        "archiveProjectV2Item",
+        {"project": "PVT_1", "item": "PVTI_253"},
+    )
+    assert plan.actions[-1].request(REPO) == (
+        'GRAPHQL archiveProjectV2Item {"item": "PVTI_253", "project": "PVT_1"}'
+    )
+    assert not [line for line in plan.left_behind if line.startswith("Board cards")]
+
+    done, failed = demo_reset.apply_plan(gh, plan)
+
+    assert failed == []
+    assert len(done) == len(plan.actions)
+    # the real issue's, the baseline demo issue's and the pull request's cards stay
+    assert [item["id"] for item in gh.board] == ["PVTI_239", "PVTI_5", "PVTI_241"]
+    assert gh.issues[240]["state"] == "closed"
+
+
+def test_a_second_plan_after_applying_archives_nothing():
+    gh, baseline = _board_after_three_demos()
+    demo_reset.apply_plan(gh, demo_reset.plan(gh, baseline))
+
+    again = demo_reset.plan(gh, baseline)
+
+    assert _archives(again) == []
+    assert again.actions == []
+
+
+def test_a_refused_archive_fails_only_the_archives():
+    gh, baseline = _board_after_three_demos()
+    gh.add_issue(260, "An open demo issue", labels=["demo"])
+    gh.add_card(260)
+    gh.board_write_error = "GitHub GraphQL: Resource not accessible by integration"
+
+    plan = demo_reset.plan(gh, baseline)
+    done, failed = demo_reset.apply_plan(gh, plan)
+
+    assert [action.what for action, _ in failed] == [*ARCHIVES, "Archive the board card of #260"]
+    assert all("Resource not accessible" in error for _, error in failed)
+    assert [action.what for action in done] == [
+        "Close issue #260 (opened during a demo): An open demo issue",
+        "Delete the agents' comment on PR #241",
+    ]
+    assert gh.issues[260]["state"] == "closed"
+    assert len(gh.board) == 7
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        ("GitHub 403 on /graphql: Forbidden", "GitHub 403 on /graphql: Forbidden"),
+        (None, "No project 1 in the pragmattie organization"),
+    ],
+)
+def test_a_board_that_cannot_be_read_is_left_behind_in_one_line(error, reason):
+    gh, baseline = _board_after_three_demos()
+    gh.add_issue(260, "An open demo issue", labels=["demo"])
+    if error:
+        gh.board_error = error
+    else:
+        gh.board = None
+
+    plan = demo_reset.plan(gh, baseline)
+    done, failed = demo_reset.apply_plan(gh, plan)
+
+    assert _archives(plan) == []
+    board_lines = [line for line in plan.left_behind if line.startswith("Board cards")]
+    assert board_lines == [f"Board cards of demo issues were not archived: {reason}."]
+    assert plan.left_behind[-1] == board_lines[0]
+    assert failed == []
+    assert [action.what for action in done] == [
+        "Close issue #260 (opened during a demo): An open demo issue",
+        "Delete the agents' comment on PR #241",
+    ]
+
+
+def test_the_dry_run_lists_the_archives_and_sends_nothing(tmp_path, capsys):
+    gh, baseline = _board_after_three_demos()
+    path = tmp_path / "baseline.json"
+    demo_reset.save_baseline(baseline, path)
+
+    assert demo_reset.main([], gh=gh, path=path) == 0
+
+    assert gh.writes() == []
+    assert not [query for query, _ in gh.graphql_calls if "mutation" in query]
+    assert len(gh.board) == 6
+    lines = capsys.readouterr().out.splitlines()
+    assert (
+        "  Archive the board card of #247 "
+        '[GRAPHQL archiveProjectV2Item {"item": "PVTI_247", "project": "PVT_1"}]'
+    ) in lines
