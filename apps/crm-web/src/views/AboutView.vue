@@ -18,6 +18,7 @@ const sections = [
     />
 
     <p class="text-body-1 mb-6" data-test="version">Version {{ version }}</p>
+    <p class="text-body-1 mb-6" data-test="build-number">Build 1</p>
 
     <h2 class="text-h6 mb-2">What's in this release</h2>
     <v-list density="compact" data-test="release-sections">

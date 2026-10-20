@@ -23,6 +23,16 @@ describe("AboutView", () => {
     expect(wrapper.find("[data-test='version']").text()).toBe(`Version ${pkg.version}`);
   });
 
+  it("shows the build number once, below the version", () => {
+    const wrapper = mountAbout();
+
+    const builds = wrapper.findAll("[data-test='build-number']");
+    expect(builds).toHaveLength(1);
+    expect(builds[0].text()).toBe("Build 1");
+    const version = wrapper.find("[data-test='version']").element;
+    expect(version.nextElementSibling).toBe(builds[0].element);
+  });
+
   it("lists the product's sections in this release", () => {
     const wrapper = mountAbout();
 
