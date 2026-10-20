@@ -28,7 +28,7 @@ describe("AboutView", () => {
 
     const builds = wrapper.findAll("[data-test='build-number']");
     expect(builds).toHaveLength(1);
-    expect(builds[0].text()).toBe("Build 2");
+    expect(builds[0].text()).toBe("Build 3");
     const version = wrapper.find("[data-test='version']").element;
     expect(version.nextElementSibling).toBe(builds[0].element);
   });
